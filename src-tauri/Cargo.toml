@@ -1,6 +1,6 @@
 [package]
 name = "wenbox"
-version = "1.0.0"
+version = "1.1.0"
 description = "WenBox - 工控现场与工程师百宝箱"
 authors = ["Wendel"]
 edition = "2021"
