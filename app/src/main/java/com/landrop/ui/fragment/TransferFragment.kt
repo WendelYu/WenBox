@@ -148,7 +148,7 @@ class TransferFragment : Fragment() {
         }
 
         // 启动后台 UDP 房间发现监听
-        UdpDiscoveryManager.startReceiver()
+        UdpDiscoveryManager.startReceiver(requireContext().applicationContext)
         UdpDiscoveryManager.onRoomsChangedListener = { rooms ->
             activity?.runOnUiThread {
                 if (_binding != null && currentRoomMode == RoomMode.CLIENT) {
@@ -176,6 +176,13 @@ class TransferFragment : Fragment() {
                     if (currentRoomMode == RoomMode.HOST) {
                         setRoomMode(RoomMode.CLIENT)
                     }
+                }
+            }
+        }
+        RoomManager.onMembersChangedListener = { members ->
+            activity?.runOnUiThread {
+                if (_binding != null && currentRoomMode == RoomMode.HOST) {
+                    binding.tvChatOnlineCount.text = "👥 在线: ${members.size} 人"
                 }
             }
         }
@@ -227,6 +234,9 @@ class TransferFragment : Fragment() {
                 binding.tvChatSectionTitle.text = "💬 局域网即时互发消息 (房主服务中)"
 
                 val port = getTransferService()?.currentPort ?: 9527
+                val primaryIp = NetworkUtils.getAllLocalIpAddresses(ctx).firstOrNull()?.ip ?: "127.0.0.1"
+                binding.tvChatOnlineCount.text = "👥 在线: ${RoomManager.getMembers().size} 人"
+                binding.tvChatRoomUrl.text = "🌐 访问: http://$primaryIp:$port"
                 renderNetworkInterfaces(port)
             }
 
@@ -244,6 +254,8 @@ class TransferFragment : Fragment() {
                 binding.llHostDetails.visibility = View.GONE
                 binding.cardChatSection.visibility = View.VISIBLE
                 binding.tvChatSectionTitle.text = "💬 局域网即时互发消息 (已加入: ${r.roomName})"
+                binding.tvChatOnlineCount.text = "👥 在线: 2 人"
+                binding.tvChatRoomUrl.text = "🌐 访问: http://${r.ip}:${r.port}"
 
                 startJoinedRoomPolling(r)
             }
@@ -348,33 +360,41 @@ class TransferFragment : Fragment() {
             }
 
             itemBinding.btnJoinRoom.setOnClickListener {
-                if (room.needPassword) {
-                    showJoinPinDialog(room)
-                } else {
-                    joinRemoteRoom(room, "")
-                }
+                showJoinRoomDialog(room)
             }
 
             binding.llDiscoveredRoomsContainer.addView(itemBinding.root)
         }
     }
 
-    private fun showJoinPinDialog(room: DiscoveredRoom) {
+    private fun showJoinRoomDialog(room: DiscoveredRoom) {
         val ctx = context ?: return
         val dialogBinding = DialogJoinPinBinding.inflate(LayoutInflater.from(ctx))
-        dialogBinding.tvJoinRoomTitle.text = "🔒 输入「${room.roomName}」密码"
+        dialogBinding.tvJoinRoomTitle.text = "📱 加入「${room.roomName}」"
+
+        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
+        val defaultNick = sp.getString("user_nickname", null) ?: "${Build.BRAND}手机"
+        dialogBinding.etJoinNickname.setText(defaultNick)
+
+        if (room.needPassword) {
+            dialogBinding.llPinSection.visibility = View.VISIBLE
+        } else {
+            dialogBinding.llPinSection.visibility = View.GONE
+        }
 
         MaterialAlertDialogBuilder(ctx)
             .setView(dialogBinding.root)
-            .setPositiveButton("验证并加入") { _, _ ->
-                val pin = dialogBinding.etJoinPin.text.toString().trim()
-                joinRemoteRoom(room, pin)
+            .setPositiveButton("立即加入") { _, _ ->
+                val nick = dialogBinding.etJoinNickname.text.toString().trim().ifBlank { "${Build.BRAND}手机" }
+                sp.edit().putString("user_nickname", nick).apply()
+                val pin = if (room.needPassword) dialogBinding.etJoinPin.text.toString().trim() else ""
+                joinRemoteRoom(room, pin, nick)
             }
             .setNegativeButton("取消", null)
             .show()
     }
 
-    private fun joinRemoteRoom(room: DiscoveredRoom, pin: String) {
+    private fun joinRemoteRoom(room: DiscoveredRoom, pin: String, nickname: String) {
         val ctx = context ?: return
         Toast.makeText(ctx, "正在接入「${room.roomName}」...", Toast.LENGTH_SHORT).show()
 
@@ -383,7 +403,7 @@ class TransferFragment : Fragment() {
                 val url = "http://${room.ip}:${room.port}/api/room/join"
                 val body = JSONObject().apply {
                     put("pin", pin)
-                    put("name", "${Build.BRAND} ${Build.MODEL}")
+                    put("name", nickname)
                     put("platform", "Android")
                 }
                 val (code, resText) = HttpHelper.postJson(url, body)
@@ -410,11 +430,24 @@ class TransferFragment : Fragment() {
     private fun startJoinedRoomPolling(room: DiscoveredRoom) {
         clientPollJob?.cancel()
         clientPollJob = lifecycleScope.launch {
+            var failCount = 0
             while (isActive && currentRoomMode == RoomMode.JOINED) {
                 try {
-                    // 1. 发送心跳
+                    // 1. 发送心跳与拉取成员
                     val hbUrl = "http://${room.ip}:${room.port}/api/room/heartbeat"
                     HttpHelper.postJson(hbUrl, JSONObject())
+
+                    val memUrl = "http://${room.ip}:${room.port}/api/room/members"
+                    val (mCode, mRes) = HttpHelper.getJson(memUrl)
+                    if (mCode == 200) {
+                        failCount = 0
+                        val mJson = JSONObject(mRes)
+                        val mArr = mJson.optJSONArray("members")
+                        val count = mArr?.length() ?: 1
+                        _binding?.tvChatOnlineCount?.text = "👥 在线: $count 人"
+                    } else if (mCode == 404) {
+                        failCount++
+                    }
 
                     // 2. 拉取房间聊天消息
                     val msgUrl = "http://${room.ip}:${room.port}/api/messages"
@@ -422,6 +455,7 @@ class TransferFragment : Fragment() {
                     joinedToken?.let { headers["X-Room-Token"] = it }
                     val (code, res) = HttpHelper.getJson(msgUrl, headers)
                     if (code == 200) {
+                        failCount = 0
                         val json = JSONObject(res)
                         val arr = json.optJSONArray("messages")
                         if (arr != null) {
@@ -438,8 +472,21 @@ class TransferFragment : Fragment() {
                                 }
                             }
                         }
+                    } else {
+                        failCount++
                     }
-                } catch (_: Exception) {}
+                } catch (_: Exception) {
+                    failCount++
+                }
+
+                if (failCount >= 3) {
+                    context?.let { ctx ->
+                        Toast.makeText(ctx, "房主已解散房间或网络中断，已返回大厅", Toast.LENGTH_SHORT).show()
+                    }
+                    setRoomMode(RoomMode.CLIENT)
+                    break
+                }
+
                 delay(3000)
             }
         }

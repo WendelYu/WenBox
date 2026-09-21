@@ -86,7 +86,7 @@ class LanServer(
                 method == Method.POST && uri == "/api/room/create" -> {
                     val map = HashMap<String, String>()
                     try { session.parseBody(map) } catch (_: Exception) {}
-                    val postData = map["postData"]
+                    val postData = getUtf8PostData(map)
                     var rName = ""
                     var pin = ""
                     if (!postData.isNullOrBlank()) {
@@ -127,7 +127,7 @@ class LanServer(
                 method == Method.POST && uri == "/api/room/join" -> {
                     val map = HashMap<String, String>()
                     try { session.parseBody(map) } catch (_: Exception) {}
-                    val postData = map["postData"]
+                    val postData = getUtf8PostData(map)
                     var pin = ""
                     var clientName = "访客设备"
                     var clientPlatform = "Browser"
@@ -405,8 +405,8 @@ class LanServer(
 
     private fun handleSendMessage(session: IHTTPSession): Response {
         val map = HashMap<String, String>()
-        session.parseBody(map)
-        val postData = map["postData"]
+        try { session.parseBody(map) } catch (_: Exception) {}
+        val postData = getUtf8PostData(map)
         var content = ""
         var senderName = "💻 电脑端"
 
@@ -446,7 +446,7 @@ class LanServer(
             session.parseBody(map)
         } catch (_: Exception) {}
 
-        val postData = map["postData"]
+        val postData = getUtf8PostData(map)
         var devName = "未知设备"
         var devPlatform = "Windows"
         var devPort = 9527
@@ -482,6 +482,15 @@ class LanServer(
             put("platform", "Android")
         }
         return newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", respJson.toString())
+    }
+
+    private fun getUtf8PostData(map: Map<String, String>): String? {
+        val raw = map["postData"] ?: return null
+        return try {
+            String(raw.toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8)
+        } catch (_: Exception) {
+            raw
+        }
     }
 
     private fun addCorsHeaders(response: Response) {

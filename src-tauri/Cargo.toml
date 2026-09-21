@@ -1,7 +1,7 @@
 [package]
 name = "wenbox"
 version = "1.1.0"
-description = "WenBox - 工控现场与工程师百宝箱"
+description = "WenBox - 局域网跨设备互传与多端百宝箱"
 authors = ["Wendel"]
 edition = "2021"
 

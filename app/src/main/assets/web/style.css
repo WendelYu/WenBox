@@ -144,7 +144,6 @@ body {
     background: var(--card-bg);
     border-radius: 16px;
     border: 1px solid var(--border-color);
-    backdrop-filter: blur(16px);
     padding: 24px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
 }
@@ -968,8 +967,7 @@ body {
 .chat-drop-overlay {
     position: absolute;
     inset: 0;
-    background: rgba(15, 23, 42, 0.88);
-    backdrop-filter: blur(4px);
+    background: rgba(15, 23, 42, 0.92);
     border: 2px dashed #3B82F6;
     border-radius: 12px;
     z-index: 50;
@@ -1594,14 +1592,13 @@ body {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.75);
-    backdrop-filter: blur(8px);
+    background: rgba(11, 15, 25, 0.85);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 9999;
     padding: 16px;
-    animation: modalFadeIn 0.2s ease-out;
+    animation: modalFadeIn 0.15s ease-out;
 }
 
 @keyframes modalFadeIn {

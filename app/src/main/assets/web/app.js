@@ -460,7 +460,76 @@
         if (typeof updateChatGatingUi === 'function') {
             updateChatGatingUi(mode, data);
         }
+        updateChatStatusBar(mode, data);
     }
+
+    function updateChatStatusBar(mode, data) {
+        const onlineBadge = document.getElementById('chatOnlineMemberBadge');
+        const ipBadge = document.getElementById('chatRoomIpBadge');
+        const copyBtn = document.getElementById('btnCopyChatRoomUrl');
+
+        if (mode === 'host') {
+            const origin = getApiOrigin() || 'http://127.0.0.1:9527';
+            if (onlineBadge) onlineBadge.textContent = '👥 在线: 1 人';
+            if (ipBadge) ipBadge.textContent = `🌐 访问地址: ${origin}`;
+            if (copyBtn) {
+                copyBtn.onclick = () => {
+                    if (navigator.clipboard) {
+                        navigator.clipboard.writeText(origin).then(() => showToast(`已复制房间网址: ${origin}`));
+                    } else {
+                        showToast(`房间网址: ${origin}`);
+                    }
+                };
+            }
+        } else if (mode === 'joined' && data) {
+            const hUrl = data.hostUrl || currentTargetBaseUrl;
+            if (onlineBadge) onlineBadge.textContent = '👥 在线: 2 人';
+            if (ipBadge) ipBadge.textContent = `🌐 房主地址: ${hUrl}`;
+            if (copyBtn) {
+                copyBtn.onclick = () => {
+                    if (navigator.clipboard) {
+                        navigator.clipboard.writeText(hUrl).then(() => showToast(`已复制房主网址: ${hUrl}`));
+                    } else {
+                        showToast(`房主网址: ${hUrl}`);
+                    }
+                };
+            }
+        }
+    }
+
+    // ---------------- 通用 Promise 模态确认弹窗 (替代有 Bug 的 window.confirm) ----------------
+    window._appConfirmResolver = null;
+    window.showConfirmDialog = function (title, message, okText = '确定', okColor = '#EF4444') {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('appConfirmModal');
+            const titleEl = document.getElementById('appConfirmTitle');
+            const msgEl = document.getElementById('appConfirmMessage');
+            const okBtn = document.getElementById('appConfirmOkBtn');
+            if (!modal || !titleEl || !msgEl || !okBtn) {
+                resolve(true);
+                return;
+            }
+            titleEl.textContent = title;
+            msgEl.textContent = message;
+            okBtn.textContent = okText;
+            okBtn.style.background = okColor;
+            modal.style.display = 'flex';
+            window._appConfirmResolver = resolve;
+        });
+    };
+
+    window.closeAppConfirm = function (result) {
+        const modal = document.getElementById('appConfirmModal');
+        if (modal) modal.style.display = 'none';
+        if (window._appConfirmResolver) {
+            window._appConfirmResolver(!!result);
+            window._appConfirmResolver = null;
+        }
+    };
+
+    document.getElementById('appConfirmOkBtn')?.addEventListener('click', () => {
+        window.closeAppConfirm(true);
+    });
 
     // ---------------- 创建房间 (成为服务端) ----------------
     if (modalBtnConfirmCreateRoom) {
@@ -505,7 +574,13 @@
     // ---------------- 解散房间 (切回客户端模式) ----------------
     if (btnCloseRoom) {
         btnCloseRoom.addEventListener('click', async () => {
-            if (!confirm('确定要解散当前房间吗？解散后本机将恢复为客户端发现模式。')) return;
+            const ok = await window.showConfirmDialog(
+                '解散房间',
+                '确定要解散当前房间吗？解散后本机将恢复为客户端发现模式。',
+                '确定解散',
+                '#EF4444'
+            );
+            if (!ok) return;
             try {
                 const invoke = getTauriInvoke();
                 if (invoke) {
@@ -523,8 +598,14 @@
 
     // ---------------- 退出已加入的房间 ----------------
     if (btnLeaveRoom) {
-        btnLeaveRoom.addEventListener('click', () => {
-            if (!confirm('确定要退出当前房间吗？')) return;
+        btnLeaveRoom.addEventListener('click', async () => {
+            const ok = await window.showConfirmDialog(
+                '退出房间',
+                '确定要退出当前房间吗？退出后可重新在客户端大厅选择房间加入。',
+                '确定退出',
+                '#F59E0B'
+            );
+            if (!ok) return;
             roomState.token = '';
             localStorage.removeItem('wenbox_room_token');
             showToast('已退出房间');
@@ -589,29 +670,45 @@
         if (!r) return;
         const hostUrl = `http://${r.ip}:${r.port}`;
 
-        if (r.needPassword) {
-            // 弹窗输入 PIN
-            pendingJoinRoomData = {
-                hostUrl,
-                roomName: r.roomName,
-                roomId: r.roomId,
-                hostDevice: r.hostDevice
-            };
-            if (joinPinModalTitle) joinPinModalTitle.textContent = `🔑 加入「${r.roomName}」`;
-            if (modalInputJoinPin) modalInputJoinPin.value = '';
-            if (joinRoomPinModal) joinRoomPinModal.style.display = 'flex';
-            if (modalInputJoinPin) setTimeout(() => modalInputJoinPin.focus(), 150);
-        } else {
-            // 免密直接加入
-            executeJoinRoom(hostUrl, '', r.roomName, r.hostDevice, r.roomId);
+        pendingJoinRoomData = {
+            hostUrl,
+            roomName: r.roomName,
+            roomId: r.roomId,
+            hostDevice: r.hostDevice,
+            needPassword: r.needPassword
+        };
+
+        const titleEl = document.getElementById('joinPinModalTitle');
+        const descEl = document.getElementById('joinPinModalDesc');
+        const nickInput = document.getElementById('modalInputJoinNickname');
+        const pinContainer = document.getElementById('joinPinContainer');
+        const pinInput = document.getElementById('modalInputJoinPin');
+
+        if (titleEl) titleEl.textContent = `📱 加入「${r.roomName}」`;
+        if (descEl) {
+            descEl.textContent = r.needPassword ? '该房间设置了安全密码，请输入昵称与 PIN 码加入：' : '设置进入房间展示的昵称，加入后将显示为「昵称 (IP)」：';
         }
+        if (nickInput) {
+            nickInput.value = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
+        }
+        if (pinContainer) {
+            pinContainer.style.display = r.needPassword ? 'block' : 'none';
+        }
+        if (pinInput) pinInput.value = '';
+
+        if (joinRoomPinModal) joinRoomPinModal.style.display = 'flex';
+        if (nickInput) setTimeout(() => nickInput.focus(), 150);
     };
 
     if (modalBtnConfirmJoinPin) {
         modalBtnConfirmJoinPin.addEventListener('click', () => {
             if (!pendingJoinRoomData) return;
-            const pin = modalInputJoinPin ? modalInputJoinPin.value.trim() : '';
-            executeJoinRoom(pendingJoinRoomData.hostUrl, pin, pendingJoinRoomData.roomName, pendingJoinRoomData.hostDevice, pendingJoinRoomData.roomId);
+            const nickInput = document.getElementById('modalInputJoinNickname');
+            const pinInput = document.getElementById('modalInputJoinPin');
+            const nick = (nickInput && nickInput.value.trim()) || whoami_device_name_client();
+            localStorage.setItem('wenbox_nickname', nick);
+            const pin = (pendingJoinRoomData.needPassword && pinInput) ? pinInput.value.trim() : '';
+            executeJoinRoom(pendingJoinRoomData.hostUrl, pin, pendingJoinRoomData.roomName, pendingJoinRoomData.hostDevice, pendingJoinRoomData.roomId, nick);
         });
     }
 
@@ -630,22 +727,24 @@
             }
             rawUrl = rawUrl.replace(/\/+$/, '');
             const pin = modalInputManualPin ? modalInputManualPin.value.trim() : '';
+            const nick = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
             window.closeManualJoinModal();
-            executeJoinRoom(rawUrl, pin, '手动连接房间', '远程主机', '');
+            executeJoinRoom(rawUrl, pin, '手动连接房间', '远程主机', '', nick);
         });
     }
 
-    async function executeJoinRoom(hostUrl, pin, roomName, hostDevice, roomId) {
+    async function executeJoinRoom(hostUrl, pin, roomName, hostDevice, roomId, nickname) {
         try {
             showToast('正在验证并接入房间...');
             let joinRes = null;
+            const myNick = nickname || localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
 
             const invoke = getTauriInvoke();
             if (invoke) {
                 joinRes = await invoke('join_remote_room_cmd', {
                     hostUrl: hostUrl,
                     pin: pin,
-                    myName: whoami_device_name_client()
+                    myName: myNick
                 });
             } else {
                 const resp = await fetch(`${hostUrl}/api/room/join`, {
@@ -653,7 +752,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         pin: pin,
-                        name: whoami_device_name_client(),
+                        name: myNick,
                         platform: 'Browser'
                     })
                 });
@@ -706,16 +805,33 @@
                 }
             }
             if (hostMemberCount) hostMemberCount.textContent = (members.length || 1);
+            const onlineBadge = document.getElementById('chatOnlineMemberBadge');
+            if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length || 1} 人`;
             if (hostMembersContainer) {
                 hostMembersContainer.innerHTML = members.map(m => `
                     <span class="member-pill ${m.name.includes('房主') ? 'is-host' : ''}">
-                        ${m.name.includes('房主') ? '👑' : '📱'} ${escapeHtml(m.name)} (${escapeHtml(m.ip)})
+                        ${m.name.includes('房主') ? '👑' : '📱'} ${escapeHtml(m.name)}
                     </span>
                 `).join('');
             }
         } catch (e) {
             // ignore
         }
+    }
+
+    // 访客端轮询房间成员与在线人数
+    async function pollJoinedMembers() {
+        if (roomState.mode !== 'joined' || !currentTargetBaseUrl) return;
+        try {
+            const api = currentTargetBaseUrl + '/api/room/members?t=' + Date.now();
+            const res = await fetch(api);
+            if (res.ok) {
+                const data = await res.json();
+                const members = data.members || [];
+                const onlineBadge = document.getElementById('chatOnlineMemberBadge');
+                if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length || 2} 人`;
+            }
+        } catch (_) {}
     }
 
     if (btnRefreshDiscoveredRooms) {
@@ -1499,6 +1615,8 @@
         });
     }
 
+    let joinedDisconnectCount = 0;
+
     // 轮询聊天消息
     async function pollChatMessages() {
         if (roomState.mode === 'client') return;
@@ -1516,9 +1634,26 @@
                 const headers = {};
                 if (roomState.token) headers['X-Room-Token'] = roomState.token;
                 const res = await fetch(api, { headers });
-                if (!res.ok) return;
+                if (!res.ok) {
+                    if (roomState.mode === 'joined' && (res.status === 404 || res.status === 502)) {
+                        joinedDisconnectCount++;
+                        if (joinedDisconnectCount >= 3) {
+                            joinedDisconnectCount = 0;
+                            showToast('房主已解散房间或网络中断，已自动返回客户端大厅');
+                            setRoomMode('client');
+                            return;
+                        }
+                    }
+                    return;
+                }
                 const data = await res.json();
                 messages = data.messages || [];
+            }
+
+            joinedDisconnectCount = 0;
+
+            if (roomState.mode === 'joined') {
+                pollJoinedMembers();
             }
 
             let hasNew = false;
@@ -1537,7 +1672,14 @@
                 webChatMessages.scrollTop = webChatMessages.scrollHeight;
             }
         } catch (e) {
-            // 静默失败
+            if (roomState.mode === 'joined') {
+                joinedDisconnectCount++;
+                if (joinedDisconnectCount >= 3) {
+                    joinedDisconnectCount = 0;
+                    showToast('房主已解散房间或网络中断，已自动返回客户端大厅');
+                    setRoomMode('client');
+                }
+            }
         }
     }
 

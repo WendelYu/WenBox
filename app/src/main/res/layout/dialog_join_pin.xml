@@ -10,7 +10,7 @@
         android:id="@+id/tvJoinRoomTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="🔒 输入房间密码"
+        android:text="📱 加入房间"
         android:textColor="@color/text_primary"
         android:textSize="18sp"
         android:textStyle="bold" />
@@ -20,22 +20,60 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="该房间设置了入房 PIN 密码，请输入密码加入直连。"
+        android:text="设置进入房间后显示的昵称，加入后将显示为「昵称 (IP)」"
         android:textColor="@color/text_secondary"
         android:textSize="12sp" />
 
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:text="您的昵称"
+        android:textColor="@color/text_primary"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
     <EditText
-        android:id="@+id/etJoinPin"
+        android:id="@+id/etJoinNickname"
         android:layout_width="match_parent"
-        android:layout_height="46dp"
-        android:layout_marginTop="16dp"
+        android:layout_height="44dp"
+        android:layout_marginTop="6dp"
         android:background="#162032"
-        android:hint="请输入房间 PIN 码"
+        android:hint="例如: 我的手机 / 小王"
         android:textColor="@color/text_primary"
         android:textColorHint="@color/text_secondary"
-        android:textSize="15sp"
+        android:textSize="14sp"
         android:paddingHorizontal="12dp"
-        android:inputType="textPassword"
         android:singleLine="true" />
+
+    <LinearLayout
+        android:id="@+id/llPinSection"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="房间密码 (PIN)"
+            android:textColor="@color/text_primary"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/etJoinPin"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="6dp"
+            android:background="#162032"
+            android:hint="请输入房间 PIN 码"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_secondary"
+            android:textSize="14sp"
+            android:paddingHorizontal="12dp"
+            android:inputType="textPassword"
+            android:singleLine="true" />
+    </LinearLayout>
 
 </LinearLayout>

@@ -319,7 +319,7 @@ fn create_room_cmd(room_name: String, pin: String, state: tauri::State<Arc<AppSt
     state.auth_tokens.lock().unwrap().insert(host_token);
     let host_member = RoomMember {
         id: uuid::Uuid::new_v4().to_string(),
-        name: format!("{} (房主)", dev_name),
+        name: format!("{} ({}) (房主)", dev_name, primary_ip),
         ip: primary_ip,
         platform: "Windows".into(),
         joined_at: now,
@@ -332,10 +332,31 @@ fn create_room_cmd(room_name: String, pin: String, state: tauri::State<Arc<AppSt
 
 #[tauri::command]
 fn close_room_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
-    let mut room = state.room.lock().unwrap();
-    room.is_active = false;
+    let old_room_id = {
+        let mut room = state.room.lock().unwrap();
+        let id = room.room_id.clone();
+        room.is_active = false;
+        *room = RoomConfig::default();
+        id
+    };
     state.members.lock().unwrap().clear();
     state.auth_tokens.lock().unwrap().clear();
+
+    if !old_room_id.is_empty() {
+        thread::spawn(move || {
+            if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+                let _ = socket.set_broadcast(true);
+                let msg = serde_json::json!({
+                    "action": "wenbox_room_closed",
+                    "roomId": old_room_id
+                }).to_string();
+                for target in get_all_broadcast_addrs() {
+                    let _ = socket.send_to(msg.as_bytes(), &target);
+                }
+            }
+        });
+    }
+
     Ok(true)
 }
 
@@ -347,8 +368,14 @@ fn get_room_status_cmd(state: tauri::State<Arc<AppState>>) -> RoomConfig {
 #[tauri::command]
 fn get_discovered_rooms_cmd(state: tauri::State<Arc<AppState>>) -> Vec<DiscoveredRoom> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let self_ips: HashSet<String> = get_all_lan_ips().into_iter().map(|i| i.ip).collect();
+    let cur_room_id = state.room.lock().unwrap().room_id.clone();
     let mut disc = state.discovered_rooms.lock().unwrap();
-    disc.retain(|_, r| now.saturating_sub(r.last_seen) < 15);
+    disc.retain(|_, r| {
+        now.saturating_sub(r.last_seen) < 15
+            && !self_ips.contains(&r.ip)
+            && (cur_room_id.is_empty() || r.room_id != cur_room_id)
+    });
     disc.values().cloned().collect()
 }
 
@@ -841,7 +868,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 state.auth_tokens.lock().unwrap().insert(host_token);
                 let host_member = RoomMember {
                     id: uuid::Uuid::new_v4().to_string(),
-                    name: format!("{} (房主)", dev_name),
+                    name: format!("{} ({}) (房主)", dev_name, primary_ip),
                     ip: primary_ip,
                     platform: "Windows".into(),
                     joined_at: now,
@@ -857,10 +884,31 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
             }
 
             if url == "/api/room/close" && method == Method::Post {
-                let mut room = state.room.lock().unwrap();
-                room.is_active = false;
+                let old_room_id = {
+                    let mut room = state.room.lock().unwrap();
+                    let id = room.room_id.clone();
+                    room.is_active = false;
+                    *room = RoomConfig::default();
+                    id
+                };
                 state.members.lock().unwrap().clear();
                 state.auth_tokens.lock().unwrap().clear();
+
+                if !old_room_id.is_empty() {
+                    thread::spawn(move || {
+                        if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+                            let _ = socket.set_broadcast(true);
+                            let msg = serde_json::json!({
+                                "action": "wenbox_room_closed",
+                                "roomId": old_room_id
+                            }).to_string();
+                            for target in get_all_broadcast_addrs() {
+                                let _ = socket.send_to(msg.as_bytes(), &target);
+                            }
+                        }
+                    });
+                }
+
                 let mut resp = Response::from_string("{\"success\":true}");
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
@@ -893,9 +941,18 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                         state.auth_tokens.lock().unwrap().insert(token);
 
                         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                        let clean_name = name.trim();
+                        let display_name = if clean_name.is_empty() {
+                            format!("访客设备 ({})", client_ip)
+                        } else if clean_name.contains(&format!("({})", client_ip)) {
+                            clean_name.to_string()
+                        } else {
+                            format!("{} ({})", clean_name, client_ip)
+                        };
+
                         let member = RoomMember {
                             id: uuid::Uuid::new_v4().to_string(),
-                            name,
+                            name: display_name,
                             ip: client_ip.clone(),
                             platform: plat,
                             joined_at: now,
@@ -1349,7 +1406,17 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                             }
                         }
 
-                        // 2. 传统设备节点探测广播
+                        // 2. 房间解散通知
+                        if action == "wenbox_room_closed" {
+                            let closed_room_id = val["roomId"].as_str().unwrap_or("");
+                            let sender_ip = src.ip().to_string();
+                            let mut rooms = state_recv.discovered_rooms.lock().unwrap();
+                            rooms.retain(|_k, v| v.room_id != closed_room_id && v.ip != sender_ip);
+                            let mut devs = state_recv.devices.lock().unwrap();
+                            devs.retain(|_k, v| v.ip != sender_ip);
+                        }
+
+                        // 3. 传统设备节点探测广播
                         if action == "wenbox_discovery" {
                             let name = val["device"].as_str().unwrap_or("").to_string();
                             let plat = val["platform"].as_str().unwrap_or("Android").to_string();
@@ -1393,6 +1460,7 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
 
             // 仅当房主开房后，才对外进行房间广播；默认客户端模式下绝不广播
             if let Some(room) = active_room {
+                let member_count = state_bcast.members.lock().unwrap().len();
                 let msg = serde_json::json!({
                     "action": "wenbox_room_broadcast",
                     "roomId": room.room_id,
@@ -1400,7 +1468,10 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                     "hostDevice": dev_name,
                     "platform": platform,
                     "port": my_port,
-                    "needPassword": room.need_password
+                    "hostPort": my_port,
+                    "hostIp": room.host_ip,
+                    "needPassword": room.need_password,
+                    "memberCount": member_count
                 }).to_string();
 
                 let targets = get_all_broadcast_addrs();

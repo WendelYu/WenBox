@@ -52,7 +52,7 @@ object RoomManager {
         authTokens.add(hostToken)
         members["127.0.0.1"] = RoomMember(
             id = UUID.randomUUID().toString(),
-            name = "$hostDevice (房主)",
+            name = "$hostDevice ($hostIp) (房主)",
             ip = hostIp,
             platform = "Android",
             joinedAt = System.currentTimeMillis(),
@@ -65,9 +65,13 @@ object RoomManager {
     }
 
     fun closeRoom() {
+        val oldRoomId = currentRoom?.roomId
         currentRoom = null
         members.clear()
         authTokens.clear()
+        if (oldRoomId != null) {
+            com.landrop.utils.UdpDiscoveryManager.broadcastRoomClosed(oldRoomId)
+        }
         onRoomStateChangedListener?.invoke(null)
         onMembersChangedListener?.invoke(emptyList())
     }
@@ -86,9 +90,18 @@ object RoomManager {
         val token = UUID.randomUUID().toString()
         authTokens.add(token)
 
+        val cleanName = clientName.trim()
+        val displayName = if (cleanName.isBlank()) {
+            "访客设备 ($clientIp)"
+        } else if (cleanName.contains("($clientIp)")) {
+            cleanName
+        } else {
+            "$cleanName ($clientIp)"
+        }
+
         val member = RoomMember(
             id = UUID.randomUUID().toString(),
-            name = clientName.ifBlank { "访客设备" },
+            name = displayName,
             ip = clientIp,
             platform = platform,
             joinedAt = System.currentTimeMillis(),
