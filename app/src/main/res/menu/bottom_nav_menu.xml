@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_transfer"
+        android:icon="@drawable/ic_nav_transfer"
+        android:title="文件快传" />
+
+    <item
+        android:id="@+id/nav_json"
+        android:icon="@drawable/ic_nav_json"
+        android:title="JSON 工具" />
+
+    <item
+        android:id="@+id/nav_converter"
+        android:icon="@drawable/ic_nav_converter"
+        android:title="进制转换" />
+
+    <item
+        android:id="@+id/nav_cron"
+        android:icon="@drawable/ic_nav_cron"
+        android:title="Cron 工作台" />
+</menu>

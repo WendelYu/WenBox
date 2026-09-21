@@ -1,0 +1,115 @@
+package com.landrop.server
+
+import android.content.ContentResolver
+import android.content.ContentValues
+import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.provider.OpenableColumns
+import com.landrop.model.SharedFile
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+
+object FileManager {
+
+    // 线程安全的待分享文件列表
+    private val files = CopyOnWriteArrayList<SharedFile>()
+
+    var onFilesChangedListener: (() -> Unit)? = null
+
+    fun getFiles(): List<SharedFile> = files.toList()
+
+    fun getFileById(id: String): SharedFile? = files.firstOrNull { it.id == id }
+
+    fun addFile(context: Context, uri: Uri) {
+        val resolver = context.contentResolver
+        var name = "unknown_${System.currentTimeMillis()}"
+        var size: Long = 0
+        var mimeType = resolver.getType(uri) ?: "application/octet-stream"
+
+        resolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (nameIndex != -1) {
+                    val n = cursor.getString(nameIndex)
+                    if (!n.isNullOrBlank()) name = n
+                }
+                if (sizeIndex != -1) {
+                    size = cursor.getLong(sizeIndex)
+                }
+            }
+        }
+
+        // 避免重复添加完全相同 URI 的文件
+        if (files.none { it.uri == uri }) {
+            val file = SharedFile(
+                id = UUID.randomUUID().toString(),
+                name = name,
+                size = size,
+                mimeType = mimeType,
+                uri = uri
+            )
+            files.add(file)
+            onFilesChangedListener?.invoke()
+        }
+    }
+
+    fun removeFile(id: String) {
+        files.removeAll { it.id == id }
+        onFilesChangedListener?.invoke()
+    }
+
+    fun clearAll() {
+        files.clear()
+        onFilesChangedListener?.invoke()
+    }
+
+    /**
+     * 将从电脑端上传的文件保存到手机的系统「下载/LanDrop」目录
+     */
+    fun saveIncomingFile(context: Context, fileName: String, inputStream: InputStream): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10+ 使用 MediaStore Downloads
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/LanDrop")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                if (uri != null) {
+                    resolver.openOutputStream(uri)?.use { out ->
+                        inputStream.copyTo(out)
+                    }
+                    values.clear()
+                    values.put(MediaStore.Downloads.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                    true
+                } else false
+            } else {
+                // Android 9 及以下使用公开外部存储
+                val dir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    "LanDrop"
+                )
+                if (!dir.exists()) dir.mkdirs()
+                val targetFile = File(dir, fileName)
+                FileOutputStream(targetFile).use { out ->
+                    inputStream.copyTo(out)
+                }
+                true
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+}

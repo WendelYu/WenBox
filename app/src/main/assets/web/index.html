@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WenBox - 工程师与工控百宝箱</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 头部 Header -->
+        <header class="header">
+            <div class="brand">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 3v12m0 0l4-4m-4 4L8 11M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>WenBox</h1>
+                    <span class="badge">by Wendel</span>
+                </div>
+            </div>
+
+            <!-- 网页端导航切换 -->
+            <nav class="nav-tabs">
+                <button class="nav-tab active" data-tab="tab-transfer">📁 文件快传</button>
+                <button class="nav-tab" data-tab="tab-chat">💬 局域网互通</button>
+                <button class="nav-tab" data-tab="tab-json">📋 JSON 工具</button>
+                <button class="nav-tab" data-tab="tab-converter">⚙️ 进制转换</button>
+                <button class="nav-tab" data-tab="tab-cron">⏱️ Cron 工作台</button>
+            </nav>
+
+            <div class="device-status">
+                <span class="status-dot"></span>
+                <span id="phoneName">手机直连已就绪</span>
+            </div>
+        </header>
+
+        <!-- 主内容区：Tab 1 局域网快传 -->
+        <main id="tab-transfer" class="tab-pane active">
+            <!-- 报销模式横幅卡片 -->
+            <section class="card reimbursement-banner">
+                <div class="reimbursement-header">
+                    <div class="reimbursement-info">
+                        <span class="reimbursement-tag">🧾 报销直存模式 (Win / Mac 兼容)</span>
+                        <h3>一键将手机发票直接存入电脑日期目录</h3>
+                        <p>只需指定电脑上的存放总目录，系统将自动创建当天日期文件夹（如 <span class="highlight-code" id="previewFolderName">YYYY-MM-DD_报销</span>），所有发票直达目标文件夹，无需手动整理或解压！</p>
+                    </div>
+                    <div class="reimbursement-action">
+                        <button id="btnSelectReimburseDir" class="btn-reimburse">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                            </svg>
+                            选择电脑报销根目录并直存
+                        </button>
+                    </div>
+                </div>
+                <div id="reimburseStatus" class="reimburse-status" style="display: none;"></div>
+            </section>
+
+            <!-- 面板 1：来自手机的文件列表 -->
+            <section class="card section-download" style="margin-top: 20px;">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>来自手机的文件</h2>
+                        <span id="fileCount" class="counter">0 个文件</span>
+                    </div>
+                    <div class="actions">
+                        <button id="btnRefresh" class="btn-secondary" title="刷新列表">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M23 4v6h-6M1 20v-6h6M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
+                            </svg>
+                            刷新
+                        </button>
+                    </div>
+                </div>
+
+                <div id="fileListContainer" class="file-list"></div>
+
+                <div id="emptyState" class="empty-state">
+                    <div class="empty-icon">📁</div>
+                    <p>手机端当前暂无待发送文件</p>
+                    <span>请在手机上点击「选择文件」或在相册/管理器中点击「分享」</span>
+                </div>
+            </section>
+
+            <!-- 面板 2：向手机投送文件 (反向上传) -->
+            <section class="card section-upload" style="margin-top: 20px;">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>发送文件到手机</h2>
+                        <span class="subtitle">拖拽文件或点击选择，将直接存入手机「下载」目录</span>
+                    </div>
+                </div>
+
+                <div id="dropZone" class="drop-zone">
+                    <input type="file" id="fileInput" multiple style="display: none;">
+                    <div class="drop-zone-content">
+                        <div class="upload-icon">
+                            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="#3B82F6" stroke-width="1.8">
+                                <path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                            </svg>
+                        </div>
+                        <p class="drop-text">拖拽任意文件到这里，或 <span class="browse-link">点击选择</span></p>
+                        <p class="drop-hint">局域网无损点对点高速直传</p>
+                    </div>
+                </div>
+
+                <!-- 上传进度列表 -->
+                <div id="uploadProgressContainer" class="upload-progress-list" style="display: none;">
+                    <div class="upload-item">
+                        <div class="upload-info">
+                            <span id="uploadFileName">准备上传...</span>
+                            <span id="uploadPercent">0%</span>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div id="uploadProgressBar" class="progress-bar-fill"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- 主内容区：Tab 2 局域网即时互发消息 / 聊天室 -->
+        <main id="tab-chat" class="tab-pane">
+            <section class="card chat-card">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>💬 局域网设备即时互发消息</h2>
+                        <span class="subtitle">自动加入局域网聊天室，电脑与手机互传文本、链接、剪贴板</span>
+                    </div>
+                    <button id="webBtnClearChat" class="btn-secondary">清屏</button>
+                </div>
+
+                <div id="webChatMessages" class="chat-message-list">
+                    <div id="webEmptyChat" class="empty-state" style="padding: 30px 0;">
+                        <p>局域网聊天室已就绪，等待发送或接收消息</p>
+                    </div>
+                </div>
+
+                <div class="chat-input-bar">
+                    <textarea id="webChatMessageInput" class="chat-textarea" placeholder="输入要发送给手机的内容（支持回车换行，Ctrl+Enter 或点击发送）..." rows="2"></textarea>
+                    <button id="webBtnSendMessage" class="btn-send-message">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                        发送
+                    </button>
+                </div>
+            </section>
+        </main>
+
+        <!-- 主内容区：Tab 3 JSON 格式化与校验 -->
+        <main id="tab-json" class="tab-pane">
+            <section class="card">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>📋 JSON 格式化与校验</h2>
+                        <span class="subtitle">支持 2 空格/4 空格层级美化、单行精简压缩、语法纠错分析</span>
+                    </div>
+                    <div class="actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <button id="webBtnFormatJson2" class="btn-primary-mini">2 空格美化</button>
+                        <button id="webBtnFormatJson4" class="btn-secondary">4 空格美化</button>
+                        <button id="webBtnMinifyJson" class="btn-secondary">压缩成单行</button>
+                        <button id="webBtnLoadSampleJson" class="btn-secondary">载入示例</button>
+                        <button id="webBtnCopyJson" class="btn-secondary">复制结果</button>
+                        <button id="webBtnClearJson" class="btn-secondary">清空</button>
+                    </div>
+                </div>
+
+                <div class="json-editor-wrapper">
+                    <textarea id="webJsonInput" class="json-textarea" placeholder="在此粘贴或输入需要格式化/校验的 JSON 字符串..."></textarea>
+                    <div id="webJsonError" class="json-error-banner" style="display: none;"></div>
+                </div>
+            </section>
+        </main>
+
+        <!-- 主内容区：Tab 4 多进制实时互转 -->
+        <main id="tab-converter" class="tab-pane">
+            <section class="card">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>多进制实时互转</h2>
+                        <span class="subtitle">在任意输入框中输入，其他所有进制秒级自动联动转换</span>
+                    </div>
+                    <button id="webBtnClearConverter" class="btn-secondary">清空所有</button>
+                </div>
+
+                <div class="converter-grid">
+                    <!-- HEX -->
+                    <div class="converter-box">
+                        <div class="box-header">
+                            <span class="box-tag tag-hex">16 进制 (HEX)</span>
+                            <button class="btn-copy-mini" data-target="webHex">复制</button>
+                        </div>
+                        <input type="text" id="webHex" class="converter-input" placeholder="例如: 1A3F 或 48 65 6C 6C 6F" value="1A 3F">
+                    </div>
+
+                    <!-- DEC -->
+                    <div class="converter-box">
+                        <div class="box-header">
+                            <span class="box-tag tag-dec">10 进制 (DEC)</span>
+                            <button class="btn-copy-mini" data-target="webDec">复制</button>
+                        </div>
+                        <input type="number" id="webDec" class="converter-input" placeholder="例如: 6719">
+                    </div>
+
+                    <!-- BIN -->
+                    <div class="converter-box">
+                        <div class="box-header">
+                            <span class="box-tag tag-bin">2 进制 (BIN)</span>
+                            <button class="btn-copy-mini" data-target="webBin">复制</button>
+                        </div>
+                        <input type="text" id="webBin" class="converter-input" placeholder="例如: 0001 1010 0011 1111">
+                    </div>
+
+                    <!-- OCT -->
+                    <div class="converter-box">
+                        <div class="box-header">
+                            <span class="box-tag tag-oct">8 进制 (OCT)</span>
+                            <button class="btn-copy-mini" data-target="webOct">复制</button>
+                        </div>
+                        <input type="text" id="webOct" class="converter-input" placeholder="例如: 15077">
+                    </div>
+
+                    <!-- ASCII -->
+                    <div class="converter-box full-width">
+                        <div class="box-header">
+                            <span class="box-tag tag-ascii">ASCII 字符文本</span>
+                            <button class="btn-copy-mini" data-target="webAscii">复制</button>
+                        </div>
+                        <input type="text" id="webAscii" class="converter-input" placeholder="例如: Hello">
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- 主内容区：Tab 5 Cron 表达式工作台 -->
+        <main id="tab-cron" class="tab-pane">
+            <section class="card">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>Cron 表达式工作台</h2>
+                        <span class="subtitle">定时调度表达式生成、大白话解析与未来触发时间预演</span>
+                    </div>
+                </div>
+
+                <div class="cron-section">
+                    <div class="cron-field-group">
+                        <label>常用调度模板快捷套用：</label>
+                        <select id="webCronPresetSelect" class="cron-select">
+                            <option value="* * * * * ?">每秒执行一次 (* * * * * ?)</option>
+                            <option value="*/5 * * * * ?">每 5 秒执行一次 (*/5 * * * * ?)</option>
+                            <option value="0 * * * * ?">每分钟执行一次 (0 * * * * ?)</option>
+                            <option value="0 */5 * * * ?">每 5 分钟执行一次 (0 */5 * * * ?)</option>
+                            <option value="0 */15 * * * ?">每 15 分钟执行一次 (0 */15 * * * ?)</option>
+                            <option value="0 */30 * * * ?">每 30 分钟执行一次 (0 */30 * * * ?)</option>
+                            <option value="0 0 * * * ?">每整点执行一次 (0 0 * * * ?)</option>
+                            <option value="0 0 0 * * ?">每天凌晨 00:00:00 (0 0 0 * * ?)</option>
+                            <option value="0 30 8 * * ?">每天早上 08:30:00 (0 30 8 * * ?)</option>
+                            <option value="0 0 9 ? * MON-FRI">工作日早上 09:00 (0 0 9 ? * MON-FRI)</option>
+                            <option value="0 0 10 ? * MON">每周一上午 10:00 (0 0 10 ? * MON)</option>
+                            <option value="0 0 1 1 * ?">每月 1 日凌晨 01:00 (0 0 1 1 * ?)</option>
+                        </select>
+                    </div>
+
+                    <div class="cron-field-group" style="margin-top: 16px;">
+                        <label>Cron 表达式：</label>
+                        <div class="input-with-btn">
+                            <input type="text" id="webCronInput" class="converter-input" value="* * * * * ?">
+                            <button id="webBtnCopyCron" class="btn-download" style="padding: 10px 18px;">复制表达式</button>
+                        </div>
+                    </div>
+
+                    <div class="cron-result-card" style="margin-top: 16px;">
+                        <span class="cron-label">中文自然语言解析：</span>
+                        <div id="webCronMeaning" class="cron-meaning">每秒执行一次</div>
+                    </div>
+
+                    <div class="cron-result-card" style="margin-top: 14px;">
+                        <span class="cron-label">📅 接下来 5 次预计触发时刻：</span>
+                        <div id="webCronNextTimes" class="cron-next-list"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p>WenBox • Crafted with ❤️ by Wendel • 局域网端对端直连百宝箱</p>
+        </footer>
+    </div>
+
+    <!-- 简易通知 Toast -->
+    <div id="toast" class="toast"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

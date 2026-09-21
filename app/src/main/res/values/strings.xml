@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">WenBox 工控百宝箱</string>
+    <string name="server_running">WenBox 局域网服务运行中</string>
+    <string name="server_stopped">WenBox 局域网服务未开启</string>
+    <string name="start_server">开启局域网服务</string>
+    <string name="stop_server">停止服务</string>
+    <string name="add_files">选择文件</string>
+    <string name="clear_files">清空列表</string>
+    <string name="connect_tip">电脑浏览器访问以下地址或扫码：</string>
+    <string name="not_connected_wifi">请先连接网络</string>
+    <string name="channel_name">WenBox 局域网服务</string>
+    <string name="channel_desc">保持 WenBox 局域网 Web 工具箱的后台连接</string>
+</resources>
