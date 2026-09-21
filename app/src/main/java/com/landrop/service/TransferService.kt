@@ -55,6 +55,7 @@ class TransferService : Service() {
 
             acquireLocks()
             startForeground(NOTIFICATION_ID, buildNotification())
+            com.landrop.utils.UdpDiscoveryManager.start(port)
             onStatusChanged?.invoke(true)
             return true
         } catch (e: Exception) {
@@ -66,6 +67,7 @@ class TransferService : Service() {
 
     fun stopServer() {
         try {
+            com.landrop.utils.UdpDiscoveryManager.stop()
             lanServer?.stop()
             lanServer = null
         } catch (e: Exception) {

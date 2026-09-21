@@ -59,11 +59,29 @@
                 <div id="reimburseStatus" class="reimburse-status" style="display: none;"></div>
             </section>
 
-            <!-- 面板 1：来自手机的文件列表 -->
+            <!-- 局域网在线设备列表 (自动发现与手动指定 IP) -->
+            <section class="card section-devices" style="margin-top: 20px;">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>🌐 局域网在线设备节点</h2>
+                        <span class="subtitle">UDP 自动广播探测 + IP 标识直连，点击可切换查看并按需拉取对方文件</span>
+                    </div>
+                    <div class="actions" style="display: flex; gap: 8px;">
+                        <input type="text" id="customTargetIp" class="converter-input" style="width: 170px; padding: 6px 10px; font-size: 13px;" placeholder="输入目标设备 IP">
+                        <button id="btnConnectCustomIp" class="btn-secondary" style="padding: 6px 12px;">连接该设备</button>
+                    </div>
+                </div>
+
+                <div id="deviceListContainer" class="device-node-grid">
+                    <!-- 动态渲染在线节点 -->
+                </div>
+            </section>
+
+            <!-- 面板 1：文件列表 (按需下载) -->
             <section class="card section-download" style="margin-top: 20px;">
                 <div class="section-header">
                     <div class="section-title">
-                        <h2>来自手机的文件</h2>
+                        <h2 id="currentViewingDeviceTitle">📂 待拉取文件列表 (来自当前选定设备)</h2>
                         <span id="fileCount" class="counter">0 个文件</span>
                     </div>
                     <div class="actions">

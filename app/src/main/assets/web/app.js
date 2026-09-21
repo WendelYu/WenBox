@@ -24,6 +24,15 @@
         });
     });
 
+    // ---------------- 当前目标服务端 BaseURL (支持局域网多设备节点切换) ----------------
+    let currentTargetBaseUrl = ''; // 默认为本端(相对路径)，切换节点时形如 "http://192.168.1.120:9527"
+    let currentTargetDeviceName = '本端直连';
+
+    const deviceListContainer = document.getElementById('deviceListContainer');
+    const customTargetIp = document.getElementById('customTargetIp');
+    const btnConnectCustomIp = document.getElementById('btnConnectCustomIp');
+    const currentViewingDeviceTitle = document.getElementById('currentViewingDeviceTitle');
+
     // ---------------- 模块一：局域网快传与报销直存 ----------------
     const fileListContainer = document.getElementById('fileListContainer');
     const emptyState = document.getElementById('emptyState');
@@ -79,9 +88,83 @@
         return '📄';
     }
 
+    // ---------------- 局域网在线设备自发现与节点切换 ----------------
+    let knownDevices = [];
+
+    async function pollLanDevices() {
+        try {
+            // 先尝试从本地后端拉取探测到的在线节点
+            const res = await fetch('/api/devices?t=' + Date.now());
+            if (res.ok) {
+                const data = await res.json();
+                knownDevices = data.devices || [];
+                renderDeviceList();
+            }
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    function renderDeviceList() {
+        if (!deviceListContainer) return;
+        const selfCard = `
+            <div class="device-card ${currentTargetBaseUrl === '' ? 'active' : ''}" onclick="window.switchDeviceNode('', '本端')">
+                <div class="device-info-left">
+                    <span class="device-platform-icon">🏠</span>
+                    <div>
+                        <div class="device-name-text">本端设备 (本机)</div>
+                        <div class="device-ip-badge">localhost:9527</div>
+                    </div>
+                </div>
+                <span class="device-status-badge">当前</span>
+            </div>
+        `;
+
+        const remoteCards = knownDevices.map(d => {
+            const url = `http://${d.ip}:${d.port}`;
+            const isAct = currentTargetBaseUrl === url;
+            const icon = d.platform === 'Android' ? '📱' : '💻';
+            return `
+                <div class="device-card ${isAct ? 'active' : ''}" onclick="window.switchDeviceNode('${url}', '${escapeHtml(d.name)}')">
+                    <div class="device-info-left">
+                        <span class="device-platform-icon">${icon}</span>
+                        <div>
+                            <div class="device-name-text">${escapeHtml(d.name)}</div>
+                            <div class="device-ip-badge">${d.ip}:${d.port}</div>
+                        </div>
+                    </div>
+                    <span class="device-status-badge">在线</span>
+                </div>
+            `;
+        }).join('');
+
+        deviceListContainer.innerHTML = selfCard + remoteCards;
+    }
+
+    window.switchDeviceNode = function (baseUrl, name) {
+        currentTargetBaseUrl = baseUrl;
+        currentTargetDeviceName = name;
+        if (currentViewingDeviceTitle) {
+            currentViewingDeviceTitle.textContent = `📂 待拉取文件列表 (来自: ${name} ${baseUrl || '本端'})`;
+        }
+        renderDeviceList();
+        loadFiles();
+        showToast(`已切换至节点: ${name}`);
+    };
+
+    if (btnConnectCustomIp && customTargetIp) {
+        btnConnectCustomIp.addEventListener('click', () => {
+            const ip = customTargetIp.value.trim();
+            if (!ip) return;
+            const targetUrl = ip.startsWith('http') ? ip : `http://${ip}:9527`;
+            window.switchDeviceNode(targetUrl, `手动连接 (${ip})`);
+        });
+    }
+
     async function loadFiles() {
         try {
-            const res = await fetch('/api/files?t=' + Date.now());
+            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/files?t=' + Date.now();
+            const res = await fetch(api);
             if (!res.ok) throw new Error('网络异常');
             const data = await res.json();
             currentFiles = data.files || [];
@@ -104,7 +187,7 @@
         fileListContainer.innerHTML = currentFiles.map(file => {
             const icon = getFileIcon(file.name, file.mimeType || '');
             const size = formatBytes(file.size);
-            const downloadUrl = `/api/download/${file.id}`;
+            const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${file.id}`;
 
             return `
                 <div class="file-item">
@@ -112,14 +195,14 @@
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
                             <div class="file-name" title="${file.name}">${escapeHtml(file.name)}</div>
-                            <div class="file-size">${size}</div>
+                            <div class="file-size">${size} • 按需下载</div>
                         </div>
                     </div>
                     <a href="${downloadUrl}" class="btn-download" download="${escapeHtml(file.name)}">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
                         </svg>
-                        下载
+                        按需下载
                     </a>
                 </div>
             `;
@@ -141,12 +224,12 @@
             }
 
             if (!currentFiles || currentFiles.length === 0) {
-                alert('当前手机端还没有待传文件，请先在手机上添加待传发票或文件！');
+                alert('当前选定设备还没有待传文件，请先在对方设备上添加待传发票或文件！');
                 return;
             }
 
             try {
-                // 1. 用户选择电脑上的报销根目录（例如 D:\财务报销 或 Mac 的 ~/报销）
+                // 1. 用户选择电脑上的报销根目录
                 const rootDirHandle = await window.showDirectoryPicker({
                     id: 'wenbox_reimburse_dir',
                     mode: 'readwrite'
@@ -166,7 +249,7 @@
                     reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${currentFiles.length}]: ${f.name}...`;
 
                     try {
-                        const fileResp = await fetch(`/api/download/${f.id}`);
+                        const fileResp = await fetch((currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}`);
                         if (!fileResp.ok) throw new Error('下载失败');
                         const blob = await fileResp.blob();
 
@@ -191,7 +274,7 @@
         });
     }
 
-    // 拖拽与反向上传
+    // 拖拽与投送文件
     if (dropZone && fileInput) {
         dropZone.addEventListener('click', () => fileInput.click());
         ['dragenter', 'dragover'].forEach(eName => {
@@ -248,7 +331,7 @@
                 if (xhr.status >= 200 && xhr.status < 300) {
                     uploadProgressBar.style.width = '100%';
                     uploadPercent.textContent = '100%';
-                    showToast(`已成功保存到手机: ${file.name}`);
+                    showToast(`已成功投送: ${file.name}`);
                 } else {
                     showToast(`上传失败: ${file.name}`);
                 }
@@ -264,7 +347,8 @@
                 resolve();
             });
 
-            xhr.open('POST', '/api/upload');
+            const uploadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/upload';
+            xhr.open('POST', uploadUrl);
             xhr.send(formData);
         });
     }
@@ -272,13 +356,16 @@
     if (btnRefresh) {
         btnRefresh.addEventListener('click', () => {
             loadFiles();
-            showToast('已刷新文件列表');
+            pollLanDevices();
+            showToast('已刷新设备与文件列表');
         });
     }
 
     // 初始快传数据加载与定时轮询
     loadFiles();
+    pollLanDevices();
     setInterval(loadFiles, 3000);
+    setInterval(pollLanDevices, 4000);
 
 
     // ---------------- 模块二：局域网双向即时互发消息 / 聊天室 ----------------
@@ -298,7 +385,8 @@
 
     async function pollChatMessages() {
         try {
-            const res = await fetch('/api/messages?t=' + Date.now());
+            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/messages?t=' + Date.now();
+            const res = await fetch(api);
             if (!res.ok) return;
             const data = await res.json();
             const messages = data.messages || [];
@@ -335,7 +423,7 @@
         if (!webChatMessages) return;
         if (webEmptyChat) webEmptyChat.style.display = 'none';
 
-        // 判断消息是来自本端(电脑Web)还是对方(手机)
+        // 判断消息是来自本端还是对方
         const isMe = !msg.isFromPhone && msg.senderName.includes(osPlatform);
         const row = document.createElement('div');
         row.className = `chat-msg-row ${isMe ? 'from-me' : 'from-other'}`;
@@ -366,7 +454,8 @@
         if (!text) return;
 
         try {
-            const resp = await fetch('/api/messages', {
+            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/messages';
+            const resp = await fetch(api, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -429,13 +518,14 @@
 
     const SAMPLE_JSON = `{
   "appName": "WenBox",
-  "version": "1.2.0",
+  "version": "1.0.0",
   "author": "Wendel",
   "port": 9527,
   "features": [
-    "LanDirectTransfer",
-    "ReimbursementMode",
-    "LanTwoWayChat",
+    "LanPeerToPeerTransfer",
+    "ReimbursementDirectSave",
+    "LanMultiDeviceChat",
+    "UdpNodeDiscovery",
     "JsonToolbox",
     "HexConverter",
     "CronStudio"
