@@ -221,63 +221,122 @@
         });
     }
 
-    // 报销模式：直接通过 File System Access API 存入日期目录
+    // 辅助：将 Blob 转为 Base64 字符串
+    function blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const base64String = reader.result.split(',')[1];
+                resolve(base64String);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    // 日期归档直存：双模驱动 (支持 Tauri 原生桌面端与浏览器端)
     if (btnSelectReimburseDir) {
         btnSelectReimburseDir.addEventListener('click', async () => {
-            if (!window.showDirectoryPicker) {
-                alert('您的当前浏览器不支持直接文件夹访问 API，请使用现代 Chrome、Edge 或 Chromium 核心浏览器访问本页面。');
-                return;
-            }
-
             if (!currentFiles || currentFiles.length === 0) {
                 alert('当前选定设备还没有待传文件，请先在对方设备上添加待传发票或文件！');
                 return;
             }
 
-            try {
-                // 1. 用户选择电脑上的根目录
-                const rootDirHandle = await window.showDirectoryPicker({
-                    id: 'wenbox_archive_dir',
-                    mode: 'readwrite'
-                });
+            const suffix = (customFolderSuffix && customFolderSuffix.value.trim()) ? `_${customFolderSuffix.value.trim()}` : '';
+            const dateFolderName = `${getTodayDateStr()}${suffix}`;
 
-                const suffix = (customFolderSuffix && customFolderSuffix.value.trim()) ? `_${customFolderSuffix.value.trim()}` : '';
-                const dateFolderName = `${getTodayDateStr()}${suffix}`;
-                reimburseStatus.style.display = 'block';
-                reimburseStatus.textContent = `📁 正在「${rootDirHandle.name}」中创建文件夹「${dateFolderName}」...`;
+            // 模式 A：如果是 Windows / Mac 客户端原生运行 (Tauri 环境)
+            if (window.__TAURI__ && window.__TAURI__.dialog) {
+                try {
+                    const selectedPath = await window.__TAURI__.dialog.open({
+                        directory: true,
+                        multiple: false,
+                        title: '请选择电脑上的归档根目录'
+                    });
 
-                // 2. 在根目录下自动创建当天日期归档子文件夹
-                const targetDirHandle = await rootDirHandle.getDirectoryHandle(dateFolderName, { create: true });
+                    if (!selectedPath) return; // 用户取消
 
-                // 3. 逐个将待传发票直写入该文件夹
-                let successCount = 0;
-                for (let i = 0; i < currentFiles.length; i++) {
-                    const f = currentFiles[i];
-                    reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${currentFiles.length}]: ${f.name}...`;
+                    reimburseStatus.style.display = 'block';
+                    reimburseStatus.textContent = `📁 正在创建目录「${dateFolderName}」并直存文件...`;
 
-                    try {
-                        const fileResp = await fetch((currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}`);
-                        if (!fileResp.ok) throw new Error('下载失败');
-                        const blob = await fileResp.blob();
+                    let successCount = 0;
+                    for (let i = 0; i < currentFiles.length; i++) {
+                        const f = currentFiles[i];
+                        reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${currentFiles.length}]: ${f.name}...`;
 
-                        const fileHandle = await targetDirHandle.getFileHandle(f.name, { create: true });
-                        const writable = await fileHandle.createWritable();
-                        await writable.write(blob);
-                        await writable.close();
-                        successCount++;
-                    } catch (saveErr) {
-                        console.error('Save error:', saveErr);
+                        try {
+                            const fileResp = await fetch((currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}`);
+                            if (!fileResp.ok) throw new Error('下载失败');
+                            const blob = await fileResp.blob();
+                            const b64 = await blobToBase64(blob);
+
+                            await window.__TAURI__.invoke('save_file_to_directory', {
+                                dirPath: selectedPath,
+                                folderName: dateFolderName,
+                                fileName: f.name,
+                                bytesBase64: b64
+                            });
+                            successCount++;
+                        } catch (saveErr) {
+                            console.error('Tauri save error:', saveErr);
+                        }
+                    }
+
+                    reimburseStatus.innerHTML = `✅ <b>大功告成！</b>成功将 ${successCount} 个文件直存到 <b>${selectedPath}\\${dateFolderName}</b> 目录下！`;
+                    showToast(`已成功直存 ${successCount} 个文件！`);
+                } catch (tErr) {
+                    reimburseStatus.style.display = 'block';
+                    reimburseStatus.textContent = `直存异常: ${tErr.message || tErr}`;
+                }
+                return;
+            }
+
+            // 模式 B：如果是 Chrome / Edge 浏览器打开网页环境
+            if (window.showDirectoryPicker) {
+                try {
+                    const rootDirHandle = await window.showDirectoryPicker({
+                        id: 'wenbox_archive_dir',
+                        mode: 'readwrite'
+                    });
+
+                    reimburseStatus.style.display = 'block';
+                    reimburseStatus.textContent = `📁 正在「${rootDirHandle.name}」中创建文件夹「${dateFolderName}」...`;
+
+                    const targetDirHandle = await rootDirHandle.getDirectoryHandle(dateFolderName, { create: true });
+
+                    let successCount = 0;
+                    for (let i = 0; i < currentFiles.length; i++) {
+                        const f = currentFiles[i];
+                        reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${currentFiles.length}]: ${f.name}...`;
+
+                        try {
+                            const fileResp = await fetch((currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}`);
+                            if (!fileResp.ok) throw new Error('下载失败');
+                            const blob = await fileResp.blob();
+
+                            const fileHandle = await targetDirHandle.getFileHandle(f.name, { create: true });
+                            const writable = await fileHandle.createWritable();
+                            await writable.write(blob);
+                            await writable.close();
+                            successCount++;
+                        } catch (saveErr) {
+                            console.error('Save error:', saveErr);
+                        }
+                    }
+
+                    reimburseStatus.innerHTML = `✅ <b>大功告成！</b>成功将 ${successCount} 个文件直存到 <b>${rootDirHandle.name}/${dateFolderName}</b> 目录下，无需解压！`;
+                    showToast(`已成功直存 ${successCount} 个文件！`);
+                } catch (err) {
+                    if (err.name !== 'AbortError') {
+                        reimburseStatus.style.display = 'block';
+                        reimburseStatus.textContent = `直存遇到异常: ${err.message || err}`;
                     }
                 }
-
-                reimburseStatus.innerHTML = `✅ <b>大功告成！</b>成功将 ${successCount} 个文件直存到 <b>${rootDirHandle.name}/${dateFolderName}</b> 目录下，无需解压！`;
-                showToast(`已成功直存 ${successCount} 个发票文件！`);
-            } catch (err) {
-                if (err.name !== 'AbortError') {
-                    reimburseStatus.style.display = 'block';
-                    reimburseStatus.textContent = `直存遇到异常: ${err.message || err}`;
-                }
+                return;
             }
+
+            // 模式 C：降级提示
+            alert('您的环境暂不支持直接选择本地文件夹。建议在 Chrome/Edge 浏览器中打开本网址，或使用最新打包的 WenBox 桌面客户端。');
         });
     }
 

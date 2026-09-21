@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Cursor, Read};
+use std::io::{Read, Write};
 use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -102,6 +102,27 @@ fn get_local_ip() -> String {
     local_ip_address::local_ip()
         .map(|ip| ip.to_string())
         .unwrap_or_else(|_| "127.0.0.1".into())
+}
+
+// 在桌面端原生直接保存文件到指定子目录
+#[tauri::command]
+fn save_file_to_directory(dir_path: String, folder_name: String, file_name: String, bytes_base64: String) -> Result<String, String> {
+    let base_dir = PathBuf::from(&dir_path);
+    let target_dir = base_dir.join(&folder_name);
+    if !target_dir.exists() {
+        std::fs::create_dir_all(&target_dir).map_err(|e| format!("创建文件夹失败: {}", e))?;
+    }
+
+    let file_path = target_dir.join(&file_name);
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(bytes_base64)
+        .map_err(|e| format!("Base64 解码失败: {}", e))?;
+
+    let mut file = File::create(&file_path).map_err(|e| format!("写入文件失败: {}", e))?;
+    file.write_all(&bytes).map_err(|e| format!("写入文件内容失败: {}", e))?;
+
+    Ok(file_path.to_string_lossy().to_string())
 }
 
 // ---------------- 启动内置 HTTP 服务端 (9527) ----------------
@@ -321,7 +342,8 @@ fn main() {
             add_share_file,
             clear_share_files,
             get_lan_devices,
-            get_local_ip
+            get_local_ip,
+            save_file_to_directory
         ])
         .run(tauri::generate_context!())
         .expect("error while running wenbox application");
