@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 use std::net::UdpSocket;
@@ -55,11 +55,84 @@ pub struct LocalIpInfo {
     pub is_preferred: bool,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct RoomConfig {
+    #[serde(rename = "isActive")]
+    pub is_active: bool,
+    #[serde(rename = "roomId")]
+    pub room_id: String,
+    #[serde(rename = "roomName")]
+    pub room_name: String,
+    #[serde(rename = "pin")]
+    pub pin: String,
+    #[serde(rename = "needPassword")]
+    pub need_password: bool,
+    #[serde(rename = "hostDevice")]
+    pub host_device: String,
+    #[serde(rename = "hostIp")]
+    pub host_ip: String,
+    #[serde(rename = "hostPort")]
+    pub host_port: u16,
+    #[serde(rename = "createdAt")]
+    pub created_at: u64,
+}
+
+impl Default for RoomConfig {
+    fn default() -> Self {
+        Self {
+            is_active: false,
+            room_id: String::new(),
+            room_name: String::new(),
+            pin: String::new(),
+            need_password: false,
+            host_device: String::new(),
+            host_ip: String::new(),
+            host_port: 9527,
+            created_at: 0,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct RoomMember {
+    pub id: String,
+    pub name: String,
+    pub ip: String,
+    pub platform: String,
+    #[serde(rename = "joinedAt")]
+    pub joined_at: u64,
+    #[serde(rename = "lastSeen")]
+    pub last_seen: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct DiscoveredRoom {
+    #[serde(rename = "roomId")]
+    pub room_id: String,
+    #[serde(rename = "roomName")]
+    pub room_name: String,
+    #[serde(rename = "hostDevice")]
+    pub host_device: String,
+    #[serde(rename = "hostPlatform")]
+    pub host_platform: String,
+    pub ip: String,
+    pub port: u16,
+    #[serde(rename = "needPassword")]
+    pub need_password: bool,
+    #[serde(rename = "lastSeen")]
+    pub last_seen: u64,
+}
+
 struct AppState {
     files: Mutex<HashMap<String, SharedFile>>,
     received_files: Mutex<Vec<SharedFile>>,
     messages: Mutex<Vec<ChatMessage>>,
     devices: Mutex<HashMap<String, LanDevice>>,
+    // 房间制体系
+    room: Mutex<RoomConfig>,
+    members: Mutex<HashMap<String, RoomMember>>,
+    discovered_rooms: Mutex<HashMap<String, DiscoveredRoom>>,
+    auth_tokens: Mutex<HashSet<String>>,
 }
 
 // ---------------- 智能获取本机所有可用局域网 IPv4 地址 ----------------
@@ -206,6 +279,147 @@ fn save_file_to_directory(dir_path: String, folder_name: String, file_name: Stri
     file.write_all(&bytes).map_err(|e| format!("写入文件内容失败: {}", e))?;
 
     Ok(file_path.to_string_lossy().to_string())
+}
+
+// ---------------- 房间制 Tauri 客户端调用命令 ----------------
+#[tauri::command]
+fn create_room_cmd(room_name: String, pin: String, state: tauri::State<Arc<AppState>>) -> Result<RoomConfig, String> {
+    let dev_name = whoami_device_name();
+    let primary_ip = get_primary_ip();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+
+    let clean_pin = pin.trim().to_string();
+    let need_password = !clean_pin.is_empty();
+
+    let clean_name = if room_name.trim().is_empty() {
+        format!("WenBox-{}", &uuid::Uuid::new_v4().to_string()[..4].to_uppercase())
+    } else {
+        room_name.trim().to_string()
+    };
+    let room_id = clean_name.clone();
+
+    let cfg = RoomConfig {
+        is_active: true,
+        room_id,
+        room_name: clean_name,
+        pin: clean_pin,
+        need_password,
+        host_device: dev_name.clone(),
+        host_ip: primary_ip.clone(),
+        host_port: 9527,
+        created_at: now,
+    };
+
+    *state.room.lock().unwrap() = cfg.clone();
+    state.members.lock().unwrap().clear();
+    state.auth_tokens.lock().unwrap().clear();
+
+    // 房主自身加入 member
+    let host_token = uuid::Uuid::new_v4().to_string();
+    state.auth_tokens.lock().unwrap().insert(host_token);
+    let host_member = RoomMember {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: format!("{} (房主)", dev_name),
+        ip: primary_ip,
+        platform: "Windows".into(),
+        joined_at: now,
+        last_seen: now,
+    };
+    state.members.lock().unwrap().insert("127.0.0.1".into(), host_member);
+
+    Ok(cfg)
+}
+
+#[tauri::command]
+fn close_room_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
+    let mut room = state.room.lock().unwrap();
+    room.is_active = false;
+    state.members.lock().unwrap().clear();
+    state.auth_tokens.lock().unwrap().clear();
+    Ok(true)
+}
+
+#[tauri::command]
+fn get_room_status_cmd(state: tauri::State<Arc<AppState>>) -> RoomConfig {
+    state.room.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_discovered_rooms_cmd(state: tauri::State<Arc<AppState>>) -> Vec<DiscoveredRoom> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let mut disc = state.discovered_rooms.lock().unwrap();
+    disc.retain(|_, r| now.saturating_sub(r.last_seen) < 15);
+    disc.values().cloned().collect()
+}
+
+#[tauri::command]
+fn get_room_members_cmd(state: tauri::State<Arc<AppState>>) -> Vec<RoomMember> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let mut mem = state.members.lock().unwrap();
+    mem.retain(|_, m| now.saturating_sub(m.last_seen) < 30);
+    mem.values().cloned().collect()
+}
+
+#[tauri::command]
+fn join_remote_room_cmd(host_url: String, pin: String, my_name: String) -> Result<serde_json::Value, String> {
+    let clean = host_url.trim().trim_end_matches('/');
+    let url = format!("{}/api/room/join", clean);
+    let dev_name = if my_name.trim().is_empty() {
+        whoami_device_name()
+    } else {
+        my_name.trim().to_string()
+    };
+
+    let body = serde_json::json!({
+        "pin": pin.trim(),
+        "name": dev_name,
+        "platform": "Windows"
+    });
+
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(6))
+        .send_string(&body.to_string())
+        .map_err(|e| format!("连接房间失败: {}", e))?;
+
+    let val: serde_json::Value = resp.into_json().map_err(|e| format!("解析房间响应失败: {}", e))?;
+    if val["success"].as_bool().unwrap_or(false) {
+        Ok(val)
+    } else {
+        Err(val["message"].as_str().unwrap_or("加入房间失败").to_string())
+    }
+}
+
+// ---------------- 鉴权辅助函数 ----------------
+fn is_authorized(req: &tiny_http::Request, state: &AppState) -> bool {
+    let room = state.room.lock().unwrap();
+    if !room.is_active || !room.need_password {
+        return true;
+    }
+    // 本地回环免鉴权 (房主本机请求)
+    if let Some(addr) = req.remote_addr() {
+        if addr.ip().is_loopback() {
+            return true;
+        }
+    }
+    // 检查请求头 X-Room-Token
+    let headers = req.headers();
+    if let Some(h) = headers.iter().find(|h| h.field.equiv("X-Room-Token")) {
+        let token_val = h.value.as_str().trim();
+        if state.auth_tokens.lock().unwrap().contains(token_val) {
+            return true;
+        }
+    }
+    // 检查 URL 查询参数 ?token=...
+    let raw_url = req.url();
+    if let Some(q_pos) = raw_url.find("token=") {
+        let after = &raw_url[q_pos + 6..];
+        let token_val = after.split('&').next().unwrap_or("").trim();
+        if state.auth_tokens.lock().unwrap().contains(token_val) {
+            return true;
+        }
+    }
+    false
 }
 
 #[tauri::command]
@@ -536,7 +750,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
 
             let cors_origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
             let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS, PUT, DELETE"[..]).unwrap();
-            let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization"[..]).unwrap();
+            let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization, X-Room-Token"[..]).unwrap();
 
             if method == Method::Options {
                 let mut resp = Response::empty(200);
@@ -547,18 +761,140 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 continue;
             }
 
+            // 0. 房间系统接口 (公开接口：查看状态、加入房间、心跳、成员与已发现房间)
+            if (url == "/api/room/status" || url == "/api/room/info") && method == Method::Get {
+                let room = state.room.lock().unwrap().clone();
+                let members_count = state.members.lock().unwrap().len();
+                let primary_ip = get_primary_ip();
+                let json = serde_json::json!({
+                    "isActive": room.is_active,
+                    "roomId": room.room_id,
+                    "roomName": room.room_name,
+                    "needPassword": room.need_password,
+                    "hostDevice": room.host_device,
+                    "hostIp": primary_ip,
+                    "hostPort": port,
+                    "memberCount": members_count
+                }).to_string();
+                let mut resp = Response::from_string(json);
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
+            if url == "/api/room/join" && method == Method::Post {
+                let mut body = String::new();
+                let _ = req.as_reader().read_to_string(&mut body);
+                let mut success = false;
+                let mut msg = String::new();
+                let mut token_str = String::new();
+                let mut room_info = serde_json::Value::Null;
+
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
+                    let pin = val["pin"].as_str().unwrap_or("").trim();
+                    let name = val["name"].as_str().unwrap_or("访客设备").to_string();
+                    let plat = val["platform"].as_str().unwrap_or("Browser").to_string();
+                    let client_ip = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_else(|| "127.0.0.1".into());
+
+                    let room = state.room.lock().unwrap().clone();
+                    if !room.is_active {
+                        msg = "房间尚未开启或已解散".into();
+                    } else if room.need_password && room.pin != pin {
+                        msg = "房间密码错误".into();
+                    } else {
+                        success = true;
+                        let token = uuid::Uuid::new_v4().to_string();
+                        token_str = token.clone();
+                        state.auth_tokens.lock().unwrap().insert(token);
+
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                        let member = RoomMember {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            name,
+                            ip: client_ip.clone(),
+                            platform: plat,
+                            joined_at: now,
+                            last_seen: now,
+                        };
+                        state.members.lock().unwrap().insert(client_ip, member);
+
+                        room_info = serde_json::json!({
+                            "roomId": room.room_id,
+                            "roomName": room.room_name,
+                            "hostDevice": room.host_device,
+                            "hostIp": get_primary_ip(),
+                            "hostPort": port,
+                        });
+                    }
+                }
+
+                let json = serde_json::json!({
+                    "success": success,
+                    "message": msg,
+                    "token": token_str,
+                    "room": room_info
+                }).to_string();
+                let mut resp = Response::from_string(json);
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
+            if url == "/api/room/heartbeat" && method == Method::Post {
+                let client_ip = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_else(|| "127.0.0.1".into());
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                if let Some(m) = state.members.lock().unwrap().get_mut(&client_ip) {
+                    m.last_seen = now;
+                }
+                let mut resp = Response::from_string("{\"success\":true}");
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
+            if url == "/api/room/members" && method == Method::Get {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                let mut members_map = state.members.lock().unwrap();
+                members_map.retain(|_, m| now.saturating_sub(m.last_seen) < 30);
+                let list: Vec<RoomMember> = members_map.values().cloned().collect();
+                let json = serde_json::json!({ "members": list }).to_string();
+                let mut resp = Response::from_string(json);
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
+            if url == "/api/discovered_rooms" && method == Method::Get {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                let mut rooms_map = state.discovered_rooms.lock().unwrap();
+                rooms_map.retain(|_, r| now.saturating_sub(r.last_seen) < 15);
+                let list: Vec<DiscoveredRoom> = rooms_map.values().cloned().collect();
+                let json = serde_json::json!({ "rooms": list }).to_string();
+                let mut resp = Response::from_string(json);
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
             // 1. 获取本端信息 (供前端展示自身 IP 与服务状态)
             if url == "/api/status" && method == Method::Get {
                 let primary_ip = get_primary_ip();
                 let all_ips = get_all_lan_ips();
                 let dev_name = whoami_device_name();
+                let room = state.room.lock().unwrap().clone();
                 let json = serde_json::json!({
                     "device": dev_name,
                     "ip": primary_ip,
                     "all_ips": all_ips,
                     "port": port,
                     "running": true,
-                    "platform": "Windows"
+                    "platform": "Windows",
+                    "room": {
+                        "isActive": room.is_active,
+                        "roomId": room.room_id,
+                        "roomName": room.room_name,
+                        "needPassword": room.need_password
+                    }
                 }).to_string();
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
@@ -615,15 +951,36 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
 
                 let primary_ip = get_primary_ip();
                 let dev_name = whoami_device_name();
+                let room = state.room.lock().unwrap().clone();
                 let json = serde_json::json!({
                     "device": dev_name,
                     "ip": primary_ip,
                     "all_ips": get_all_lan_ips(),
                     "port": port,
                     "running": true,
-                    "platform": "Windows"
+                    "platform": "Windows",
+                    "room": {
+                        "isActive": room.is_active,
+                        "roomId": room.room_id,
+                        "roomName": room.room_name,
+                        "needPassword": room.need_password
+                    }
                 }).to_string();
                 let mut resp = Response::from_string(json);
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
+            // 鉴权拦截检查 (当房间处于活跃且设置密码保护时，未授权的客户端拒绝访问敏感文件与消息接口)
+            let is_protected = url.starts_with("/api/files")
+                || url.starts_with("/api/download/")
+                || url == "/api/upload"
+                || url.starts_with("/api/messages");
+
+            if is_protected && !is_authorized(&req, &state) {
+                let mut resp = Response::from_string("{\"success\":false,\"unauthorized\":true,\"message\":\"未授权：请先输入房间密码加入房间\"}")
+                    .with_status_code(401);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
                 continue;
@@ -859,16 +1216,59 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
             if let Ok((len, src)) = socket.recv_from(&mut buf) {
                 if let Ok(text) = std::str::from_utf8(&buf[..len]) {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
-                        if val["action"] == "wenbox_discovery" {
+                        let action = val["action"].as_str().unwrap_or("");
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+
+                        // 1. 房间发现广播
+                        if action == "wenbox_room_broadcast" {
+                            let room_id = val["roomId"].as_str().unwrap_or("").to_string();
+                            let room_name = val["roomName"].as_str().unwrap_or(&room_id).to_string();
+                            let host_dev = val["hostDevice"].as_str().unwrap_or("").to_string();
+                            let plat = val["platform"].as_str().unwrap_or("Windows").to_string();
+                            let port = val["port"].as_u64().unwrap_or(9527) as u16;
+                            let need_password = val["needPassword"].as_bool().unwrap_or(false);
+                            let ip = src.ip().to_string();
+
+                            // 检查是否为自己发送的广播
+                            let my_room = state_recv.room.lock().unwrap().clone();
+                            let is_my_active_room = my_room.is_active && my_room.room_id == room_id;
+                            let is_self_ip = get_all_lan_ips().iter().any(|item| item.ip == ip);
+
+                            if !(is_my_active_room && is_self_ip) {
+                                let key = format!("{}:{}", ip, port);
+                                let disc = DiscoveredRoom {
+                                    room_id: room_id.clone(),
+                                    room_name: room_name.clone(),
+                                    host_device: host_dev.clone(),
+                                    host_platform: plat.clone(),
+                                    ip: ip.clone(),
+                                    port,
+                                    need_password,
+                                    last_seen: now,
+                                };
+                                state_recv.discovered_rooms.lock().unwrap().insert(key.clone(), disc);
+
+                                // 同时也作为普通在线节点缓存
+                                let node = LanDevice {
+                                    name: format!("{} [{}]", host_dev, room_name),
+                                    ip,
+                                    port,
+                                    platform: plat,
+                                    last_seen: now,
+                                };
+                                state_recv.devices.lock().unwrap().insert(key, node);
+                            }
+                        }
+
+                        // 2. 传统设备节点探测广播
+                        if action == "wenbox_discovery" {
                             let name = val["device"].as_str().unwrap_or("").to_string();
                             let plat = val["platform"].as_str().unwrap_or("Android").to_string();
                             let port = val["port"].as_u64().unwrap_or(9527) as u16;
                             let ip = src.ip().to_string();
-
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs();
 
                             let key = format!("{}:{}", ip, port);
                             let node = LanDevice {
@@ -886,7 +1286,8 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
         }
     });
 
-    // 2. 启动定时广播线程 (向所有网卡子网广播与 255.255.255.255:9528 宣告自身)
+    // 2. 启动定时广播线程 (仅当本机作为房主开启房间后，才对外宣告自身房间信息)
+    let state_bcast = state.clone();
     thread::spawn(move || {
         let socket = match UdpSocket::bind("0.0.0.0:0") {
             Ok(s) => s,
@@ -895,16 +1296,31 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
         let _ = socket.set_broadcast(true);
 
         loop {
-            let msg = serde_json::json!({
-                "action": "wenbox_discovery",
-                "device": dev_name,
-                "platform": platform,
-                "port": my_port
-            }).to_string();
+            let active_room = {
+                let r = state_bcast.room.lock().unwrap();
+                if r.is_active {
+                    Some(r.clone())
+                } else {
+                    None
+                }
+            };
 
-            let targets = get_all_broadcast_addrs();
-            for target in targets {
-                let _ = socket.send_to(msg.as_bytes(), &target);
+            // 仅当房主开房后，才对外进行房间广播；默认客户端模式下绝不广播
+            if let Some(room) = active_room {
+                let msg = serde_json::json!({
+                    "action": "wenbox_room_broadcast",
+                    "roomId": room.room_id,
+                    "roomName": room.room_name,
+                    "hostDevice": dev_name,
+                    "platform": platform,
+                    "port": my_port,
+                    "needPassword": room.need_password
+                }).to_string();
+
+                let targets = get_all_broadcast_addrs();
+                for target in targets {
+                    let _ = socket.send_to(msg.as_bytes(), &target);
+                }
             }
             thread::sleep(Duration::from_secs(3));
         }
@@ -923,6 +1339,10 @@ fn main() {
         received_files: Mutex::new(Vec::new()),
         messages: Mutex::new(Vec::new()),
         devices: Mutex::new(HashMap::new()),
+        room: Mutex::new(RoomConfig::default()),
+        members: Mutex::new(HashMap::new()),
+        discovered_rooms: Mutex::new(HashMap::new()),
+        auth_tokens: Mutex::new(HashSet::new()),
     });
 
     // 启动 HTTP 服务端 (默认 9527)
@@ -938,6 +1358,12 @@ fn main() {
             get_all_lan_ips_cmd,
             get_lan_devices,
             connect_device_node,
+            create_room_cmd,
+            close_room_cmd,
+            get_room_status_cmd,
+            get_discovered_rooms_cmd,
+            get_room_members_cmd,
+            join_remote_room_cmd,
             add_share_file,
             remove_share_file,
             clear_share_files,

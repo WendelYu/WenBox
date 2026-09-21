@@ -39,50 +39,101 @@
 
         <!-- 主内容区：Tab 1 局域网快传 -->
         <main id="tab-transfer" class="tab-pane active">
-            <!-- 🖥️ 本机服务端显著状态与 IP 访问卡片 -->
-            <section class="card server-info-banner" id="serverInfoBanner">
-                <div class="server-info-header">
-                    <div class="server-status-badge">
-                        <span class="status-pulse-dot"></span>
-                        <span class="server-status-title">🖥️ 本机服务端: <span id="serverRunningStatus" style="color: #10B981; font-weight: bold;">🟢 运行中</span> (端口: <span id="serverPort">9527</span>)</span>
+            <!-- 模式 1：默认客户端发现大厅 (Client Mode) -->
+            <section class="card room-banner room-client-banner" id="roomClientBanner">
+                <div class="room-banner-header">
+                    <div class="room-status-badge">
+                        <span class="status-pulse-dot" style="background: #3B82F6; box-shadow: 0 0 10px #3B82F6;"></span>
+                        <span class="room-status-title">🔍 房间发现大厅: <span style="color: #60A5FA; font-weight: bold;">正在探测局域网房间...</span></span>
                     </div>
-                    <div class="server-url-box">
-                        <span class="url-label">局域网访问网址:</span>
-                        <span class="url-value" id="primaryServerUrl">http://正在检测IP...:9527</span>
-                        <button id="btnCopyServerUrl" class="btn-copy-url" title="复制网址">📋 复制网址</button>
-                        <button id="btnRefreshIps" class="btn-refresh-ips" title="重新检测网卡IP">🔄 刷新网络</button>
+                    <div class="room-header-actions">
+                        <button id="btnOpenCreateRoomModal" class="btn-create-room" title="创建新房间 (本机变身服务端)">➕ 创建房间 (成为主机)</button>
+                        <button id="btnOpenManualJoinModal" class="btn-secondary" title="手动输入对方 IP/URL 加入">🔗 手动输入加入</button>
                     </div>
                 </div>
-                <!-- 多网卡 IP 切换栏 (当存在多个物理/虚拟网卡时展开显示) -->
-                <div id="multiIpSelectorContainer" class="multi-ip-row" style="display: none;">
-                    <span class="multi-ip-label">检测到多个网卡 IP，点击切换供手机连接：</span>
-                    <div id="multiIpPills" class="multi-ip-pills"></div>
+                <div class="room-tip">
+                    💡 <b>工作模式：</b>程序启动默认处于「客户端发现模式」，自动监听并显示局域网中已创建的房间；点击「创建房间」后本机将变身「服务端主机」，其他电脑或手机扫码/点击即可加入互传！
                 </div>
-                <div class="server-tip">
-                    💡 <b>双向互传指南：</b>手机与电脑连接同一 Wi-Fi 时，在手机浏览器中打开上述网址，即可实现免安装即开即传；在手机 WenBox App 中也可直接选择互联。
+
+                <!-- 局域网发现到的房间列表 -->
+                <div class="discovered-rooms-section" style="margin-top: 16px;">
+                    <div class="section-title" style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 14px; font-weight: 600; color: #E2E8F0;">📡 局域网可用房间 (<span id="discoveredRoomsCount">0</span>)</span>
+                        <button id="btnRefreshDiscoveredRooms" class="btn-copy-mini" style="font-size: 12px; padding: 4px 10px;">🔄 刷新房间</button>
+                    </div>
+                    <div id="discoveredRoomsContainer" class="room-cards-grid">
+                        <!-- 动态渲染局域网房间卡片 -->
+                    </div>
+                    <div id="noRoomsDiscoveredPrompt" class="empty-state" style="padding: 24px 10px; background: rgba(0,0,0,0.15); border-radius: 10px; margin-top: 8px;">
+                        <div class="empty-icon" style="font-size: 28px;">📡</div>
+                        <p style="font-size: 14px;">暂未发现其他设备创建的房间</p>
+                        <span style="font-size: 12px;">您可以点击上方「➕ 创建房间 (成为主机)」创建自己的互传房间，或者等待对方设备创建房间。</span>
+                    </div>
                 </div>
             </section>
 
-            <!-- 局域网在线设备列表 (自动发现与手动指定 IP) -->
-            <section class="card section-devices" style="margin-top: 20px;">
-                <div class="section-header">
-                    <div class="section-title">
-                        <h2>🌐 局域网设备节点</h2>
-                        <span class="subtitle">UDP 自动广播探测 + IP 直连，点击设备卡片可切换查看并双向传输文件</span>
+            <!-- 模式 2：本机创建房间后的服务端控制台 (Host Mode) -->
+            <section class="card room-banner room-host-banner" id="roomHostBanner" style="display: none;">
+                <div class="room-banner-header">
+                    <div class="room-status-badge">
+                        <span class="status-pulse-dot" style="background: #10B981; box-shadow: 0 0 10px #10B981;"></span>
+                        <span class="room-status-title">👑 房间服务端已开启: <span id="hostRoomNameDisplay" style="color: #10B981; font-weight: bold;">--</span></span>
                     </div>
-                    <div class="actions" style="display: flex; gap: 8px;">
-                        <input type="text" id="customTargetIp" class="converter-input" style="width: 180px; padding: 6px 10px; font-size: 13px;" placeholder="输入对方 IP (如 192.168.1.5)">
-                        <button id="btnConnectCustomIp" class="btn-secondary" style="padding: 6px 12px;">连接该设备</button>
+                    <div class="room-header-actions">
+                        <button id="btnShowHostQrCode" class="btn-qr-action" title="查看入房二维码">📱 扫码秒进</button>
+                        <button id="btnCopyRoomDirectLink" class="btn-copy-url" title="复制入房直链">📋 复制直链</button>
+                        <button id="btnCloseRoom" class="btn-danger-outline" style="padding: 6px 14px;" title="解散当前房间并切回客户端">⏹️ 解散房间</button>
                     </div>
                 </div>
 
-                <div id="deviceListContainer" class="device-node-grid">
-                    <!-- 动态渲染在线节点 -->
+                <div class="host-info-grid" style="margin-top: 14px;">
+                    <div class="host-info-item">
+                        <span class="host-info-label">房间号</span>
+                        <span class="host-info-val" id="hostRoomIdDisplay">--</span>
+                    </div>
+                    <div class="host-info-item">
+                        <span class="host-info-label">入房密码 (PIN)</span>
+                        <span class="host-info-val" id="hostRoomPinDisplay" style="color: #F59E0B;">--</span>
+                    </div>
+                    <div class="host-info-item" style="grid-column: span 2;">
+                        <span class="host-info-label">局域网入房网址</span>
+                        <span class="host-info-val url-highlight" id="hostRoomUrlDisplay">http://...:9527</span>
+                    </div>
+                </div>
+
+                <!-- 多网卡 IP 切换栏 (当存在多个物理/虚拟网卡时展开显示) -->
+                <div id="multiIpSelectorContainer" class="multi-ip-row" style="display: none; margin-top: 12px;">
+                    <span class="multi-ip-label">切换展示网卡 IP：</span>
+                    <div id="multiIpPills" class="multi-ip-pills"></div>
+                </div>
+
+                <!-- 房间在线成员栏 -->
+                <div class="room-members-bar" style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed rgba(255,255,255,0.1);">
+                    <div style="font-size: 13px; color: #94A3B8; margin-bottom: 8px;">👥 房间在线成员 (<span id="hostMemberCount">1</span>)：</div>
+                    <div id="hostMembersContainer" class="room-member-pills">
+                        <!-- 动态渲染成员 -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- 模式 3：客户端加入他人房间后的状态横幅 (Joined Mode) -->
+            <section class="card room-banner room-joined-banner" id="roomJoinedBanner" style="display: none;">
+                <div class="room-banner-header">
+                    <div class="room-status-badge">
+                        <span class="status-pulse-dot" style="background: #06B6D4; box-shadow: 0 0 10px #06B6D4;"></span>
+                        <span class="room-status-title">🔗 已加入房间: <span id="joinedRoomNameDisplay" style="color: #38BDF8; font-weight: bold;">--</span> (房主: <span id="joinedHostDeviceDisplay">--</span>)</span>
+                    </div>
+                    <div class="room-header-actions">
+                        <button id="btnLeaveRoom" class="btn-secondary" title="退出当前房间">🚪 退出房间</button>
+                    </div>
+                </div>
+                <div class="room-tip" style="margin-top: 8px;">
+                    ✨ <b>已接入房主服务：</b>您可以浏览下载房主分享的文件，也可以直接在下方将您的文件投送给房主。
                 </div>
             </section>
 
             <!-- 视图 A：当前选定为「本端 (本机)」时的面板 -->
-            <div id="selfViewSection" style="display: block;">
+            <div id="selfViewSection" style="display: none;">
                 <!-- 面板 A1：本机对外分享的文件列表 -->
                 <section class="card section-download" style="margin-top: 20px;">
                     <div class="section-header">
@@ -397,6 +448,98 @@
         <footer class="footer">
             <p>WenBox • Crafted with ❤️ by Wendel • 局域网端对端直连百宝箱</p>
         </footer>
+    </div>
+
+    <!-- 弹窗 1：创建房间 Modal (变身服务端) -->
+    <div id="createRoomModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>👑 创建房间 (本机成为服务端主机)</h3>
+                <button class="modal-close" onclick="window.closeCreateRoomModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-tip">创建房间后，本机将开启局域网广播与文件服务。其他电脑或手机可扫码或输入 PIN 码极速接入！</p>
+                <div class="form-group" style="margin-top: 14px;">
+                    <label>房间名称：</label>
+                    <input type="text" id="modalInputRoomName" class="converter-input" placeholder="例如: 办公室互传-01">
+                </div>
+                <div class="form-group" style="margin-top: 14px;">
+                    <label>入房密码 / PIN 码 (留空则免密自由加入)：</label>
+                    <input type="text" id="modalInputRoomPin" class="converter-input" placeholder="建议输入 4 位简短数字，如 6888" maxlength="16">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="window.closeCreateRoomModal()">取消</button>
+                <button id="modalBtnConfirmCreateRoom" class="btn-primary-action">立即创建并开启服务</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗 2：输入 PIN 码加入房间 Modal -->
+    <div id="joinRoomPinModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="joinPinModalTitle">🔑 需要入房密码</h3>
+                <button class="modal-close" onclick="window.closeJoinPinModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-tip" id="joinPinModalDesc">该房间设置了安全密码，请输入 4 位 PIN 码或密码：</p>
+                <div class="form-group" style="margin-top: 14px;">
+                    <input type="password" id="modalInputJoinPin" class="converter-input" style="font-size: 20px; letter-spacing: 4px; text-align: center;" placeholder="输入 PIN 码" maxlength="16">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="window.closeJoinPinModal()">取消</button>
+                <button id="modalBtnConfirmJoinPin" class="btn-primary-action">验证并进入</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗 3：手动输入 IP/URL 加入房间 Modal -->
+    <div id="manualJoinModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>🔗 手动加入远程房间</h3>
+                <button class="modal-close" onclick="window.closeManualJoinModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-tip">若因网络隔离未能自动探测到房间，可直接输入对方主机的 IP 或网址直连：</p>
+                <div class="form-group" style="margin-top: 14px;">
+                    <label>主机 IP 或完整网址：</label>
+                    <input type="text" id="modalInputManualUrl" class="converter-input" placeholder="例如: 192.168.1.5 或 http://192.168.1.5:9527">
+                </div>
+                <div class="form-group" style="margin-top: 14px;">
+                    <label>房间 PIN 码 (若无则留空)：</label>
+                    <input type="text" id="modalInputManualPin" class="converter-input" placeholder="入房 PIN 码" maxlength="16">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="window.closeManualJoinModal()">取消</button>
+                <button id="modalBtnConfirmManualJoin" class="btn-primary-action">连接并进入</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗 4：房主二维码 Modal (扫码秒进) -->
+    <div id="hostQrModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card" style="text-align: center; max-width: 380px;">
+            <div class="modal-header">
+                <h3>📱 手机扫码秒进房间</h3>
+                <button class="modal-close" onclick="window.closeHostQrModal()">✕</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; align-items: center; padding: 20px 0;">
+                <div id="qrCanvasContainer" style="background: #fff; padding: 16px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);">
+                    <canvas id="hostQrCanvas" width="220" height="220"></canvas>
+                </div>
+                <div style="margin-top: 14px; font-size: 13px; color: #94A3B8;">
+                    同一 Wi-Fi 下使用手机相机或微信/浏览器扫码<br>免输入密码，即开即传！
+                </div>
+                <div id="qrDirectUrlText" style="margin-top: 8px; font-size: 12px; color: #60A5FA; font-family: monospace; word-break: break-all;"></div>
+            </div>
+            <div class="modal-footer" style="justify-content: center;">
+                <button class="btn-primary-action" onclick="window.closeHostQrModal()">完成</button>
+            </div>
+        </div>
     </div>
 
     <!-- 简易通知 Toast -->

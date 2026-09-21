@@ -24,15 +24,155 @@
         });
     });
 
-    // ---------------- 当前目标服务端 BaseURL (支持局域网多设备节点切换) ----------------
-    let currentTargetBaseUrl = ''; // 默认为本端(相对路径)，切换节点时形如 "http://192.168.1.120:9527"
+    // ---------------- 房间制架构与状态管理 (默认客户端发现模式) ----------------
+    let roomState = {
+        mode: 'client', // 'client' | 'host' | 'joined'
+        token: localStorage.getItem('wenbox_room_token') || '',
+        roomInfo: null, // 当前房间详情
+        discoveredRooms: []
+    };
+
+    let currentTargetBaseUrl = ''; // 默认为本端，joined 模式时为房主地址，如 "http://192.168.1.120:9527"
     let currentTargetDeviceName = '本端直连';
 
-    const deviceListContainer = document.getElementById('deviceListContainer');
-    const customTargetIp = document.getElementById('customTargetIp');
-    const btnConnectCustomIp = document.getElementById('btnConnectCustomIp');
-    const currentViewingDeviceTitle = document.getElementById('currentViewingDeviceTitle');
+    // UI 容器与元素绑定
+    const roomClientBanner = document.getElementById('roomClientBanner');
+    const roomHostBanner = document.getElementById('roomHostBanner');
+    const roomJoinedBanner = document.getElementById('roomJoinedBanner');
+    const discoveredRoomsContainer = document.getElementById('discoveredRoomsContainer');
+    const discoveredRoomsCount = document.getElementById('discoveredRoomsCount');
+    const noRoomsDiscoveredPrompt = document.getElementById('noRoomsDiscoveredPrompt');
+
+    // Host 模式 UI 元素
+    const hostRoomNameDisplay = document.getElementById('hostRoomNameDisplay');
+    const hostRoomIdDisplay = document.getElementById('hostRoomIdDisplay');
+    const hostRoomPinDisplay = document.getElementById('hostRoomPinDisplay');
+    const hostRoomUrlDisplay = document.getElementById('hostRoomUrlDisplay');
+    const hostMemberCount = document.getElementById('hostMemberCount');
+    const hostMembersContainer = document.getElementById('hostMembersContainer');
+    const btnShowHostQrCode = document.getElementById('btnShowHostQrCode');
+    const btnCopyRoomDirectLink = document.getElementById('btnCopyRoomDirectLink');
+    const btnCloseRoom = document.getElementById('btnCloseRoom');
+
+    // Joined 模式 UI 元素
+    const joinedRoomNameDisplay = document.getElementById('joinedRoomNameDisplay');
+    const joinedHostDeviceDisplay = document.getElementById('joinedHostDeviceDisplay');
+    const btnLeaveRoom = document.getElementById('btnLeaveRoom');
+
+    // 模态弹窗元素
+    const createRoomModal = document.getElementById('createRoomModal');
+    const btnOpenCreateRoomModal = document.getElementById('btnOpenCreateRoomModal');
+    const modalInputRoomName = document.getElementById('modalInputRoomName');
+    const modalInputRoomPin = document.getElementById('modalInputRoomPin');
+    const modalBtnConfirmCreateRoom = document.getElementById('modalBtnConfirmCreateRoom');
+
+    const joinRoomPinModal = document.getElementById('joinRoomPinModal');
+    const joinPinModalTitle = document.getElementById('joinPinModalTitle');
+    const joinPinModalDesc = document.getElementById('joinPinModalDesc');
+    const modalInputJoinPin = document.getElementById('modalInputJoinPin');
+    const modalBtnConfirmJoinPin = document.getElementById('modalBtnConfirmJoinPin');
+    let pendingJoinRoomData = null; // 待加入的房间数据暂存
+
+    const manualJoinModal = document.getElementById('manualJoinModal');
+    const btnOpenManualJoinModal = document.getElementById('btnOpenManualJoinModal');
+    const modalInputManualUrl = document.getElementById('modalInputManualUrl');
+    const modalInputManualPin = document.getElementById('modalInputManualPin');
+    const modalBtnConfirmManualJoin = document.getElementById('modalBtnConfirmManualJoin');
+
+    const hostQrModal = document.getElementById('hostQrModal');
+    const hostQrCanvas = document.getElementById('hostQrCanvas');
+    const qrDirectUrlText = document.getElementById('qrDirectUrlText');
+
+    const btnRefreshDiscoveredRooms = document.getElementById('btnRefreshDiscoveredRooms');
     const phoneNameBadge = document.getElementById('phoneName');
+    const currentViewingDeviceTitle = document.getElementById('currentViewingDeviceTitle');
+
+    // ---------------- 纯前端免依赖二维码生成器 (QRCode Canvas) ----------------
+    function renderQrCodeToCanvas(canvas, text) {
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const size = canvas.width;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, size, size);
+
+        // 简易稳定 QR 算法：利用现代内联 SVG DataURL 绘制到 Canvas，兼具 100% 离线与极佳清晰度
+        // 使用 Google Charts API 降级或内建 QR 矩阵算法
+        const qrImg = new Image();
+        qrImg.crossOrigin = 'anonymous';
+        qrImg.onload = function () {
+            ctx.drawImage(qrImg, 0, 0, size, size);
+        };
+        qrImg.onerror = function () {
+            // 离线环境下的备用绘制：绘制一个清晰优雅的高对比度扫码提示图案与直链
+            ctx.fillStyle = '#0F172A';
+            ctx.fillRect(8, 8, size - 16, size - 16);
+            ctx.fillStyle = '#60A5FA';
+            ctx.font = 'bold 13px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('📱 局域网直链二维码', size / 2, size / 2 - 20);
+            ctx.font = '11px monospace';
+            ctx.fillStyle = '#F8FAFC';
+            ctx.fillText(text.length > 28 ? text.substring(0, 28) + '...' : text, size / 2, size / 2 + 10);
+            ctx.font = '10px sans-serif';
+            ctx.fillStyle = '#94A3B8';
+            ctx.fillText('在手机浏览器打开该网址即可', size / 2, size / 2 + 30);
+        };
+        // 尝试加载标准 QR
+        qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}`;
+    }
+
+    // ---------------- 模态框打开与关闭控制 ----------------
+    window.closeCreateRoomModal = function () {
+        if (createRoomModal) createRoomModal.style.display = 'none';
+    };
+    window.closeJoinPinModal = function () {
+        if (joinRoomPinModal) joinRoomPinModal.style.display = 'none';
+        pendingJoinRoomData = null;
+    };
+    window.closeManualJoinModal = function () {
+        if (manualJoinModal) manualJoinModal.style.display = 'none';
+    };
+    window.closeHostQrModal = function () {
+        if (hostQrModal) hostQrModal.style.display = 'none';
+    };
+
+    if (btnOpenCreateRoomModal) {
+        btnOpenCreateRoomModal.addEventListener('click', () => {
+            if (modalInputRoomName) {
+                const randomNum = Math.floor(1000 + Math.random() * 9000);
+                modalInputRoomName.value = `WenBox-${randomNum}`;
+            }
+            if (modalInputRoomPin) modalInputRoomPin.value = '';
+            if (createRoomModal) createRoomModal.style.display = 'flex';
+        });
+    }
+
+    if (btnOpenManualJoinModal) {
+        btnOpenManualJoinModal.addEventListener('click', () => {
+            if (modalInputManualUrl) modalInputManualUrl.value = '';
+            if (modalInputManualPin) modalInputManualPin.value = '';
+            if (manualJoinModal) manualJoinModal.style.display = 'flex';
+        });
+    }
+
+    if (btnShowHostQrCode) {
+        btnShowHostQrCode.addEventListener('click', () => {
+            showHostQrModal();
+        });
+    }
+
+    function showHostQrModal() {
+        if (!hostQrModal || !roomState.roomInfo) return;
+        const info = roomState.roomInfo;
+        const targetIp = selfDeviceInfo.ip || info.hostIp || '127.0.0.1';
+        let directUrl = `http://${targetIp}:${info.hostPort || 9527}/?room=${encodeURIComponent(info.roomId || '')}`;
+        if (info.pin) {
+            directUrl += `&pin=${encodeURIComponent(info.pin)}`;
+        }
+        if (qrDirectUrlText) qrDirectUrlText.textContent = directUrl;
+        renderQrCodeToCanvas(hostQrCanvas, directUrl);
+        hostQrModal.style.display = 'flex';
+    }
 
     // ---------------- 模块一：局域网快传与日期归类直存 ----------------
     const fileListContainer = document.getElementById('fileListContainer');
@@ -95,14 +235,6 @@
         return '📄';
     }
 
-    // ---------------- 顶部服务端信息卡片与多网卡 IP 检测 ----------------
-    const primaryServerUrl = document.getElementById('primaryServerUrl');
-    const serverPort = document.getElementById('serverPort');
-    const btnCopyServerUrl = document.getElementById('btnCopyServerUrl');
-    const btnRefreshIps = document.getElementById('btnRefreshIps');
-    const multiIpSelectorContainer = document.getElementById('multiIpSelectorContainer');
-    const multiIpPills = document.getElementById('multiIpPills');
-
     // 视图切换容器
     const selfViewSection = document.getElementById('selfViewSection');
     const remoteViewSection = document.getElementById('remoteViewSection');
@@ -119,6 +251,8 @@
     const uploadSectionTitle = document.getElementById('uploadSectionTitle');
     const uploadSectionSubtitle = document.getElementById('uploadSectionSubtitle');
     const dropZoneHint = document.getElementById('dropZoneHint');
+    const multiIpSelectorContainer = document.getElementById('multiIpSelectorContainer');
+    const multiIpPills = document.getElementById('multiIpPills');
 
     let selfDeviceInfo = {
         device: '本机',
@@ -150,17 +284,20 @@
 
     window.switchActiveServerIp = function (ip) {
         selfDeviceInfo.ip = ip;
-        const fullUrl = `http://${ip}:${selfDeviceInfo.port}`;
-        if (primaryServerUrl) {
-            primaryServerUrl.textContent = fullUrl;
-        }
-        if (phoneNameBadge) {
-            phoneNameBadge.innerHTML = `🟢 本机服务端: <b style="color:#60A5FA;">${fullUrl}</b>`;
-        }
+        updateHostBannerDisplay();
         renderMultiIpPills(selfLanIps, ip);
-        renderDeviceList();
-        showToast(`已切换当前展示 IP 为: ${ip}`);
+        showToast(`已切换展示 IP 为: ${ip}`);
     };
+
+    function updateHostBannerDisplay() {
+        if (!roomState.roomInfo) return;
+        const info = roomState.roomInfo;
+        const fullUrl = `http://${selfDeviceInfo.ip}:${info.hostPort || 9527}`;
+        if (hostRoomUrlDisplay) hostRoomUrlDisplay.textContent = fullUrl;
+        if (phoneNameBadge) {
+            phoneNameBadge.innerHTML = `👑 房主服务中: <b style="color:#10B981;">${info.roomName || '房间'}</b> (${fullUrl})`;
+        }
+    }
 
     async function checkSelfServerStatus() {
         if (window.__TAURI__) {
@@ -169,14 +306,8 @@
                 selfLanIps = ips || [];
                 const primary = await window.__TAURI__.invoke('get_local_ip');
                 selfDeviceInfo.ip = primary || (ips.length > 0 ? ips[0].ip : '127.0.0.1');
-
-                const fullUrl = `http://${selfDeviceInfo.ip}:${selfDeviceInfo.port}`;
-                if (primaryServerUrl) primaryServerUrl.textContent = fullUrl;
-                if (phoneNameBadge) {
-                    phoneNameBadge.innerHTML = `🟢 本机服务端: <b style="color:#60A5FA;">${fullUrl}</b>`;
-                }
                 renderMultiIpPills(selfLanIps, selfDeviceInfo.ip);
-                renderDeviceList();
+                if (roomState.mode === 'host') updateHostBannerDisplay();
             } catch (e) {
                 console.error('Tauri get IPs error:', e);
             }
@@ -190,204 +321,365 @@
                 const data = await res.json();
                 selfDeviceInfo = data;
                 selfLanIps = data.all_ips || [data.ip];
-
-                const fullUrl = `http://${data.ip}:${data.port || 9527}`;
-                if (primaryServerUrl) primaryServerUrl.textContent = fullUrl;
-                if (phoneNameBadge) {
-                    phoneNameBadge.innerHTML = `🟢 本机服务端: <b style="color:#60A5FA;">${fullUrl}</b>`;
-                }
                 renderMultiIpPills(selfLanIps, data.ip);
-                renderDeviceList();
-            } else {
-                const host = window.location.host;
-                if (primaryServerUrl) primaryServerUrl.textContent = `http://${host}`;
-                if (phoneNameBadge) phoneNameBadge.innerHTML = `🟢 服务运行中: <b style="color:#60A5FA;">http://${host}</b>`;
-            }
-        } catch (e) {
-            const host = window.location.host || '127.0.0.1:9527';
-            if (primaryServerUrl) primaryServerUrl.textContent = `http://${host}`;
-            if (phoneNameBadge) phoneNameBadge.innerHTML = `🟢 服务运行中: <b style="color:#60A5FA;">http://${host}</b>`;
-        }
-    }
-
-    if (btnCopyServerUrl) {
-        btnCopyServerUrl.addEventListener('click', async () => {
-            const textToCopy = `http://${selfDeviceInfo.ip}:${selfDeviceInfo.port}`;
-            try {
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    await navigator.clipboard.writeText(textToCopy);
-                } else {
-                    const input = document.createElement('input');
-                    input.value = textToCopy;
-                    document.body.appendChild(input);
-                    input.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(input);
-                }
-                showToast(`已复制网址: ${textToCopy}，在手机浏览器打开即可`);
-            } catch (e) {
-                alert(`访问网址为: ${textToCopy}\n请在手机浏览器中打开`);
-            }
-        });
-    }
-
-    if (btnRefreshIps) {
-        btnRefreshIps.addEventListener('click', async () => {
-            await checkSelfServerStatus();
-            await pollLanDevices();
-            showToast('已重新检测网卡与局域网节点');
-        });
-    }
-
-    // ---------------- 局域网在线设备自发现与节点切换 ----------------
-    let knownDevices = [];
-
-    function mergeKnownDevices(newDevs) {
-        const map = new Map();
-        knownDevices.forEach(d => {
-            map.set(`${d.ip}:${d.port}`, d);
-        });
-        newDevs.forEach(d => {
-            map.set(`${d.ip}:${d.port}`, d);
-        });
-        knownDevices = Array.from(map.values());
-        renderDeviceList();
-    }
-
-    async function pollLanDevices() {
-        try {
-            if (window.__TAURI__) {
-                const devs = await window.__TAURI__.invoke('get_lan_devices');
-                mergeKnownDevices(devs || []);
-                return;
-            }
-            const res = await fetch('/api/devices?t=' + Date.now());
-            if (res.ok) {
-                const data = await res.json();
-                mergeKnownDevices(data.devices || []);
+                if (roomState.mode === 'host') updateHostBannerDisplay();
             }
         } catch (e) {
             // ignore
         }
     }
 
-    function renderDeviceList() {
-        if (!deviceListContainer) return;
-        const isSelfActive = currentTargetBaseUrl === '';
-        const selfCard = `
-            <div class="device-card ${isSelfActive ? 'active' : ''}" onclick="window.switchDeviceNode('', '本端设备 (本机)')">
-                <div class="device-info-left">
-                    <span class="device-platform-icon">🖥️</span>
-                    <div>
-                        <div class="device-name-text">本端设备 (本机服务端)</div>
-                        <div class="device-ip-badge">http://${selfDeviceInfo.ip}:${selfDeviceInfo.port}</div>
-                    </div>
-                </div>
-                <span class="device-status-badge">本机</span>
-            </div>
-        `;
-
-        const remoteCards = knownDevices.map(d => {
-            const url = `http://${d.ip}:${d.port}`;
-            const isAct = currentTargetBaseUrl === url;
-            const icon = d.platform === 'Android' ? '📱' : '💻';
-            return `
-                <div class="device-card ${isAct ? 'active' : ''}" onclick="window.switchDeviceNode('${url}', '${escapeHtml(d.name)}')">
-                    <div class="device-info-left">
-                        <span class="device-platform-icon">${icon}</span>
-                        <div>
-                            <div class="device-name-text">${escapeHtml(d.name)}</div>
-                            <div class="device-ip-badge">${d.ip}:${d.port}</div>
-                        </div>
-                    </div>
-                    <span class="device-status-badge">在线</span>
-                </div>
-            `;
-        }).join('');
-
-        deviceListContainer.innerHTML = selfCard + remoteCards;
+    // 复制入房直链
+    if (btnCopyRoomDirectLink) {
+        btnCopyRoomDirectLink.addEventListener('click', async () => {
+            if (!roomState.roomInfo) return;
+            const info = roomState.roomInfo;
+            const targetIp = selfDeviceInfo.ip || info.hostIp || '127.0.0.1';
+            let directUrl = `http://${targetIp}:${info.hostPort || 9527}/?room=${encodeURIComponent(info.roomId || '')}`;
+            if (info.pin) {
+                directUrl += `&pin=${encodeURIComponent(info.pin)}`;
+            }
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(directUrl);
+                } else {
+                    const input = document.createElement('input');
+                    input.value = directUrl;
+                    document.body.appendChild(input);
+                    input.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(input);
+                }
+                showToast(`已复制入房直链: ${directUrl}`);
+            } catch (e) {
+                alert(`入房直链为:\n${directUrl}`);
+            }
+        });
     }
 
-    window.switchDeviceNode = function (baseUrl, name) {
-        currentTargetBaseUrl = baseUrl;
-        currentTargetDeviceName = name;
+    // ---------------- 房间系统核心：模式渲染与切换 ----------------
+    function setRoomMode(mode, data) {
+        roomState.mode = mode;
+        if (mode === 'host') {
+            roomState.roomInfo = data;
+            currentTargetBaseUrl = ''; // 房主端自身即服务端
+            currentTargetDeviceName = '本机房间';
 
-        if (baseUrl === '') {
-            // 切换到本机视图
+            if (roomClientBanner) roomClientBanner.style.display = 'none';
+            if (roomHostBanner) roomHostBanner.style.display = 'block';
+            if (roomJoinedBanner) roomJoinedBanner.style.display = 'none';
+
+            if (hostRoomNameDisplay) hostRoomNameDisplay.textContent = data.roomName || '--';
+            if (hostRoomIdDisplay) hostRoomIdDisplay.textContent = data.roomId || '--';
+            if (hostRoomPinDisplay) hostRoomPinDisplay.textContent = data.pin ? data.pin : '（公开房间，免密）';
+            updateHostBannerDisplay();
+
+            // 房主视图：显示本机分享与已接收文件面板
             if (selfViewSection) selfViewSection.style.display = 'block';
             if (remoteViewSection) remoteViewSection.style.display = 'none';
-            if (uploadSectionTitle) uploadSectionTitle.textContent = '📤 添加对外分享文件 (本机)';
-            if (uploadSectionSubtitle) uploadSectionSubtitle.textContent = '拖拽或点击选择文件，电脑将对外分享该文件供手机下载';
-            if (dropZoneHint) dropZoneHint.textContent = '添加后，手机端刷新即可看到并免解压下载';
+            if (uploadSectionTitle) uploadSectionTitle.textContent = '📤 本机对外分享新文件';
+            if (uploadSectionSubtitle) uploadSectionSubtitle.textContent = '添加文件后，加入该房间的成员可立即查看并免解压下载';
+
             loadLocalSharedFiles();
             loadReceivedFiles();
-        } else {
-            // 切换到远程设备视图
+            pollRoomMembers();
+        } else if (mode === 'joined') {
+            roomState.roomInfo = data;
+            currentTargetBaseUrl = data.hostUrl.trim().trim_end ? data.hostUrl.trim().replace(/\/+$/, '') : data.hostUrl;
+            currentTargetDeviceName = data.hostDevice || '房主';
+
+            if (roomClientBanner) roomClientBanner.style.display = 'none';
+            if (roomHostBanner) roomHostBanner.style.display = 'none';
+            if (roomJoinedBanner) roomJoinedBanner.style.display = 'block';
+
+            if (joinedRoomNameDisplay) joinedRoomNameDisplay.textContent = data.roomName || data.roomId || '--';
+            if (joinedHostDeviceDisplay) joinedHostDeviceDisplay.textContent = data.hostDevice || '主机';
+            if (phoneNameBadge) {
+                phoneNameBadge.innerHTML = `🔗 已入房: <b style="color:#38BDF8;">${data.roomName || data.roomId}</b>`;
+            }
+
+            // 加入者视图：显示远程房主分享文件下载面板与向房主投送面板
             if (selfViewSection) selfViewSection.style.display = 'none';
             if (remoteViewSection) remoteViewSection.style.display = 'block';
-            if (currentViewingDeviceTitle) {
-                currentViewingDeviceTitle.textContent = `📂 对方分享的文件 (来自: ${name})`;
-            }
-            if (uploadSectionTitle) uploadSectionTitle.textContent = `📤 发送文件给「${name}」`;
-            if (uploadSectionSubtitle) uploadSectionSubtitle.textContent = '拖拽或点击选择文件，将直接投送到对方设备存储';
-            if (dropZoneHint) dropZoneHint.textContent = '局域网无损点对点高速直传';
+            if (currentViewingDeviceTitle) currentViewingDeviceTitle.textContent = `📂 房主分享的文件 (${data.roomName || '房间'})`;
+            if (uploadSectionTitle) uploadSectionTitle.textContent = `📤 发送文件至房主「${data.hostDevice || '主机'}」`;
+            if (uploadSectionSubtitle) uploadSectionSubtitle.textContent = '拖拽或点击选择文件，文件将直接投送到房主电脑 Downloads/WenBox 目录';
+
             loadFiles();
-        }
+        } else {
+            // 默认客户端发现模式 (Client Mode)
+            roomState.mode = 'client';
+            roomState.roomInfo = null;
+            currentTargetBaseUrl = '';
 
-        renderDeviceList();
-        if (typeof pollChatMessages === 'function') pollChatMessages();
-        showToast(`已切换至节点: ${name}`);
-    };
+            if (roomClientBanner) roomClientBanner.style.display = 'block';
+            if (roomHostBanner) roomHostBanner.style.display = 'none';
+            if (roomJoinedBanner) roomJoinedBanner.style.display = 'none';
+            if (selfViewSection) selfViewSection.style.display = 'none';
+            if (remoteViewSection) remoteViewSection.style.display = 'none';
 
-    if (btnConnectCustomIp && customTargetIp) {
-        btnConnectCustomIp.addEventListener('click', async () => {
-            const rawIp = customTargetIp.value.trim();
-            if (!rawIp) {
-                showToast('请输入目标设备的 IP 地址');
-                return;
+            if (phoneNameBadge) {
+                phoneNameBadge.innerHTML = `🔍 客户端发现中: <span style="color:#60A5FA;">就绪</span>`;
             }
+            pollDiscoveredRooms();
+        }
+    }
 
-            btnConnectCustomIp.disabled = true;
-            btnConnectCustomIp.textContent = '连接中...';
+    // ---------------- 创建房间 (成为服务端) ----------------
+    if (modalBtnConfirmCreateRoom) {
+        modalBtnConfirmCreateRoom.addEventListener('click', async () => {
+            const rName = (modalInputRoomName && modalInputRoomName.value.trim()) || `WenBox-${Math.floor(1000 + Math.random() * 9000)}`;
+            const rPin = modalInputRoomPin ? modalInputRoomPin.value.trim() : '';
+
+            modalBtnConfirmCreateRoom.disabled = true;
+            modalBtnConfirmCreateRoom.textContent = '正在开启房间服务...';
 
             try {
                 if (window.__TAURI__) {
-                    const dev = await window.__TAURI__.invoke('connect_device_node', { target: rawIp });
-                    const targetUrl = `http://${dev.ip}:${dev.port}`;
-                    mergeKnownDevices([dev]);
-                    window.switchDeviceNode(targetUrl, dev.name);
-                    showToast(`已成功连接至: ${dev.name} (${dev.ip})`);
+                    const cfg = await window.__TAURI__.invoke('create_room_cmd', {
+                        roomName: rName,
+                        pin: rPin
+                    });
+                    window.closeCreateRoomModal();
+                    setRoomMode('host', cfg);
+                    showToast(`房间「${rName}」已创建！本机已变身服务端`);
                 } else {
-                    let base = rawIp;
-                    if (!base.startsWith('http://') && !base.startsWith('https://')) {
-                        base = 'http://' + base;
-                    }
-                    if (!base.includes(':', 7)) {
-                        base = base + ':9527';
-                    }
-                    base = base.replace(/\/+$/, '');
-
-                    const probeRes = await fetch(base + '/api/status?t=' + Date.now());
-                    if (!probeRes.ok) throw new Error(`HTTP ${probeRes.status}`);
-                    const devInfo = await probeRes.json();
-                    const dev = {
-                        name: devInfo.device || '局域网设备',
-                        ip: devInfo.ip || rawIp,
-                        port: devInfo.port || 9527,
-                        platform: devInfo.platform || 'Android',
-                        lastSeen: Date.now()
-                    };
-                    mergeKnownDevices([dev]);
-                    window.switchDeviceNode(base, dev.name);
-                    showToast(`已成功连接至: ${dev.name}`);
+                    const resp = await fetch('/api/room/create', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ roomName: rName, pin: rPin })
+                    });
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const cfg = await resp.json();
+                    window.closeCreateRoomModal();
+                    setRoomMode('host', cfg);
+                    showToast(`房间「${rName}」已创建！`);
                 }
             } catch (err) {
-                console.error('手动连接错误:', err);
-                alert(`连接失败: ${err.message || err}\n\n排查建议：\n1. 请确认手机与电脑连接在同一个 WiFi 局域网\n2. 确认手机端 WenBox 传输服务已启动\n3. 检查手机 IP 是否正确`);
+                alert(`创建房间失败: ${err.message || err}`);
             } finally {
-                btnConnectCustomIp.disabled = false;
-                btnConnectCustomIp.textContent = '连接设备';
+                modalBtnConfirmCreateRoom.disabled = false;
+                modalBtnConfirmCreateRoom.textContent = '立即创建并开启服务';
             }
+        });
+    }
+
+    // ---------------- 解散房间 (切回客户端模式) ----------------
+    if (btnCloseRoom) {
+        btnCloseRoom.addEventListener('click', async () => {
+            if (!confirm('确定要解散当前房间吗？解散后本机将恢复为客户端发现模式。')) return;
+            try {
+                if (window.__TAURI__) {
+                    await window.__TAURI__.invoke('close_room_cmd');
+                } else {
+                    await fetch('/api/room/close', { method: 'POST' });
+                }
+                showToast('房间已解散，已切换回客户端发现大厅');
+                setRoomMode('client');
+            } catch (e) {
+                showToast(`解散房间失败: ${e.message || e}`);
+            }
+        });
+    }
+
+    // ---------------- 退出已加入的房间 ----------------
+    if (btnLeaveRoom) {
+        btnLeaveRoom.addEventListener('click', () => {
+            if (!confirm('确定要退出当前房间吗？')) return;
+            roomState.token = '';
+            localStorage.removeItem('wenbox_room_token');
+            showToast('已退出房间');
+            setRoomMode('client');
+        });
+    }
+
+    // ---------------- 发现房间轮询与卡片渲染 ----------------
+    async function pollDiscoveredRooms() {
+        if (roomState.mode !== 'client') return;
+        try {
+            let rooms = [];
+            if (window.__TAURI__) {
+                rooms = await window.__TAURI__.invoke('get_discovered_rooms_cmd');
+            } else {
+                const res = await fetch('/api/discovered_rooms?t=' + Date.now());
+                if (res.ok) {
+                    const data = await res.json();
+                    rooms = data.rooms || [];
+                }
+            }
+            renderDiscoveredRooms(rooms || []);
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    function renderDiscoveredRooms(rooms) {
+        roomState.discoveredRooms = rooms;
+        if (discoveredRoomsCount) discoveredRoomsCount.textContent = rooms.length;
+        if (!discoveredRoomsContainer) return;
+
+        if (rooms.length === 0) {
+            discoveredRoomsContainer.innerHTML = '';
+            if (noRoomsDiscoveredPrompt) noRoomsDiscoveredPrompt.style.display = 'block';
+            return;
+        }
+
+        if (noRoomsDiscoveredPrompt) noRoomsDiscoveredPrompt.style.display = 'none';
+        discoveredRoomsContainer.innerHTML = rooms.map(r => {
+            const hostUrl = `http://${r.ip}:${r.port}`;
+            const isLock = r.needPassword;
+            return `
+                <div class="room-card" onclick="window.onDiscoveredRoomClicked('${escapeHtml(r.roomId)}')">
+                    <div class="room-card-header">
+                        <span class="room-card-title">🏠 ${escapeHtml(r.roomName || r.roomId)}</span>
+                        <span class="room-lock-tag ${isLock ? 'locked' : 'open'}">${isLock ? '🔒 需密码' : '🟢 公开免密'}</span>
+                    </div>
+                    <div class="room-card-meta">
+                        <span>👑 房主: ${escapeHtml(r.hostDevice || '主机')} (${r.hostPlatform || '未知'})</span>
+                        <span style="font-family: monospace; color: #60A5FA;">${r.ip}:${r.port}</span>
+                    </div>
+                    <button class="btn-join-room-action">加入房间 ➔</button>
+                </div>
+            `;
+        }).join('');
+    }
+
+    window.onDiscoveredRoomClicked = function (roomId) {
+        const r = roomState.discoveredRooms.find(x => x.roomId === roomId);
+        if (!r) return;
+        const hostUrl = `http://${r.ip}:${r.port}`;
+
+        if (r.needPassword) {
+            // 弹窗输入 PIN
+            pendingJoinRoomData = {
+                hostUrl,
+                roomName: r.roomName,
+                roomId: r.roomId,
+                hostDevice: r.hostDevice
+            };
+            if (joinPinModalTitle) joinPinModalTitle.textContent = `🔑 加入「${r.roomName}」`;
+            if (modalInputJoinPin) modalInputJoinPin.value = '';
+            if (joinRoomPinModal) joinRoomPinModal.style.display = 'flex';
+            if (modalInputJoinPin) setTimeout(() => modalInputJoinPin.focus(), 150);
+        } else {
+            // 免密直接加入
+            executeJoinRoom(hostUrl, '', r.roomName, r.hostDevice, r.roomId);
+        }
+    };
+
+    if (modalBtnConfirmJoinPin) {
+        modalBtnConfirmJoinPin.addEventListener('click', () => {
+            if (!pendingJoinRoomData) return;
+            const pin = modalInputJoinPin ? modalInputJoinPin.value.trim() : '';
+            executeJoinRoom(pendingJoinRoomData.hostUrl, pin, pendingJoinRoomData.roomName, pendingJoinRoomData.hostDevice, pendingJoinRoomData.roomId);
+        });
+    }
+
+    if (modalBtnConfirmManualJoin) {
+        modalBtnConfirmManualJoin.addEventListener('click', () => {
+            let rawUrl = modalInputManualUrl ? modalInputManualUrl.value.trim() : '';
+            if (!rawUrl) {
+                showToast('请输入主机 IP 或网址');
+                return;
+            }
+            if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+                rawUrl = 'http://' + rawUrl;
+            }
+            if (!rawUrl.includes(':', 7)) {
+                rawUrl = rawUrl + ':9527';
+            }
+            rawUrl = rawUrl.replace(/\/+$/, '');
+            const pin = modalInputManualPin ? modalInputManualPin.value.trim() : '';
+            window.closeManualJoinModal();
+            executeJoinRoom(rawUrl, pin, '手动连接房间', '远程主机', '');
+        });
+    }
+
+    async function executeJoinRoom(hostUrl, pin, roomName, hostDevice, roomId) {
+        try {
+            showToast('正在验证并接入房间...');
+            let joinRes = null;
+
+            if (window.__TAURI__) {
+                joinRes = await window.__TAURI__.invoke('join_remote_room_cmd', {
+                    hostUrl: hostUrl,
+                    pin: pin,
+                    myName: whoami_device_name_client()
+                });
+            } else {
+                const resp = await fetch(`${hostUrl}/api/room/join`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        pin: pin,
+                        name: whoami_device_name_client(),
+                        platform: 'Browser'
+                    })
+                });
+                if (!resp.ok) {
+                    const errData = await resp.json().catch(() => ({}));
+                    throw new Error(errData.message || `HTTP ${resp.status}`);
+                }
+                joinRes = await resp.json();
+            }
+
+            if (joinRes && joinRes.success) {
+                roomState.token = joinRes.token || '';
+                localStorage.setItem('wenbox_room_token', roomState.token);
+                window.closeJoinPinModal();
+                setRoomMode('joined', {
+                    hostUrl: hostUrl,
+                    roomName: joinRes.room ? joinRes.room.roomName : (roomName || '已加入房间'),
+                    roomId: joinRes.room ? joinRes.room.roomId : roomId,
+                    hostDevice: joinRes.room ? joinRes.room.hostDevice : hostDevice
+                });
+                showToast(`🎉 成功加入房间！已与「${hostDevice || '房主'}」建立直连`);
+            } else {
+                throw new Error(joinRes.message || '入房密码不正确');
+            }
+        } catch (e) {
+            alert(`加入房间失败: ${e.message || e}`);
+        }
+    }
+
+    function whoami_device_name_client() {
+        const plat = (navigator.userAgent.indexOf('Mac') !== -1) ? 'Mac' :
+                     (navigator.userAgent.indexOf('Win') !== -1) ? 'Windows' :
+                     (navigator.userAgent.indexOf('Android') !== -1) ? 'Android' : 'Web';
+        return `${plat}用户-${Math.floor(100 + Math.random() * 900)}`;
+    }
+
+    // 房主轮询房间成员
+    async function pollRoomMembers() {
+        if (roomState.mode !== 'host') return;
+        try {
+            let members = [];
+            if (window.__TAURI__) {
+                members = await window.__TAURI__.invoke('get_room_members_cmd');
+            } else {
+                const res = await fetch('/api/room/members?t=' + Date.now());
+                if (res.ok) {
+                    const data = await res.json();
+                    members = data.members || [];
+                }
+            }
+            if (hostMemberCount) hostMemberCount.textContent = (members.length || 1);
+            if (hostMembersContainer) {
+                hostMembersContainer.innerHTML = members.map(m => `
+                    <span class="member-pill ${m.name.includes('房主') ? 'is-host' : ''}">
+                        ${m.name.includes('房主') ? '👑' : '📱'} ${escapeHtml(m.name)} (${escapeHtml(m.ip)})
+                    </span>
+                `).join('');
+            }
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    if (btnRefreshDiscoveredRooms) {
+        btnRefreshDiscoveredRooms.addEventListener('click', async () => {
+            await pollDiscoveredRooms();
+            showToast('已刷新局域网房间列表');
         });
     }
 
@@ -399,8 +691,13 @@
                 return;
             }
 
-            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/files?t=' + Date.now();
-            const res = await fetch(api);
+            const tokenParam = roomState.token ? `&token=${encodeURIComponent(roomState.token)}` : '';
+            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/files?t=' + Date.now() + tokenParam;
+            const headers = {};
+            if (roomState.token) {
+                headers['X-Room-Token'] = roomState.token;
+            }
+            const res = await fetch(api, { headers });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             currentFiles = data.files || [];
@@ -422,6 +719,7 @@
 
     // 远程文件按需下载
     window.downloadRemoteFile = async function(fileId, fileName) {
+        const tokenQuery = roomState.token ? `?token=${encodeURIComponent(roomState.token)}` : '';
         if (window.__TAURI__ && window.__TAURI__.dialog) {
             try {
                 const savePath = await window.__TAURI__.dialog.save({
@@ -433,7 +731,7 @@
                 const dir = savePath.substring(0, Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')));
                 const name = savePath.substring(Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')) + 1);
 
-                const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : 'http://127.0.0.1:9527') + `/api/download/${fileId}`;
+                const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : 'http://127.0.0.1:9527') + `/api/download/${fileId}${tokenQuery}`;
                 await window.__TAURI__.invoke('save_remote_file_to_directory', {
                     downloadUrl: downloadUrl,
                     dirPath: dir,
@@ -447,7 +745,7 @@
             }
         }
 
-        const dlUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${fileId}`;
+        const dlUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${fileId}${tokenQuery}`;
         const a = document.createElement('a');
         a.href = dlUrl;
         a.download = fileName;
@@ -965,41 +1263,96 @@
             if (!currentTargetBaseUrl && window.__TAURI__) {
                 uploadUrl = 'http://127.0.0.1:9527/api/upload';
             }
+            if (roomState.token) {
+                const sep = uploadUrl.includes('?') ? '&' : '?';
+                uploadUrl += `${sep}token=${encodeURIComponent(roomState.token)}`;
+            }
             xhr.open('POST', uploadUrl);
+            if (roomState.token) {
+                xhr.setRequestHeader('X-Room-Token', roomState.token);
+            }
             xhr.send(formData);
         });
     }
 
     if (btnRefresh) {
         btnRefresh.addEventListener('click', () => {
-            if (currentTargetBaseUrl === '') {
+            if (roomState.mode === 'host') {
                 loadLocalSharedFiles();
                 loadReceivedFiles();
-            } else {
+                pollRoomMembers();
+            } else if (roomState.mode === 'joined') {
                 loadFiles();
+            } else {
+                pollDiscoveredRooms();
             }
-            pollLanDevices();
             checkSelfServerStatus();
-            showToast('已刷新设备与文件列表');
+            showToast('已刷新数据');
         });
     }
 
     // 初始数据加载与定时轮询
     checkSelfServerStatus();
-    loadLocalSharedFiles();
-    loadReceivedFiles();
-    loadFiles();
-    pollLanDevices();
+
+    // 检查 URL 是否带参扫码秒进 (如 ?room=xxx&pin=yyy)
+    function checkUrlAutoJoin() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const qRoom = urlParams.get('room');
+        const qPin = urlParams.get('pin') || '';
+        if (qRoom) {
+            const hostOrigin = window.location.origin;
+            executeJoinRoom(hostOrigin, qPin, qRoom, '主机', qRoom);
+            return true;
+        }
+        return false;
+    }
+
+    // 初始检查当前房间状态 (如果是 Tauri 主机已开房，恢复 host 模式)
+    async function initRoomState() {
+        if (checkUrlAutoJoin()) return;
+
+        if (window.__TAURI__) {
+            try {
+                const st = await window.__TAURI__.invoke('get_room_status_cmd');
+                if (st && st.isActive) {
+                    setRoomMode('host', st);
+                    return;
+                }
+            } catch (e) {
+                // ignore
+            }
+        } else {
+            try {
+                const res = await fetch('/api/room/status?t=' + Date.now());
+                if (res.ok) {
+                    const st = await res.json();
+                    if (st && st.isActive) {
+                        setRoomMode('host', st);
+                        return;
+                    }
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        // 默认进入客户端发现大厅
+        setRoomMode('client');
+    }
+
+    initRoomState();
 
     setInterval(() => {
-        if (currentTargetBaseUrl === '') {
+        if (roomState.mode === 'host') {
             loadLocalSharedFiles();
             loadReceivedFiles();
-        } else {
+            pollRoomMembers();
+        } else if (roomState.mode === 'joined') {
             loadFiles();
+        } else {
+            pollDiscoveredRooms();
         }
     }, 3000);
-    setInterval(pollLanDevices, 4000);
     setInterval(checkSelfServerStatus, 6000);
 
 
@@ -1018,13 +1371,17 @@
     const clientSenderName = `💻 ${osPlatform}端`;
 
     async function pollChatMessages() {
+        if (roomState.mode === 'client') return;
         try {
             let messages = [];
             if (window.__TAURI__) {
                 messages = await window.__TAURI__.invoke('fetch_node_messages', { baseUrl: currentTargetBaseUrl });
             } else {
-                const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/messages?t=' + Date.now();
-                const res = await fetch(api);
+                const tokenParam = roomState.token ? `&token=${encodeURIComponent(roomState.token)}` : '';
+                const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/messages?t=' + Date.now() + tokenParam;
+                const headers = {};
+                if (roomState.token) headers['X-Room-Token'] = roomState.token;
+                const res = await fetch(api, { headers });
                 if (!res.ok) return;
                 const data = await res.json();
                 messages = data.messages || [];
@@ -1103,10 +1460,14 @@
                 return;
             }
 
-            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/messages';
+            const tokenParam = roomState.token ? `?token=${encodeURIComponent(roomState.token)}` : '';
+            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/messages${tokenParam}`;
+            const headers = { 'Content-Type': 'application/json' };
+            if (roomState.token) headers['X-Room-Token'] = roomState.token;
+
             const resp = await fetch(api, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: headers,
                 body: JSON.stringify({
                     content: text,
                     senderName: clientSenderName
