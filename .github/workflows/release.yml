@@ -66,11 +66,8 @@ jobs:
         with:
           node-version: 18
 
-      - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli@1.5
-
       - name: Build Tauri Windows EXE
-        run: cargo tauri build
+        run: npx @tauri-apps/cli@1.5 build
 
       - name: Prepare Windows Files for Release
         shell: bash
