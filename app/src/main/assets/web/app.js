@@ -45,16 +45,22 @@
     const uploadFileName = document.getElementById('uploadFileName');
     const uploadPercent = document.getElementById('uploadPercent');
 
-    // 报销直存按钮与状态
+    // 日期归档直存按钮与状态
     const btnSelectReimburseDir = document.getElementById('btnSelectReimburseDir');
     const reimburseStatus = document.getElementById('reimburseStatus');
     const previewFolderName = document.getElementById('previewFolderName');
+    const customFolderSuffix = document.getElementById('customFolderSuffix');
 
-    // 初始化日期预览
-    const todayStr = getTodayDateStr();
-    if (previewFolderName) {
-        previewFolderName.textContent = `${todayStr}_报销`;
+    function updatePreviewFolderName() {
+        if (!previewFolderName) return;
+        const suffix = (customFolderSuffix && customFolderSuffix.value.trim()) ? `_${customFolderSuffix.value.trim()}` : '';
+        previewFolderName.textContent = `${getTodayDateStr()}${suffix}`;
     }
+
+    if (customFolderSuffix) {
+        customFolderSuffix.addEventListener('input', updatePreviewFolderName);
+    }
+    updatePreviewFolderName();
 
     function getTodayDateStr() {
         const d = new Date();
@@ -229,17 +235,18 @@
             }
 
             try {
-                // 1. 用户选择电脑上的报销根目录
+                // 1. 用户选择电脑上的根目录
                 const rootDirHandle = await window.showDirectoryPicker({
-                    id: 'wenbox_reimburse_dir',
+                    id: 'wenbox_archive_dir',
                     mode: 'readwrite'
                 });
 
-                const dateFolderName = `${getTodayDateStr()}_报销`;
+                const suffix = (customFolderSuffix && customFolderSuffix.value.trim()) ? `_${customFolderSuffix.value.trim()}` : '';
+                const dateFolderName = `${getTodayDateStr()}${suffix}`;
                 reimburseStatus.style.display = 'block';
                 reimburseStatus.textContent = `📁 正在「${rootDirHandle.name}」中创建文件夹「${dateFolderName}」...`;
 
-                // 2. 在根目录下自动创建当天报销子文件夹
+                // 2. 在根目录下自动创建当天日期归档子文件夹
                 const targetDirHandle = await rootDirHandle.getDirectoryHandle(dateFolderName, { create: true });
 
                 // 3. 逐个将待传发票直写入该文件夹

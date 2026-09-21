@@ -39,20 +39,24 @@
 
         <!-- 主内容区：Tab 1 局域网快传 -->
         <main id="tab-transfer" class="tab-pane active">
-            <!-- 报销模式横幅卡片 -->
+            <!-- 日期归类直存模式 (报销/照片/发票/日志整理利器) -->
             <section class="card reimbursement-banner">
                 <div class="reimbursement-header">
                     <div class="reimbursement-info">
-                        <span class="reimbursement-tag">🧾 报销直存模式 (Win / Mac 兼容)</span>
-                        <h3>一键将手机发票直接存入电脑日期目录</h3>
-                        <p>只需指定电脑上的存放总目录，系统将自动创建当天日期文件夹（如 <span class="highlight-code" id="previewFolderName">YYYY-MM-DD_报销</span>），所有发票直达目标文件夹，无需手动整理或解压！</p>
+                        <span class="reimbursement-tag">📁 日期归类直存模式 (报销/发票/照片整理，免解压)</span>
+                        <h3>指定电脑根目录，按日期与自定义主题自动建文件夹直存</h3>
+                        <p>将所选设备的文件一键存入电脑目标目录，自动按当天日期归档（如 <span class="highlight-code" id="previewFolderName">YYYY-MM-DD_报销</span>），告别散乱和繁琐解压！</p>
                     </div>
-                    <div class="reimbursement-action">
+                    <div class="reimbursement-action" style="display: flex; flex-direction: column; gap: 8px; align-items: flex-end;">
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <label style="font-size: 12px; color: #94A3B8;">文件夹后缀名：</label>
+                            <input type="text" id="customFolderSuffix" class="converter-input" style="width: 120px; padding: 5px 10px; font-size: 13px;" value="报销" placeholder="如: 报销/发票/现场照片">
+                        </div>
                         <button id="btnSelectReimburseDir" class="btn-reimburse">
                             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                             </svg>
-                            选择电脑报销根目录并直存
+                            选择电脑根目录并自动归档
                         </button>
                     </div>
                 </div>
