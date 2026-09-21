@@ -227,6 +227,19 @@ object UdpDiscoveryManager {
         return list.distinct()
     }
 
+    fun registerDevice(name: String, ip: String, port: Int, platform: String = "Windows") {
+        val key = "$ip:$port"
+        val device = PeerDevice(
+            name = name,
+            ip = ip,
+            port = port,
+            platform = platform,
+            lastSeen = System.currentTimeMillis()
+        )
+        activeDevices[key] = device
+        notifyDevicesChanged()
+    }
+
     fun getDevices(): List<PeerDevice> = activeDevices.values.toList()
 
     fun getRooms(): List<DiscoveredRoom> = activeRooms.values.toList()

@@ -204,7 +204,7 @@ class LanServer(
                         JSONObject().apply {
                             put("ip", it.ip)
                             put("name", it.name)
-                            put("is_preferred", it.isPreferred)
+                            put("is_preferred", it.isEthernet || it.isHotspot)
                         }
                     }
                     val room = RoomManager.currentRoom
