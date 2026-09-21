@@ -10,8 +10,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Method, Response, Server};
+
+#[derive(RustEmbed)]
+#[folder = "../app/src/main/assets/web"]
+struct WebAssets;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct SharedFile {
@@ -92,7 +97,6 @@ fn get_lan_devices(state: tauri::State<Arc<AppState>>) -> Vec<LanDevice> {
         .unwrap_or_default()
         .as_secs();
     let mut dev = state.devices.lock().unwrap();
-    // 清除超过 15 秒未心跳的下线设备
     dev.retain(|_, d| now.saturating_sub(d.last_seen) < 15);
     dev.values().cloned().collect()
 }
@@ -104,7 +108,6 @@ fn get_local_ip() -> String {
         .unwrap_or_else(|_| "127.0.0.1".into())
 }
 
-// 在桌面端原生直接保存文件到指定子目录
 #[tauri::command]
 fn save_file_to_directory(dir_path: String, folder_name: String, file_name: String, bytes_base64: String) -> Result<String, String> {
     let base_dir = PathBuf::from(&dir_path);
@@ -140,7 +143,8 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
         println!("WenBox 内置服务已在端口 {} 启动", port);
 
         for mut req in server.incoming_requests() {
-            let url = req.url().to_string();
+            let raw_url = req.url().to_string();
+            let url = raw_url.split('?').next().unwrap_or(&raw_url).to_string();
             let method = req.method().clone();
 
             let cors_origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
@@ -156,7 +160,24 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 continue;
             }
 
-            // 1. 获取在线节点设备列表
+            // 1. 获取本端信息 (供前端展示自身 IP 与服务状态)
+            if url == "/api/status" && method == Method::Get {
+                let ip = local_ip_address::local_ip().map(|i| i.to_string()).unwrap_or_else(|_| "127.0.0.1".into());
+                let dev_name = whoami_device_name();
+                let json = serde_json::json!({
+                    "device": dev_name,
+                    "ip": ip,
+                    "port": port,
+                    "running": true,
+                    "platform": "Windows"
+                }).to_string();
+                let mut resp = Response::from_string(json);
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
+            // 2. 获取在线节点设备列表
             if url == "/api/devices" && method == Method::Get {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -172,7 +193,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 continue;
             }
 
-            // 2. 待发文件列表
+            // 3. 待发文件列表
             if url.starts_with("/api/files") && method == Method::Get {
                 let files_map = state.files.lock().unwrap();
                 let list: Vec<SharedFile> = files_map.values().cloned().collect();
@@ -183,7 +204,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 continue;
             }
 
-            // 3. 文件下载
+            // 4. 文件下载
             if url.starts_with("/api/download/") && method == Method::Get {
                 let file_id = url.trim_start_matches("/api/download/");
                 let file_info = {
@@ -207,7 +228,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 continue;
             }
 
-            // 4. 局域网消息获取与发送
+            // 5. 局域网消息获取与发送
             if url.starts_with("/api/messages") {
                 if method == Method::Get {
                     let msgs = state.messages.lock().unwrap().clone();
@@ -241,6 +262,23 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                     let _ = req.respond(resp);
                     continue;
                 }
+            }
+
+            // 6. 静态网页资源直接服务 (让局域网其他手机/电脑用浏览器打开这台 Windows 的 IP:9527 也能看)
+            let asset_path = if url == "/" || url.is_empty() {
+                "index.html"
+            } else {
+                url.trim_start_matches('/')
+            };
+
+            if let Some(asset) = WebAssets::get(asset_path) {
+                let mime = mime_guess::from_path(asset_path).first_or_octet_stream().to_string();
+                let mut resp = Response::from_data(asset.data.into_owned());
+                let content_type = format!("{}; charset=utf-8", mime);
+                resp.add_header(Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap());
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
             }
 
             // 默认返回 404

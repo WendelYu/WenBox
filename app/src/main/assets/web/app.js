@@ -32,8 +32,9 @@
     const customTargetIp = document.getElementById('customTargetIp');
     const btnConnectCustomIp = document.getElementById('btnConnectCustomIp');
     const currentViewingDeviceTitle = document.getElementById('currentViewingDeviceTitle');
+    const phoneNameBadge = document.getElementById('phoneName');
 
-    // ---------------- 模块一：局域网快传与报销直存 ----------------
+    // ---------------- 模块一：局域网快传与日期归类直存 ----------------
     const fileListContainer = document.getElementById('fileListContainer');
     const emptyState = document.getElementById('emptyState');
     const fileCount = document.getElementById('fileCount');
@@ -94,12 +95,55 @@
         return '📄';
     }
 
+    // ---------------- 检查自身服务端状态与真实 IP ----------------
+    let selfDeviceInfo = {
+        device: '本机',
+        ip: window.location.hostname || '127.0.0.1',
+        port: 9527,
+        platform: 'Windows'
+    };
+
+    async function checkSelfServerStatus() {
+        // 如果是在 Tauri 桌面客户端运行
+        if (window.__TAURI__) {
+            try {
+                const ip = await window.__TAURI__.invoke('get_local_ip');
+                selfDeviceInfo.ip = ip;
+                if (phoneNameBadge) {
+                    phoneNameBadge.innerHTML = `🟢 本机已开服: <b style="color:#60A5FA;">http://${ip}:9527</b> (其他设备可直接访问)`;
+                }
+            } catch (e) {
+                // fallback
+            }
+            return;
+        }
+
+        // 浏览器环境
+        try {
+            const res = await fetch('/api/status?t=' + Date.now());
+            if (res.ok) {
+                const data = await res.json();
+                selfDeviceInfo = data;
+                if (phoneNameBadge) {
+                    phoneNameBadge.innerHTML = `🟢 服务运行中: <b style="color:#60A5FA;">http://${data.ip}:${data.port}</b>`;
+                }
+            } else {
+                if (phoneNameBadge) {
+                    phoneNameBadge.innerHTML = `🟢 服务运行中: <b style="color:#60A5FA;">${window.location.host}</b>`;
+                }
+            }
+        } catch (e) {
+            if (phoneNameBadge) {
+                phoneNameBadge.innerHTML = `🟢 服务运行中: <b style="color:#60A5FA;">${window.location.host}</b>`;
+            }
+        }
+    }
+
     // ---------------- 局域网在线设备自发现与节点切换 ----------------
     let knownDevices = [];
 
     async function pollLanDevices() {
         try {
-            // 先尝试从本地后端拉取探测到的在线节点
             const res = await fetch('/api/devices?t=' + Date.now());
             if (res.ok) {
                 const data = await res.json();
@@ -114,15 +158,15 @@
     function renderDeviceList() {
         if (!deviceListContainer) return;
         const selfCard = `
-            <div class="device-card ${currentTargetBaseUrl === '' ? 'active' : ''}" onclick="window.switchDeviceNode('', '本端')">
+            <div class="device-card ${currentTargetBaseUrl === '' ? 'active' : ''}" onclick="window.switchDeviceNode('', '本端 (本机)')">
                 <div class="device-info-left">
                     <span class="device-platform-icon">🏠</span>
                     <div>
-                        <div class="device-name-text">本端设备 (本机)</div>
-                        <div class="device-ip-badge">localhost:9527</div>
+                        <div class="device-name-text">本端设备 (本机已开服)</div>
+                        <div class="device-ip-badge">http://${selfDeviceInfo.ip}:${selfDeviceInfo.port}</div>
                     </div>
                 </div>
-                <span class="device-status-badge">当前</span>
+                <span class="device-status-badge">当前直连</span>
             </div>
         `;
 
@@ -423,15 +467,18 @@
         btnRefresh.addEventListener('click', () => {
             loadFiles();
             pollLanDevices();
+            checkSelfServerStatus();
             showToast('已刷新设备与文件列表');
         });
     }
 
-    // 初始快传数据加载与定时轮询
+    // 初始数据加载与定时轮询
+    checkSelfServerStatus();
     loadFiles();
     pollLanDevices();
     setInterval(loadFiles, 3000);
     setInterval(pollLanDevices, 4000);
+    setInterval(checkSelfServerStatus, 5000);
 
 
     // ---------------- 模块二：局域网双向即时互发消息 / 聊天室 ----------------
@@ -444,7 +491,6 @@
     let lastKnownMessageTimestamp = 0;
     const knownMessageIds = new Set();
 
-    // 智能识别当前操作系统
     const osPlatform = (navigator.userAgent.indexOf('Mac') !== -1) ? 'Mac' :
                        (navigator.userAgent.indexOf('Win') !== -1) ? 'Windows' : '电脑端';
     const clientSenderName = `💻 ${osPlatform}端`;
@@ -489,7 +535,6 @@
         if (!webChatMessages) return;
         if (webEmptyChat) webEmptyChat.style.display = 'none';
 
-        // 判断消息是来自本端还是对方
         const isMe = !msg.isFromPhone && msg.senderName.includes(osPlatform);
         const row = document.createElement('div');
         row.className = `chat-msg-row ${isMe ? 'from-me' : 'from-other'}`;
@@ -662,7 +707,6 @@
         });
     }
 
-    // 默认载入示例
     if (webJsonInput && !webJsonInput.value) {
         webJsonInput.value = SAMPLE_JSON;
     }
@@ -798,7 +842,6 @@
         });
     }
 
-    // 复制按钮
     document.querySelectorAll('.btn-copy-mini').forEach(btn => {
         btn.addEventListener('click', () => {
             const targetId = btn.getAttribute('data-target');
@@ -811,7 +854,6 @@
         });
     });
 
-    // 初始化转换器数值
     try {
         const initialNum = BigInt('0x1A3F');
         updateAllFromBigInt(initialNum);
@@ -957,7 +999,6 @@
         });
     }
 
-    // 默认预演
     if (webCronInput) {
         updateCronUI(webCronInput.value);
     }
