@@ -95,25 +95,90 @@
         return '📄';
     }
 
-    // ---------------- 检查自身服务端状态与真实 IP ----------------
+    // ---------------- 顶部服务端信息卡片与多网卡 IP 检测 ----------------
+    const primaryServerUrl = document.getElementById('primaryServerUrl');
+    const serverPort = document.getElementById('serverPort');
+    const btnCopyServerUrl = document.getElementById('btnCopyServerUrl');
+    const btnRefreshIps = document.getElementById('btnRefreshIps');
+    const multiIpSelectorContainer = document.getElementById('multiIpSelectorContainer');
+    const multiIpPills = document.getElementById('multiIpPills');
+
+    // 视图切换容器
+    const selfViewSection = document.getElementById('selfViewSection');
+    const remoteViewSection = document.getElementById('remoteViewSection');
+    const localSharedFileListContainer = document.getElementById('localSharedFileListContainer');
+    const localEmptyState = document.getElementById('localEmptyState');
+    const btnSelectShareFile = document.getElementById('btnSelectShareFile');
+    const btnClearShareFiles = document.getElementById('btnClearShareFiles');
+    const btnRefreshLocalFiles = document.getElementById('btnRefreshLocalFiles');
+    const receivedFileListContainer = document.getElementById('receivedFileListContainer');
+    const receivedEmptyState = document.getElementById('receivedEmptyState');
+    const btnOpenDownloadFolder = document.getElementById('btnOpenDownloadFolder');
+    const btnRefreshReceivedFiles = document.getElementById('btnRefreshReceivedFiles');
+    const btnRefreshRemoteFiles = document.getElementById('btnRefreshRemoteFiles');
+    const uploadSectionTitle = document.getElementById('uploadSectionTitle');
+    const uploadSectionSubtitle = document.getElementById('uploadSectionSubtitle');
+    const dropZoneHint = document.getElementById('dropZoneHint');
+
     let selfDeviceInfo = {
         device: '本机',
         ip: window.location.hostname || '127.0.0.1',
         port: 9527,
         platform: 'Windows'
     };
+    let selfLanIps = [];
+
+    function renderMultiIpPills(ips, activeIp) {
+        if (!multiIpSelectorContainer || !multiIpPills) return;
+        if (!ips || ips.length <= 1) {
+            multiIpSelectorContainer.style.display = 'none';
+            return;
+        }
+
+        multiIpSelectorContainer.style.display = 'flex';
+        multiIpPills.innerHTML = ips.map(item => {
+            const ipStr = typeof item === 'string' ? item : item.ip;
+            const nameStr = (typeof item === 'object' && item.name) ? ` (${item.name})` : '';
+            const isActive = ipStr === activeIp;
+            return `
+                <button class="ip-pill ${isActive ? 'active' : ''}" onclick="window.switchActiveServerIp('${ipStr}')">
+                    ${escapeHtml(ipStr)}${escapeHtml(nameStr)}
+                </button>
+            `;
+        }).join('');
+    }
+
+    window.switchActiveServerIp = function (ip) {
+        selfDeviceInfo.ip = ip;
+        const fullUrl = `http://${ip}:${selfDeviceInfo.port}`;
+        if (primaryServerUrl) {
+            primaryServerUrl.textContent = fullUrl;
+        }
+        if (phoneNameBadge) {
+            phoneNameBadge.innerHTML = `🟢 本机服务端: <b style="color:#60A5FA;">${fullUrl}</b>`;
+        }
+        renderMultiIpPills(selfLanIps, ip);
+        renderDeviceList();
+        showToast(`已切换当前展示 IP 为: ${ip}`);
+    };
 
     async function checkSelfServerStatus() {
-        // 如果是在 Tauri 桌面客户端运行
         if (window.__TAURI__) {
             try {
-                const ip = await window.__TAURI__.invoke('get_local_ip');
-                selfDeviceInfo.ip = ip;
+                const ips = await window.__TAURI__.invoke('get_all_lan_ips_cmd');
+                selfLanIps = ips || [];
+                const primary = await window.__TAURI__.invoke('get_local_ip');
+                selfDeviceInfo.ip = primary || (ips.length > 0 ? ips[0].ip : '127.0.0.1');
+
+                const fullUrl = `http://${selfDeviceInfo.ip}:${selfDeviceInfo.port}`;
+                if (primaryServerUrl) primaryServerUrl.textContent = fullUrl;
                 if (phoneNameBadge) {
-                    phoneNameBadge.innerHTML = `🟢 本机已开服: <b style="color:#60A5FA;">http://${ip}:9527</b> (其他设备可直接访问)`;
+                    phoneNameBadge.innerHTML = `🟢 本机服务端: <b style="color:#60A5FA;">${fullUrl}</b>`;
                 }
+                renderMultiIpPills(selfLanIps, selfDeviceInfo.ip);
+                renderDeviceList();
             } catch (e) {
-                // fallback
+                console.error('Tauri get IPs error:', e);
             }
             return;
         }
@@ -124,19 +189,54 @@
             if (res.ok) {
                 const data = await res.json();
                 selfDeviceInfo = data;
+                selfLanIps = data.all_ips || [data.ip];
+
+                const fullUrl = `http://${data.ip}:${data.port || 9527}`;
+                if (primaryServerUrl) primaryServerUrl.textContent = fullUrl;
                 if (phoneNameBadge) {
-                    phoneNameBadge.innerHTML = `🟢 服务运行中: <b style="color:#60A5FA;">http://${data.ip}:${data.port}</b>`;
+                    phoneNameBadge.innerHTML = `🟢 本机服务端: <b style="color:#60A5FA;">${fullUrl}</b>`;
                 }
+                renderMultiIpPills(selfLanIps, data.ip);
+                renderDeviceList();
             } else {
-                if (phoneNameBadge) {
-                    phoneNameBadge.innerHTML = `🟢 服务运行中: <b style="color:#60A5FA;">${window.location.host}</b>`;
-                }
+                const host = window.location.host;
+                if (primaryServerUrl) primaryServerUrl.textContent = `http://${host}`;
+                if (phoneNameBadge) phoneNameBadge.innerHTML = `🟢 服务运行中: <b style="color:#60A5FA;">http://${host}</b>`;
             }
         } catch (e) {
-            if (phoneNameBadge) {
-                phoneNameBadge.innerHTML = `🟢 服务运行中: <b style="color:#60A5FA;">${window.location.host}</b>`;
-            }
+            const host = window.location.host || '127.0.0.1:9527';
+            if (primaryServerUrl) primaryServerUrl.textContent = `http://${host}`;
+            if (phoneNameBadge) phoneNameBadge.innerHTML = `🟢 服务运行中: <b style="color:#60A5FA;">http://${host}</b>`;
         }
+    }
+
+    if (btnCopyServerUrl) {
+        btnCopyServerUrl.addEventListener('click', async () => {
+            const textToCopy = `http://${selfDeviceInfo.ip}:${selfDeviceInfo.port}`;
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(textToCopy);
+                } else {
+                    const input = document.createElement('input');
+                    input.value = textToCopy;
+                    document.body.appendChild(input);
+                    input.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(input);
+                }
+                showToast(`已复制网址: ${textToCopy}，在手机浏览器打开即可`);
+            } catch (e) {
+                alert(`访问网址为: ${textToCopy}\n请在手机浏览器中打开`);
+            }
+        });
+    }
+
+    if (btnRefreshIps) {
+        btnRefreshIps.addEventListener('click', async () => {
+            await checkSelfServerStatus();
+            await pollLanDevices();
+            showToast('已重新检测网卡与局域网节点');
+        });
     }
 
     // ---------------- 局域网在线设备自发现与节点切换 ----------------
@@ -144,11 +244,9 @@
 
     function mergeKnownDevices(newDevs) {
         const map = new Map();
-        // 现存设备先进入 map
         knownDevices.forEach(d => {
             map.set(`${d.ip}:${d.port}`, d);
         });
-        // 用新获取到的设备覆盖/更新
         newDevs.forEach(d => {
             map.set(`${d.ip}:${d.port}`, d);
         });
@@ -175,16 +273,17 @@
 
     function renderDeviceList() {
         if (!deviceListContainer) return;
+        const isSelfActive = currentTargetBaseUrl === '';
         const selfCard = `
-            <div class="device-card ${currentTargetBaseUrl === '' ? 'active' : ''}" onclick="window.switchDeviceNode('', '本端 (本机)')">
+            <div class="device-card ${isSelfActive ? 'active' : ''}" onclick="window.switchDeviceNode('', '本端设备 (本机)')">
                 <div class="device-info-left">
-                    <span class="device-platform-icon">🏠</span>
+                    <span class="device-platform-icon">🖥️</span>
                     <div>
-                        <div class="device-name-text">本端设备 (本机已开服)</div>
+                        <div class="device-name-text">本端设备 (本机服务端)</div>
                         <div class="device-ip-badge">http://${selfDeviceInfo.ip}:${selfDeviceInfo.port}</div>
                     </div>
                 </div>
-                <span class="device-status-badge">当前直连</span>
+                <span class="device-status-badge">本机</span>
             </div>
         `;
 
@@ -212,11 +311,30 @@
     window.switchDeviceNode = function (baseUrl, name) {
         currentTargetBaseUrl = baseUrl;
         currentTargetDeviceName = name;
-        if (currentViewingDeviceTitle) {
-            currentViewingDeviceTitle.textContent = `📂 待拉取文件列表 (来自: ${name} ${baseUrl || '本端'})`;
+
+        if (baseUrl === '') {
+            // 切换到本机视图
+            if (selfViewSection) selfViewSection.style.display = 'block';
+            if (remoteViewSection) remoteViewSection.style.display = 'none';
+            if (uploadSectionTitle) uploadSectionTitle.textContent = '📤 添加对外分享文件 (本机)';
+            if (uploadSectionSubtitle) uploadSectionSubtitle.textContent = '拖拽或点击选择文件，电脑将对外分享该文件供手机下载';
+            if (dropZoneHint) dropZoneHint.textContent = '添加后，手机端刷新即可看到并免解压下载';
+            loadLocalSharedFiles();
+            loadReceivedFiles();
+        } else {
+            // 切换到远程设备视图
+            if (selfViewSection) selfViewSection.style.display = 'none';
+            if (remoteViewSection) remoteViewSection.style.display = 'block';
+            if (currentViewingDeviceTitle) {
+                currentViewingDeviceTitle.textContent = `📂 对方分享的文件 (来自: ${name})`;
+            }
+            if (uploadSectionTitle) uploadSectionTitle.textContent = `📤 发送文件给「${name}」`;
+            if (uploadSectionSubtitle) uploadSectionSubtitle.textContent = '拖拽或点击选择文件，将直接投送到对方设备存储';
+            if (dropZoneHint) dropZoneHint.textContent = '局域网无损点对点高速直传';
+            loadFiles();
         }
+
         renderDeviceList();
-        loadFiles();
         if (typeof pollChatMessages === 'function') pollChatMessages();
         showToast(`已切换至节点: ${name}`);
     };
@@ -234,14 +352,12 @@
 
             try {
                 if (window.__TAURI__) {
-                    // Tauri 原生模式：通过 Rust 直连探测，绕过 Mixed Content 限制
                     const dev = await window.__TAURI__.invoke('connect_device_node', { target: rawIp });
                     const targetUrl = `http://${dev.ip}:${dev.port}`;
                     mergeKnownDevices([dev]);
                     window.switchDeviceNode(targetUrl, dev.name);
                     showToast(`已成功连接至: ${dev.name} (${dev.ip})`);
                 } else {
-                    // 纯浏览器模式
                     let base = rawIp;
                     if (!base.startsWith('http://') && !base.startsWith('https://')) {
                         base = 'http://' + base;
@@ -267,7 +383,7 @@
                 }
             } catch (err) {
                 console.error('手动连接错误:', err);
-                alert(`连接失败: ${err.message || err}\n\n排查建议：\n1. 请确认两台设备连接在同一个 WiFi 局域网（关闭路由器的访客隔离）\n2. 确认手机端 WenBox 传输服务已开启\n3. 检查填写的手机 IP 是否完全正确`);
+                alert(`连接失败: ${err.message || err}\n\n排查建议：\n1. 请确认手机与电脑连接在同一个 WiFi 局域网\n2. 确认手机端 WenBox 传输服务已启动\n3. 检查手机 IP 是否正确`);
             } finally {
                 btnConnectCustomIp.disabled = false;
                 btnConnectCustomIp.textContent = '连接设备';
@@ -304,6 +420,42 @@
     }
     window.loadFiles = loadFiles;
 
+    // 远程文件按需下载
+    window.downloadRemoteFile = async function(fileId, fileName) {
+        if (window.__TAURI__ && window.__TAURI__.dialog) {
+            try {
+                const savePath = await window.__TAURI__.dialog.save({
+                    defaultPath: fileName,
+                    title: `保存文件 ${fileName}`
+                });
+                if (!savePath) return;
+
+                const dir = savePath.substring(0, Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')));
+                const name = savePath.substring(Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')) + 1);
+
+                const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : 'http://127.0.0.1:9527') + `/api/download/${fileId}`;
+                await window.__TAURI__.invoke('save_remote_file_to_directory', {
+                    downloadUrl: downloadUrl,
+                    dirPath: dir,
+                    folderName: '',
+                    fileName: name
+                });
+                showToast(`已成功保存到: ${savePath}`);
+                return;
+            } catch (e) {
+                console.error('Tauri save remote file error:', e);
+            }
+        }
+
+        const dlUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${fileId}`;
+        const a = document.createElement('a');
+        a.href = dlUrl;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    };
+
     function renderFiles() {
         if (!fileCount || !fileListContainer || !emptyState) return;
         fileCount.textContent = `${currentFiles.length} 个文件`;
@@ -317,7 +469,6 @@
         fileListContainer.innerHTML = currentFiles.map(file => {
             const icon = getFileIcon(file.name, file.mimeType || '');
             const size = formatBytes(file.size);
-            const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${file.id}`;
 
             return `
                 <div class="file-item">
@@ -325,18 +476,219 @@
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
                             <div class="file-name" title="${file.name}">${escapeHtml(file.name)}</div>
-                            <div class="file-size">${size} • 按需下载</div>
+                            <div class="file-size">${size} • 对方分享</div>
                         </div>
                     </div>
-                    <a href="${downloadUrl}" class="btn-download" download="${escapeHtml(file.name)}">
+                    <button onclick="window.downloadRemoteFile('${file.id}', '${escapeHtml(file.name)}')" class="btn-download">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
                         </svg>
                         按需下载
+                    </button>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // ---------------- 本机对外分享与已接收文件管理 ----------------
+    async function loadLocalSharedFiles() {
+        if (!localSharedFileListContainer) return;
+        try {
+            let files = [];
+            if (window.__TAURI__) {
+                files = await window.__TAURI__.invoke('fetch_node_files', { baseUrl: '' });
+            } else {
+                const res = await fetch('/api/files?t=' + Date.now());
+                if (res.ok) {
+                    const data = await res.json();
+                    files = data.files || [];
+                }
+            }
+            renderLocalSharedFiles(files);
+        } catch (e) {
+            console.error('loadLocalSharedFiles error:', e);
+        }
+    }
+
+    function renderLocalSharedFiles(files) {
+        if (!localSharedFileListContainer || !localEmptyState) return;
+        if (!files || files.length === 0) {
+            localSharedFileListContainer.innerHTML = '';
+            localEmptyState.style.display = 'block';
+            return;
+        }
+
+        localEmptyState.style.display = 'none';
+        localSharedFileListContainer.innerHTML = files.map(file => {
+            const icon = getFileIcon(file.name, file.mimeType || '');
+            const size = formatBytes(file.size);
+            const dlUrl = `/api/download/${file.id}`;
+
+            return `
+                <div class="file-item">
+                    <div class="file-info">
+                        <span class="file-type-icon">${icon}</span>
+                        <div class="file-meta">
+                            <div class="file-name" title="${file.name}">${escapeHtml(file.name)}</div>
+                            <div class="file-size">${size} • 本地分享路径: ${escapeHtml(file.path || file.name)}</div>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <a href="${dlUrl}" class="btn-download" download="${escapeHtml(file.name)}" title="下载测试">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                            </svg>
+                            下载
+                        </a>
+                        <button onclick="window.removeLocalSharedFile('${file.id}')" class="btn-danger-outline" style="padding: 6px 10px; font-size: 12px;">
+                            移除
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    window.removeLocalSharedFile = async function (fileId) {
+        try {
+            if (window.__TAURI__) {
+                await window.__TAURI__.invoke('remove_share_file', { fileId });
+            } else {
+                await fetch(`/api/files/remove?id=${encodeURIComponent(fileId)}`, { method: 'POST' });
+            }
+            showToast('已移除该分享文件');
+            loadLocalSharedFiles();
+        } catch (e) {
+            showToast(`移除失败: ${e.message || e}`);
+        }
+    };
+
+    async function loadReceivedFiles() {
+        if (!receivedFileListContainer) return;
+        try {
+            let files = [];
+            if (window.__TAURI__) {
+                files = await window.__TAURI__.invoke('get_received_files');
+            } else {
+                const res = await fetch('/api/received_files?t=' + Date.now());
+                if (res.ok) {
+                    const data = await res.json();
+                    files = data.files || [];
+                }
+            }
+            renderReceivedFiles(files);
+        } catch (e) {
+            console.error('loadReceivedFiles error:', e);
+        }
+    }
+
+    function renderReceivedFiles(files) {
+        if (!receivedFileListContainer || !receivedEmptyState) return;
+        if (!files || files.length === 0) {
+            receivedFileListContainer.innerHTML = '';
+            receivedEmptyState.style.display = 'block';
+            return;
+        }
+
+        receivedEmptyState.style.display = 'none';
+        receivedFileListContainer.innerHTML = files.map(file => {
+            const icon = getFileIcon(file.name, file.mimeType || '');
+            const size = formatBytes(file.size);
+            const dlUrl = `/api/download/${file.id}`;
+
+            return `
+                <div class="file-item">
+                    <div class="file-info">
+                        <span class="file-type-icon">${icon}</span>
+                        <div class="file-meta">
+                            <div class="file-name" title="${file.name}">${escapeHtml(file.name)}</div>
+                            <div class="file-size">${size} • 保存路径: ${escapeHtml(file.path || 'Downloads/WenBox')}</div>
+                        </div>
+                    </div>
+                    <a href="${dlUrl}" class="btn-download" download="${escapeHtml(file.name)}">
+                        下载
                     </a>
                 </div>
             `;
         }).join('');
+    }
+
+    if (btnSelectShareFile) {
+        btnSelectShareFile.addEventListener('click', async () => {
+            if (window.__TAURI__ && window.__TAURI__.dialog) {
+                try {
+                    const selected = await window.__TAURI__.dialog.open({
+                        multiple: true,
+                        title: '选择要对外分享的电脑文件'
+                    });
+                    if (selected) {
+                        const paths = Array.isArray(selected) ? selected : [selected];
+                        for (const p of paths) {
+                            await window.__TAURI__.invoke('add_share_file', { pathStr: p });
+                        }
+                        showToast(`已添加 ${paths.length} 个电脑文件到分享列表！`);
+                        loadLocalSharedFiles();
+                    }
+                } catch (e) {
+                    showToast(`选择文件失败: ${e.message || e}`);
+                }
+            } else {
+                if (fileInput) fileInput.click();
+            }
+        });
+    }
+
+    if (btnClearShareFiles) {
+        btnClearShareFiles.addEventListener('click', async () => {
+            if (!confirm('确定要清空本机所有对外分享的文件吗？')) return;
+            try {
+                if (window.__TAURI__) {
+                    await window.__TAURI__.invoke('clear_share_files');
+                } else {
+                    await fetch('/api/files/clear', { method: 'POST' });
+                }
+                showToast('已清空本机所有对外分享文件');
+                loadLocalSharedFiles();
+            } catch (e) {
+                showToast(`清空失败: ${e.message || e}`);
+            }
+        });
+    }
+
+    if (btnRefreshLocalFiles) {
+        btnRefreshLocalFiles.addEventListener('click', () => {
+            loadLocalSharedFiles();
+            showToast('已刷新本机分享文件');
+        });
+    }
+
+    if (btnOpenDownloadFolder) {
+        btnOpenDownloadFolder.addEventListener('click', async () => {
+            if (window.__TAURI__) {
+                try {
+                    const p = await window.__TAURI__.invoke('open_download_folder');
+                    showToast(`已打开保存目录: ${p}`);
+                } catch (e) {
+                    showToast(`打开目录失败: ${e.message || e}`);
+                }
+            } else {
+                showToast('文件已保存在系统“下载/WenBox”文件夹，请在电脑文件管理器中打开');
+            }
+        });
+    }
+
+    if (btnRefreshReceivedFiles) {
+        btnRefreshReceivedFiles.addEventListener('click', () => {
+            loadReceivedFiles();
+            showToast('已刷新已接收文件');
+        });
+    }
+
+    if (btnRefreshRemoteFiles) {
+        btnRefreshRemoteFiles.addEventListener('click', () => {
+            loadFiles();
+            showToast('已刷新对方文件列表');
+        });
     }
 
     function escapeHtml(str) {
@@ -521,9 +873,56 @@
             await uploadSingleFile(fileList[i]);
         }
         if (fileInput) fileInput.value = '';
+        if (currentTargetBaseUrl === '') {
+            loadLocalSharedFiles();
+        } else {
+            loadFiles();
+        }
     }
 
-    function uploadSingleFile(file) {
+    async function uploadSingleFile(file) {
+        // 如果是在 Tauri 桌面客户端运行
+        if (window.__TAURI__) {
+            // 情况 1：在「本端 (本机)」视图，直接将本地文件添加为对外分享
+            if (currentTargetBaseUrl === '') {
+                if (file.path) {
+                    try {
+                        await window.__TAURI__.invoke('add_share_file', { pathStr: file.path });
+                        showToast(`已添加电脑分享文件: ${file.name}`);
+                        loadLocalSharedFiles();
+                        return;
+                    } catch (e) {
+                        console.warn('add_share_file error:', e);
+                    }
+                }
+            } else {
+                // 情况 2：在「远程设备 (如手机)」视图，调用原生 Rust 客户端进行极速网络流式投送，绕过 Mixed Content
+                if (file.path) {
+                    uploadProgressContainer.style.display = 'block';
+                    uploadFileName.textContent = `正在发送至远程设备: ${file.name} (${formatBytes(file.size)})`;
+                    uploadProgressBar.style.width = '50%';
+                    uploadPercent.textContent = '传输中...';
+                    try {
+                        const msg = await window.__TAURI__.invoke('upload_local_file_to_remote', {
+                            targetBaseUrl: currentTargetBaseUrl,
+                            filePath: file.path
+                        });
+                        uploadProgressBar.style.width = '100%';
+                        uploadPercent.textContent = '100%';
+                        showToast(msg || `已成功发送: ${file.name}`);
+                    } catch (e) {
+                        showToast(`向对方发送失败: ${e.message || e}`);
+                    } finally {
+                        setTimeout(() => {
+                            uploadProgressContainer.style.display = 'none';
+                        }, 800);
+                    }
+                    return;
+                }
+            }
+        }
+
+        // 纯浏览器环境 或 无法获取原生路径时的标准 HTTP FormData 上传
         return new Promise((resolve) => {
             uploadProgressContainer.style.display = 'block';
             uploadFileName.textContent = `正在传输: ${file.name} (${formatBytes(file.size)})`;
@@ -562,7 +961,10 @@
                 resolve();
             });
 
-            const uploadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/upload';
+            let uploadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/upload';
+            if (!currentTargetBaseUrl && window.__TAURI__) {
+                uploadUrl = 'http://127.0.0.1:9527/api/upload';
+            }
             xhr.open('POST', uploadUrl);
             xhr.send(formData);
         });
@@ -570,7 +972,12 @@
 
     if (btnRefresh) {
         btnRefresh.addEventListener('click', () => {
-            loadFiles();
+            if (currentTargetBaseUrl === '') {
+                loadLocalSharedFiles();
+                loadReceivedFiles();
+            } else {
+                loadFiles();
+            }
             pollLanDevices();
             checkSelfServerStatus();
             showToast('已刷新设备与文件列表');
@@ -579,11 +986,21 @@
 
     // 初始数据加载与定时轮询
     checkSelfServerStatus();
+    loadLocalSharedFiles();
+    loadReceivedFiles();
     loadFiles();
     pollLanDevices();
-    setInterval(loadFiles, 3000);
+
+    setInterval(() => {
+        if (currentTargetBaseUrl === '') {
+            loadLocalSharedFiles();
+            loadReceivedFiles();
+        } else {
+            loadFiles();
+        }
+    }, 3000);
     setInterval(pollLanDevices, 4000);
-    setInterval(checkSelfServerStatus, 5000);
+    setInterval(checkSelfServerStatus, 6000);
 
 
     // ---------------- 模块二：局域网双向即时互发消息 / 聊天室 ----------------

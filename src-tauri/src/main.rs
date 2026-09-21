@@ -8,7 +8,7 @@ use std::net::UdpSocket;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
@@ -48,13 +48,83 @@ pub struct LanDevice {
     pub last_seen: u64,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct LocalIpInfo {
+    pub ip: String,
+    pub name: String,
+    pub is_preferred: bool,
+}
+
 struct AppState {
     files: Mutex<HashMap<String, SharedFile>>,
+    received_files: Mutex<Vec<SharedFile>>,
     messages: Mutex<Vec<ChatMessage>>,
     devices: Mutex<HashMap<String, LanDevice>>,
 }
 
+// ---------------- 智能获取本机所有可用局域网 IPv4 地址 ----------------
+fn get_all_lan_ips() -> Vec<LocalIpInfo> {
+    let mut list = Vec::new();
+    if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
+        for (name, ip) in interfaces {
+            if let std::net::IpAddr::V4(ipv4) = ip {
+                if !ipv4.is_loopback() && !ipv4.is_link_local() {
+                    let s = ipv4.to_string();
+                    let lower_name = name.to_lowercase();
+                    let is_virtual = lower_name.contains("vethernet")
+                        || lower_name.contains("wsl")
+                        || lower_name.contains("virtual")
+                        || lower_name.contains("vmnet")
+                        || lower_name.contains("docker");
+
+                    let is_lan = s.starts_with("192.168.") || s.starts_with("10.") || s.starts_with("172.");
+                    let is_preferred = is_lan && !is_virtual;
+
+                    list.push(LocalIpInfo {
+                        ip: s,
+                        name: name.clone(),
+                        is_preferred,
+                    });
+                }
+            }
+        }
+    }
+
+    // 优先将真正的 WiFi / 局域网物理网卡排在最前
+    list.sort_by(|a, b| b.is_preferred.cmp(&a.is_preferred));
+
+    if list.is_empty() {
+        list.push(LocalIpInfo {
+            ip: "127.0.0.1".into(),
+            name: "本机回环".into(),
+            is_preferred: true,
+        });
+    }
+
+    list
+}
+
+fn get_primary_ip() -> String {
+    get_all_lan_ips().first().map(|x| x.ip.clone()).unwrap_or_else(|| "127.0.0.1".into())
+}
+
+fn get_download_dir() -> PathBuf {
+    dirs_next::download_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("WenBox")
+}
+
 // ---------------- Tauri 供前端调用的命令 ----------------
+#[tauri::command]
+fn get_local_ip() -> String {
+    get_primary_ip()
+}
+
+#[tauri::command]
+fn get_all_lan_ips_cmd() -> Vec<LocalIpInfo> {
+    get_all_lan_ips()
+}
+
 #[tauri::command]
 fn add_share_file(path_str: String, state: tauri::State<Arc<AppState>>) -> Result<SharedFile, String> {
     let p = PathBuf::from(&path_str);
@@ -64,14 +134,7 @@ fn add_share_file(path_str: String, state: tauri::State<Arc<AppState>>) -> Resul
     let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
     let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
     let id = uuid::Uuid::new_v4().to_string();
-
-    let mime = if name.ends_with(".pdf") {
-        "application/pdf"
-    } else if name.ends_with(".png") || name.ends_with(".jpg") || name.ends_with(".jpeg") {
-        "image/jpeg"
-    } else {
-        "application/octet-stream"
-    }.to_string();
+    let mime = mime_guess::from_path(&p).first_or_octet_stream().to_string();
 
     let shared = SharedFile {
         id: id.clone(),
@@ -86,26 +149,43 @@ fn add_share_file(path_str: String, state: tauri::State<Arc<AppState>>) -> Resul
 }
 
 #[tauri::command]
+fn remove_share_file(id: String, state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
+    let mut files = state.files.lock().unwrap();
+    Ok(files.remove(&id).is_some())
+}
+
+#[tauri::command]
 fn clear_share_files(state: tauri::State<Arc<AppState>>) {
     state.files.lock().unwrap().clear();
 }
 
 #[tauri::command]
-fn get_lan_devices(state: tauri::State<Arc<AppState>>) -> Vec<LanDevice> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let mut dev = state.devices.lock().unwrap();
-    dev.retain(|_, d| now.saturating_sub(d.last_seen) < 15);
-    dev.values().cloned().collect()
+fn get_received_files(state: tauri::State<Arc<AppState>>) -> Vec<SharedFile> {
+    state.received_files.lock().unwrap().clone()
 }
 
 #[tauri::command]
-fn get_local_ip() -> String {
-    local_ip_address::local_ip()
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|_| "127.0.0.1".into())
+fn open_download_folder() -> Result<String, String> {
+    let dir = get_download_dir();
+    if !dir.exists() {
+        let _ = std::fs::create_dir_all(&dir);
+    }
+    let p_str = dir.to_string_lossy().to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer").arg(&p_str).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(&p_str).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&p_str).spawn();
+    }
+
+    Ok(p_str)
 }
 
 #[tauri::command]
@@ -126,6 +206,12 @@ fn save_file_to_directory(dir_path: String, folder_name: String, file_name: Stri
     file.write_all(&bytes).map_err(|e| format!("写入文件内容失败: {}", e))?;
 
     Ok(file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn get_lan_devices(state: tauri::State<Arc<AppState>>) -> Vec<LanDevice> {
+    let dev = state.devices.lock().unwrap();
+    dev.values().cloned().collect()
 }
 
 #[tauri::command]
@@ -328,12 +414,105 @@ fn send_node_message(base_url: String, sender_name: String, content: String, sta
         "senderName": sender_name,
         "content": content
     });
-    ureq::post(&url)
-        .timeout(Duration::from_secs(5))
-        .send_json(&body)
-        .map_err(|e| format!("发送消息失败: {}", e))?;
 
-    Ok(true)
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(5))
+        .send_string(&body.to_string());
+
+    match resp {
+        Ok(_) => {
+            let msg = ChatMessage {
+                id: uuid::Uuid::new_v4().to_string(),
+                sender_name,
+                content,
+                timestamp: now_ms,
+                is_from_phone: false,
+            };
+            state.messages.lock().unwrap().push(msg);
+            Ok(true)
+        }
+        Err(e) => Err(format!("发送失败: {}", e)),
+    }
+}
+
+#[tauri::command]
+fn upload_local_file_to_remote(target_base_url: String, file_path: String) -> Result<String, String> {
+    let p = PathBuf::from(&file_path);
+    if !p.exists() {
+        return Err("文件不存在".into());
+    }
+    let file_name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let file_data = std::fs::read(&p).map_err(|e| format!("读取文件失败: {}", e))?;
+
+    let base = target_base_url.trim().trim_end_matches('/');
+    let url = format!("{}/api/upload", base);
+
+    let boundary = format!("----WenBoxBoundary{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n", file_name).as_bytes());
+    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+    body.extend_from_slice(&file_data);
+    body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
+
+    let content_type = format!("multipart/form-data; boundary={}", boundary);
+    let resp = ureq::post(&url)
+        .set("Content-Type", &content_type)
+        .timeout(Duration::from_secs(300))
+        .send_bytes(&body);
+
+    match resp {
+        Ok(_) => Ok(format!("成功发送文件: {}", file_name)),
+        Err(e) => Err(format!("向对方投送文件失败: {}", e)),
+    }
+}
+
+// ---------------- 上传文件解析辅助函数 ----------------
+fn parse_multipart_body<'a>(body: &'a [u8], boundary: &str) -> Option<(String, &'a [u8])> {
+    if boundary.is_empty() {
+        return None;
+    }
+
+    let body_str = String::from_utf8_lossy(&body[..body.len().min(4096)]);
+    let filename_idx = body_str.find("filename=\"")?;
+    let after_fn = &body_str[filename_idx + 10..];
+    let end_fn = after_fn.find('"')?;
+    let raw_filename = &after_fn[..end_fn];
+    let filename = if raw_filename.is_empty() {
+        "file.bin".to_string()
+    } else {
+        raw_filename.to_string()
+    };
+
+    let (_header_end, content_start) = if let Some(pos) = find_subsequence(body, b"\r\n\r\n") {
+        (pos, pos + 4)
+    } else if let Some(pos) = find_subsequence(body, b"\n\n") {
+        (pos, pos + 2)
+    } else {
+        return None;
+    };
+
+    let boundary_bytes = format!("--{}", boundary);
+    let rest = &body[content_start..];
+
+    let content_len = if let Some(pos) = find_subsequence(rest, boundary_bytes.as_bytes()) {
+        if pos >= 2 && rest[pos - 2..pos] == *b"\r\n" {
+            pos - 2
+        } else if pos >= 1 && rest[pos - 1] == b'\n' {
+            pos - 1
+        } else {
+            pos
+        }
+    } else {
+        rest.len()
+    };
+
+    Some((filename, &rest[..content_len]))
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|window| window == needle)
 }
 
 // ---------------- 启动内置 HTTP 服务端 (9527) ----------------
@@ -356,8 +535,8 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
             let method = req.method().clone();
 
             let cors_origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
-            let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap();
-            let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..]).unwrap();
+            let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS, PUT, DELETE"[..]).unwrap();
+            let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization"[..]).unwrap();
 
             if method == Method::Options {
                 let mut resp = Response::empty(200);
@@ -370,11 +549,13 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
 
             // 1. 获取本端信息 (供前端展示自身 IP 与服务状态)
             if url == "/api/status" && method == Method::Get {
-                let ip = local_ip_address::local_ip().map(|i| i.to_string()).unwrap_or_else(|_| "127.0.0.1".into());
+                let primary_ip = get_primary_ip();
+                let all_ips = get_all_lan_ips();
                 let dev_name = whoami_device_name();
                 let json = serde_json::json!({
                     "device": dev_name,
-                    "ip": ip,
+                    "ip": primary_ip,
+                    "all_ips": all_ips,
                     "port": port,
                     "running": true,
                     "platform": "Windows"
@@ -387,8 +568,8 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
 
             // 2. 获取在线节点设备列表
             if url == "/api/devices" && method == Method::Get {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs();
                 let mut dev = state.devices.lock().unwrap();
@@ -416,8 +597,8 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                         req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_else(|| "127.0.0.1".into())
                     };
 
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
 
@@ -432,11 +613,12 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                     state.devices.lock().unwrap().insert(key, node);
                 }
 
-                let ip = local_ip_address::local_ip().map(|i| i.to_string()).unwrap_or_else(|_| "127.0.0.1".into());
+                let primary_ip = get_primary_ip();
                 let dev_name = whoami_device_name();
                 let json = serde_json::json!({
                     "device": dev_name,
-                    "ip": ip,
+                    "ip": primary_ip,
+                    "all_ips": get_all_lan_ips(),
                     "port": port,
                     "running": true,
                     "platform": "Windows"
@@ -458,12 +640,37 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 continue;
             }
 
-            // 4. 文件下载
+            // 3.1 清空待发文件
+            if url == "/api/files/clear" || (url == "/api/files" && method == Method::Delete) {
+                state.files.lock().unwrap().clear();
+                let mut resp = Response::from_string("{\"success\":true}");
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
+            // 3.2 接收到的文件列表
+            if url == "/api/received_files" && method == Method::Get {
+                let list = state.received_files.lock().unwrap().clone();
+                let json = serde_json::json!({ "files": list }).to_string();
+                let mut resp = Response::from_string(json);
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
+            // 4. 文件下载 (支持下载分享的文件或接收到的文件)
             if url.starts_with("/api/download/") && method == Method::Get {
                 let file_id = url.trim_start_matches("/api/download/");
                 let file_info = {
                     let files = state.files.lock().unwrap();
-                    files.get(file_id).cloned()
+                    let f = files.get(file_id).cloned();
+                    if f.is_some() {
+                        f
+                    } else {
+                        let rec = state.received_files.lock().unwrap();
+                        rec.iter().find(|x| x.id == file_id).cloned()
+                    }
                 };
 
                 if let Some(info) = file_info {
@@ -477,6 +684,79 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                     }
                 }
                 let mut resp = Response::from_string("File Not Found").with_status_code(404);
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
+            // 4.5 电脑接收文件上传 (手机或其他设备向这台电脑发送文件)
+            if url == "/api/upload" && method == Method::Post {
+                let download_dir = get_download_dir();
+                if !download_dir.exists() {
+                    let _ = std::fs::create_dir_all(&download_dir);
+                }
+
+                let headers = req.headers().to_vec();
+                let content_type = headers.iter()
+                    .find(|h| h.field.equiv("Content-Type"))
+                    .map(|h| h.value.to_string())
+                    .unwrap_or_default();
+
+                let x_filename = headers.iter()
+                    .find(|h| h.field.equiv("X-File-Name"))
+                    .map(|h| h.value.to_string());
+
+                let mut body_bytes = Vec::new();
+                if req.as_reader().read_to_end(&mut body_bytes).is_ok() && !body_bytes.is_empty() {
+                    let (raw_name, data) = if content_type.contains("multipart/form-data") {
+                        let boundary = content_type.split("boundary=")
+                            .nth(1)
+                            .unwrap_or("")
+                            .trim()
+                            .trim_matches('"');
+                        parse_multipart_body(&body_bytes, boundary).unwrap_or_else(|| {
+                            let name = x_filename.unwrap_or_else(|| format!("upload_{}.bin", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()));
+                            (name, &body_bytes[..])
+                        })
+                    } else {
+                        let name = x_filename.unwrap_or_else(|| format!("upload_{}.bin", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()));
+                        (name, &body_bytes[..])
+                    };
+
+                    let safe_name = PathBuf::from(&raw_name)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "uploaded_file.bin".into());
+
+                    let target_path = download_dir.join(&safe_name);
+                    if std::fs::write(&target_path, data).is_ok() {
+                        let id = uuid::Uuid::new_v4().to_string();
+                        let size = data.len() as u64;
+                        let mime = mime_guess::from_path(&target_path).first_or_octet_stream().to_string();
+                        let rec_file = SharedFile {
+                            id: id.clone(),
+                            name: safe_name.clone(),
+                            size,
+                            path: target_path.to_string_lossy().to_string(),
+                            mime_type: mime.clone(),
+                        };
+                        state.received_files.lock().unwrap().insert(0, rec_file.clone());
+                        state.files.lock().unwrap().insert(id, rec_file);
+
+                        let json = serde_json::json!({
+                            "success": true,
+                            "message": format!("文件已成功保存到: {}", target_path.to_string_lossy()),
+                            "name": safe_name,
+                            "size": size
+                        }).to_string();
+                        let mut resp = Response::from_string(json);
+                        resp.add_header(cors_origin);
+                        let _ = req.respond(resp);
+                        continue;
+                    }
+                }
+
+                let mut resp = Response::from_string("{\"success\":false,\"message\":\"保存文件失败\"}").with_status_code(500);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
                 continue;
@@ -497,8 +777,8 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
                         let content = val["content"].as_str().unwrap_or("").to_string();
                         let sender_name = val["senderName"].as_str().unwrap_or("💻 Windows端").to_string();
-                        let now_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
+                        let now_ms = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_millis() as u64;
 
@@ -585,8 +865,8 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                             let port = val["port"].as_u64().unwrap_or(9527) as u16;
                             let ip = src.ip().to_string();
 
-                            let now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_secs();
 
@@ -640,6 +920,7 @@ fn whoami_device_name() -> String {
 fn main() {
     let state = Arc::new(AppState {
         files: Mutex::new(HashMap::new()),
+        received_files: Mutex::new(Vec::new()),
         messages: Mutex::new(Vec::new()),
         devices: Mutex::new(HashMap::new()),
     });
@@ -653,14 +934,19 @@ fn main() {
     tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
-            add_share_file,
-            clear_share_files,
-            get_lan_devices,
             get_local_ip,
-            save_file_to_directory,
+            get_all_lan_ips_cmd,
+            get_lan_devices,
             connect_device_node,
+            add_share_file,
+            remove_share_file,
+            clear_share_files,
+            get_received_files,
+            open_download_folder,
             fetch_node_files,
             save_remote_file_to_directory,
+            save_file_to_directory,
+            upload_local_file_to_remote,
             fetch_node_messages,
             send_node_message
         ])

@@ -20,6 +20,7 @@ rust-embed = "8.2"
 mime_guess = "2.0"
 ureq = { version = "2.12", default-features = false, features = ["json"] }
 url = "2.5"
+dirs-next = "2.0"
 
 [features]
 default = ["custom-protocol"]

@@ -39,39 +39,39 @@
 
         <!-- 主内容区：Tab 1 局域网快传 -->
         <main id="tab-transfer" class="tab-pane active">
-            <!-- 日期归类直存模式 (报销/照片/发票/日志整理利器) -->
-            <section class="card reimbursement-banner">
-                <div class="reimbursement-header">
-                    <div class="reimbursement-info">
-                        <span class="reimbursement-tag">📁 日期归类直存模式 (报销/发票/照片整理，免解压)</span>
-                        <h3>指定电脑根目录，按日期与自定义主题自动建文件夹直存</h3>
-                        <p>将所选设备的文件一键存入电脑目标目录，自动按当天日期归档（如 <span class="highlight-code" id="previewFolderName">YYYY-MM-DD_报销</span>），告别散乱和繁琐解压！</p>
+            <!-- 🖥️ 本机服务端显著状态与 IP 访问卡片 -->
+            <section class="card server-info-banner" id="serverInfoBanner">
+                <div class="server-info-header">
+                    <div class="server-status-badge">
+                        <span class="status-pulse-dot"></span>
+                        <span class="server-status-title">🖥️ 本机服务端: <span id="serverRunningStatus" style="color: #10B981; font-weight: bold;">🟢 运行中</span> (端口: <span id="serverPort">9527</span>)</span>
                     </div>
-                    <div class="reimbursement-action" style="display: flex; flex-direction: column; gap: 8px; align-items: flex-end;">
-                        <div style="display: flex; align-items: center; gap: 6px;">
-                            <label style="font-size: 12px; color: #94A3B8;">文件夹后缀名：</label>
-                            <input type="text" id="customFolderSuffix" class="converter-input" style="width: 120px; padding: 5px 10px; font-size: 13px;" value="报销" placeholder="如: 报销/发票/现场照片">
-                        </div>
-                        <button id="btnSelectReimburseDir" class="btn-reimburse">
-                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                            </svg>
-                            选择电脑根目录并自动归档
-                        </button>
+                    <div class="server-url-box">
+                        <span class="url-label">局域网访问网址:</span>
+                        <span class="url-value" id="primaryServerUrl">http://正在检测IP...:9527</span>
+                        <button id="btnCopyServerUrl" class="btn-copy-url" title="复制网址">📋 复制网址</button>
+                        <button id="btnRefreshIps" class="btn-refresh-ips" title="重新检测网卡IP">🔄 刷新网络</button>
                     </div>
                 </div>
-                <div id="reimburseStatus" class="reimburse-status" style="display: none;"></div>
+                <!-- 多网卡 IP 切换栏 (当存在多个物理/虚拟网卡时展开显示) -->
+                <div id="multiIpSelectorContainer" class="multi-ip-row" style="display: none;">
+                    <span class="multi-ip-label">检测到多个网卡 IP，点击切换供手机连接：</span>
+                    <div id="multiIpPills" class="multi-ip-pills"></div>
+                </div>
+                <div class="server-tip">
+                    💡 <b>双向互传指南：</b>手机与电脑连接同一 Wi-Fi 时，在手机浏览器中打开上述网址，即可实现免安装即开即传；在手机 WenBox App 中也可直接选择互联。
+                </div>
             </section>
 
             <!-- 局域网在线设备列表 (自动发现与手动指定 IP) -->
             <section class="card section-devices" style="margin-top: 20px;">
                 <div class="section-header">
                     <div class="section-title">
-                        <h2>🌐 局域网在线设备节点</h2>
-                        <span class="subtitle">UDP 自动广播探测 + IP 标识直连，点击可切换查看并按需拉取对方文件</span>
+                        <h2>🌐 局域网设备节点</h2>
+                        <span class="subtitle">UDP 自动广播探测 + IP 直连，点击设备卡片可切换查看并双向传输文件</span>
                     </div>
                     <div class="actions" style="display: flex; gap: 8px;">
-                        <input type="text" id="customTargetIp" class="converter-input" style="width: 170px; padding: 6px 10px; font-size: 13px;" placeholder="输入目标设备 IP">
+                        <input type="text" id="customTargetIp" class="converter-input" style="width: 180px; padding: 6px 10px; font-size: 13px;" placeholder="输入对方 IP (如 192.168.1.5)">
                         <button id="btnConnectCustomIp" class="btn-secondary" style="padding: 6px 12px;">连接该设备</button>
                     </div>
                 </div>
@@ -81,38 +81,123 @@
                 </div>
             </section>
 
-            <!-- 面板 1：文件列表 (按需下载) -->
-            <section class="card section-download" style="margin-top: 20px;">
-                <div class="section-header">
-                    <div class="section-title">
-                        <h2 id="currentViewingDeviceTitle">📂 待拉取文件列表 (来自当前选定设备)</h2>
-                        <span id="fileCount" class="counter">0 个文件</span>
+            <!-- 视图 A：当前选定为「本端 (本机)」时的面板 -->
+            <div id="selfViewSection" style="display: block;">
+                <!-- 面板 A1：本机对外分享的文件列表 -->
+                <section class="card section-download" style="margin-top: 20px;">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <h2>📤 本机对外分享的文件</h2>
+                            <span class="subtitle">供手机或其他设备从本电脑下载的文件列表</span>
+                        </div>
+                        <div class="actions" style="display: flex; gap: 8px;">
+                            <button id="btnSelectShareFile" class="btn-primary-action">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 5v14m-7-7h14"/>
+                                </svg>
+                                + 选择电脑文件分享
+                            </button>
+                            <button id="btnClearShareFiles" class="btn-danger-outline" title="清空分享">清空分享</button>
+                            <button id="btnRefreshLocalFiles" class="btn-secondary" title="刷新列表">🔄 刷新</button>
+                        </div>
                     </div>
-                    <div class="actions">
-                        <button id="btnRefresh" class="btn-secondary" title="刷新列表">
-                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M23 4v6h-6M1 20v-6h6M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
-                            </svg>
-                            刷新
-                        </button>
+
+                    <div id="localSharedFileListContainer" class="file-list"></div>
+
+                    <div id="localEmptyState" class="empty-state">
+                        <div class="empty-icon">📂</div>
+                        <p>电脑端当前暂未添加对外分享文件</p>
+                        <span>点击上方「+ 选择电脑文件分享」或拖拽文件到下方窗口，手机即可在浏览器或 App 中下载</span>
                     </div>
-                </div>
+                </section>
 
-                <div id="fileListContainer" class="file-list"></div>
+                <!-- 面板 A2：本机已接收的文件列表 (保存于 Downloads/WenBox) -->
+                <section class="card" style="margin-top: 20px;">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <h2>📥 本机已接收的文件</h2>
+                            <span class="subtitle">手机或其他设备发送到本电脑的文件 (直存至系统 Downloads/WenBox 目录)</span>
+                        </div>
+                        <div class="actions" style="display: flex; gap: 8px;">
+                            <button id="btnOpenDownloadFolder" class="btn-secondary">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                                </svg>
+                                📂 打开保存目录
+                            </button>
+                            <button id="btnRefreshReceivedFiles" class="btn-secondary">🔄 刷新</button>
+                        </div>
+                    </div>
 
-                <div id="emptyState" class="empty-state">
-                    <div class="empty-icon">📁</div>
-                    <p>手机端当前暂无待发送文件</p>
-                    <span>请在手机上点击「选择文件」或在相册/管理器中点击「分享」</span>
-                </div>
-            </section>
+                    <div id="receivedFileListContainer" class="file-list"></div>
 
-            <!-- 面板 2：向手机投送文件 (反向上传) -->
+                    <div id="receivedEmptyState" class="empty-state" style="padding: 24px 20px;">
+                        <div class="empty-icon" style="font-size: 32px;">📥</div>
+                        <p style="font-size: 14px;">暂未接收到任何文件</p>
+                        <span>手机端在浏览器或 App 中点击「发送文件」，文件将直接传输保存至此</span>
+                    </div>
+                </section>
+            </div>
+
+            <!-- 视图 B：当前选定为「远程设备 (如手机)」时的面板 -->
+            <div id="remoteViewSection" style="display: none;">
+                <!-- 日期归类直存模式 (报销/照片/发票/日志整理利器) -->
+                <section class="card reimbursement-banner" style="margin-top: 20px;">
+                    <div class="reimbursement-header">
+                        <div class="reimbursement-info">
+                            <span class="reimbursement-tag">📁 日期归类直存模式 (报销/发票/照片整理，免解压)</span>
+                            <h3>指定电脑根目录，按日期与自定义主题自动建文件夹直存</h3>
+                            <p>将所选远程设备的文件一键存入电脑目标目录，自动按当天日期归档（如 <span class="highlight-code" id="previewFolderName">YYYY-MM-DD_报销</span>），告别散乱和繁琐解压！</p>
+                        </div>
+                        <div class="reimbursement-action" style="display: flex; flex-direction: column; gap: 8px; align-items: flex-end;">
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <label style="font-size: 12px; color: #94A3B8;">文件夹后缀名：</label>
+                                <input type="text" id="customFolderSuffix" class="converter-input" style="width: 120px; padding: 5px 10px; font-size: 13px;" value="报销" placeholder="如: 报销/发票/现场照片">
+                            </div>
+                            <button id="btnSelectReimburseDir" class="btn-reimburse">
+                                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                                </svg>
+                                选择电脑根目录并自动归档
+                            </button>
+                        </div>
+                    </div>
+                    <div id="reimburseStatus" class="reimburse-status" style="display: none;"></div>
+                </section>
+
+                <!-- 远程设备的文件列表 (按需下载) -->
+                <section class="card section-download" style="margin-top: 20px;">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <h2 id="currentViewingDeviceTitle">📂 对方分享的文件</h2>
+                            <span id="fileCount" class="counter">0 个文件</span>
+                        </div>
+                        <div class="actions">
+                            <button id="btnRefreshRemoteFiles" class="btn-secondary" title="刷新列表">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M23 4v6h-6M1 20v-6h6M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
+                                </svg>
+                                刷新
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="fileListContainer" class="file-list"></div>
+
+                    <div id="emptyState" class="empty-state">
+                        <div class="empty-icon">📁</div>
+                        <p>对方设备当前暂无待发送文件</p>
+                        <span>请在手机端点击「选择文件」或在相册/管理器中点击「分享」</span>
+                    </div>
+                </section>
+            </div>
+
+            <!-- 向当前设备投送文件通用组件 (不管是本机还是远程) -->
             <section class="card section-upload" style="margin-top: 20px;">
                 <div class="section-header">
                     <div class="section-title">
-                        <h2>发送文件到手机</h2>
-                        <span class="subtitle">拖拽文件或点击选择，将直接存入手机「下载」目录</span>
+                        <h2 id="uploadSectionTitle">📤 发送文件</h2>
+                        <span id="uploadSectionSubtitle" class="subtitle">拖拽文件或点击选择，将文件直传至目标设备</span>
                     </div>
                 </div>
 
@@ -125,7 +210,7 @@
                             </svg>
                         </div>
                         <p class="drop-text">拖拽任意文件到这里，或 <span class="browse-link">点击选择</span></p>
-                        <p class="drop-hint">局域网无损点对点高速直传</p>
+                        <p class="drop-hint" id="dropZoneHint">局域网无损点对点高速直传</p>
                     </div>
                 </div>
 
