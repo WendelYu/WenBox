@@ -33,7 +33,11 @@ object UdpDiscoveryManager {
         // 1. 接收广播
         recvThread = thread(name = "UDP-Recv") {
             try {
-                val socket = DatagramSocket(DISCOVERY_PORT)
+                val socket = DatagramSocket(null).apply {
+                    reuseAddress = true
+                    broadcast = true
+                    bind(java.net.InetSocketAddress(DISCOVERY_PORT))
+                }
                 val buffer = ByteArray(1024)
                 val packet = DatagramPacket(buffer, buffer.size)
 
@@ -66,13 +70,11 @@ object UdpDiscoveryManager {
             }
         }
 
-        // 2. 发送广播 (每 3 秒向局域网宣告自身)
+        // 2. 发送广播 (向所有子网广播与 255.255.255.255 宣告自身)
         sendThread = thread(name = "UDP-Send") {
             try {
                 val socket = DatagramSocket()
                 socket.broadcast = true
-                val broadcastAddr = InetAddress.getByName("255.255.255.255")
-
                 val deviceName = "${Build.BRAND} ${Build.MODEL}"
 
                 while (isRunning) {
@@ -84,8 +86,13 @@ object UdpDiscoveryManager {
                     }.toString()
 
                     val bytes = msg.toByteArray()
-                    val packet = DatagramPacket(bytes, bytes.size, broadcastAddr, DISCOVERY_PORT)
-                    socket.send(packet)
+                    val targetAddrs = getBroadcastAddresses()
+                    for (bAddr in targetAddrs) {
+                        try {
+                            val packet = DatagramPacket(bytes, bytes.size, bAddr, DISCOVERY_PORT)
+                            socket.send(packet)
+                        } catch (_: Exception) {}
+                    }
 
                     // 清理超时 15 秒未通信的下线设备
                     val now = System.currentTimeMillis()
@@ -107,6 +114,42 @@ object UdpDiscoveryManager {
                 // ignore
             }
         }
+    }
+
+    private fun getBroadcastAddresses(): List<InetAddress> {
+        val list = mutableListOf<InetAddress>()
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                val netIf = interfaces.nextElement()
+                if (netIf.isLoopback || !netIf.isUp) continue
+                for (addr in netIf.interfaceAddresses) {
+                    val broadcast = addr.broadcast
+                    if (broadcast != null) {
+                        list.add(broadcast)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        try {
+            list.add(InetAddress.getByName("255.255.255.255"))
+        } catch (_: Exception) {}
+        return list.distinct()
+    }
+
+    fun registerDevice(name: String, ip: String, port: Int, platform: String) {
+        val key = "$ip:$port"
+        val device = PeerDevice(
+            name = name,
+            ip = ip,
+            port = port,
+            platform = platform,
+            lastSeen = System.currentTimeMillis()
+        )
+        activeDevices[key] = device
+        notifyDevicesChanged()
     }
 
     fun stop() {

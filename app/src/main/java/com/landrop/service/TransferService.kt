@@ -96,15 +96,23 @@ class TransferService : Service() {
             ).apply {
                 acquire()
             }
+
+            multicastLock = wifiManager.createMulticastLock("WenDrop::MulticastLock").apply {
+                setReferenceCounted(true)
+                acquire()
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
+    private var multicastLock: WifiManager.MulticastLock? = null
+
     private fun releaseLocks() {
         try {
             if (wakeLock?.isHeld == true) wakeLock?.release()
             if (wifiLock?.isHeld == true) wifiLock?.release()
+            if (multicastLock?.isHeld == true) multicastLock?.release()
         } catch (e: Exception) {
             e.printStackTrace()
         }

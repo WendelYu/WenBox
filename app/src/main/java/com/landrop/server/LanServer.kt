@@ -1,6 +1,9 @@
 package com.landrop.server
 
 import android.content.Context
+import android.os.Build
+import com.landrop.utils.NetworkUtils
+import com.landrop.utils.UdpDiscoveryManager
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
 import org.json.JSONObject
@@ -12,8 +15,8 @@ import java.nio.charset.StandardCharsets
 
 class LanServer(
     private val context: Context,
-    port: Int = 9527
-) : NanoHTTPD(port) {
+    private val serverPort: Int = 9527
+) : NanoHTTPD(serverPort) {
 
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri
@@ -32,6 +35,52 @@ class LanServer(
                 uri == "/" || uri == "/index.html" -> serveAsset("web/index.html", "text/html; charset=UTF-8")
                 uri == "/style.css" -> serveAsset("web/style.css", "text/css; charset=UTF-8")
                 uri == "/app.js" -> serveAsset("web/app.js", "application/javascript; charset=UTF-8")
+
+                // 1.5 服务状态信息 (供局域网其他设备/网页感知本端信息)
+                method == Method.GET && uri == "/api/status" -> {
+                    val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
+                    val json = JSONObject().apply {
+                        put("device", "${Build.BRAND} ${Build.MODEL}")
+                        put("ip", primaryIp)
+                        put("port", serverPort)
+                        put("running", true)
+                        put("platform", "Android")
+                    }
+                    newFixedLengthResponse(
+                        Response.Status.OK,
+                        "application/json; charset=UTF-8",
+                        json.toString()
+                    )
+                }
+
+                // 1.6 在线节点列表
+                method == Method.GET && uri == "/api/devices" -> {
+                    val devices = UdpDiscoveryManager.getDevices()
+                    val jsonArray = JSONArray()
+                    for (d in devices) {
+                        val item = JSONObject().apply {
+                            put("name", d.name)
+                            put("ip", d.ip)
+                            put("port", d.port)
+                            put("platform", d.platform)
+                            put("lastSeen", d.lastSeen)
+                        }
+                        jsonArray.put(item)
+                    }
+                    val result = JSONObject().apply {
+                        put("devices", jsonArray)
+                    }
+                    newFixedLengthResponse(
+                        Response.Status.OK,
+                        "application/json; charset=UTF-8",
+                        result.toString()
+                    )
+                }
+
+                // 1.7 局域网节点主动握手 / 探测
+                method == Method.POST && uri == "/api/probe" -> {
+                    handleProbe(session)
+                }
 
                 // 2. 获取待下载文件列表
                 method == Method.GET && uri == "/api/files" -> {
@@ -208,9 +257,53 @@ class LanServer(
         )
     }
 
+    private fun handleProbe(session: IHTTPSession): Response {
+        val map = HashMap<String, String>()
+        try {
+            session.parseBody(map)
+        } catch (_: Exception) {}
+
+        val postData = map["postData"]
+        var devName = "未知设备"
+        var devPlatform = "Windows"
+        var devPort = 9527
+        var clientIp = ""
+
+        if (!postData.isNullOrBlank()) {
+            try {
+                val json = JSONObject(postData)
+                devName = json.optString("device", devName)
+                devPlatform = json.optString("platform", devPlatform)
+                devPort = json.optInt("port", devPort)
+                clientIp = json.optString("ip", "")
+            } catch (_: Exception) {}
+        }
+
+        if (clientIp.isBlank()) {
+            clientIp = session.headers["http-client-ip"]
+                ?: session.headers["remote-addr"]
+                ?: session.remoteIpAddress
+                ?: ""
+        }
+
+        if (clientIp.isNotBlank()) {
+            UdpDiscoveryManager.registerDevice(devName, clientIp, devPort, devPlatform)
+        }
+
+        val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
+        val respJson = JSONObject().apply {
+            put("device", "${Build.BRAND} ${Build.MODEL}")
+            put("ip", primaryIp)
+            put("port", serverPort)
+            put("running", true)
+            put("platform", "Android")
+        }
+        return newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", respJson.toString())
+    }
+
     private fun addCorsHeaders(response: Response) {
         response.addHeader("Access-Control-Allow-Origin", "*")
-        response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        response.addHeader("Access-Control-Allow-Headers", "Content-Type, Range")
+        response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
+        response.addHeader("Access-Control-Allow-Headers", "Content-Type, Range, Authorization")
     }
 }

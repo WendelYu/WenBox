@@ -142,13 +142,31 @@
     // ---------------- 局域网在线设备自发现与节点切换 ----------------
     let knownDevices = [];
 
+    function mergeKnownDevices(newDevs) {
+        const map = new Map();
+        // 现存设备先进入 map
+        knownDevices.forEach(d => {
+            map.set(`${d.ip}:${d.port}`, d);
+        });
+        // 用新获取到的设备覆盖/更新
+        newDevs.forEach(d => {
+            map.set(`${d.ip}:${d.port}`, d);
+        });
+        knownDevices = Array.from(map.values());
+        renderDeviceList();
+    }
+
     async function pollLanDevices() {
         try {
+            if (window.__TAURI__) {
+                const devs = await window.__TAURI__.invoke('get_lan_devices');
+                mergeKnownDevices(devs || []);
+                return;
+            }
             const res = await fetch('/api/devices?t=' + Date.now());
             if (res.ok) {
                 const data = await res.json();
-                knownDevices = data.devices || [];
-                renderDeviceList();
+                mergeKnownDevices(data.devices || []);
             }
         } catch (e) {
             // ignore
@@ -199,30 +217,92 @@
         }
         renderDeviceList();
         loadFiles();
+        if (typeof pollChatMessages === 'function') pollChatMessages();
         showToast(`已切换至节点: ${name}`);
     };
 
     if (btnConnectCustomIp && customTargetIp) {
-        btnConnectCustomIp.addEventListener('click', () => {
-            const ip = customTargetIp.value.trim();
-            if (!ip) return;
-            const targetUrl = ip.startsWith('http') ? ip : `http://${ip}:9527`;
-            window.switchDeviceNode(targetUrl, `手动连接 (${ip})`);
+        btnConnectCustomIp.addEventListener('click', async () => {
+            const rawIp = customTargetIp.value.trim();
+            if (!rawIp) {
+                showToast('请输入目标设备的 IP 地址');
+                return;
+            }
+
+            btnConnectCustomIp.disabled = true;
+            btnConnectCustomIp.textContent = '连接中...';
+
+            try {
+                if (window.__TAURI__) {
+                    // Tauri 原生模式：通过 Rust 直连探测，绕过 Mixed Content 限制
+                    const dev = await window.__TAURI__.invoke('connect_device_node', { target: rawIp });
+                    const targetUrl = `http://${dev.ip}:${dev.port}`;
+                    mergeKnownDevices([dev]);
+                    window.switchDeviceNode(targetUrl, dev.name);
+                    showToast(`已成功连接至: ${dev.name} (${dev.ip})`);
+                } else {
+                    // 纯浏览器模式
+                    let base = rawIp;
+                    if (!base.startsWith('http://') && !base.startsWith('https://')) {
+                        base = 'http://' + base;
+                    }
+                    if (!base.includes(':', 7)) {
+                        base = base + ':9527';
+                    }
+                    base = base.replace(/\/+$/, '');
+
+                    const probeRes = await fetch(base + '/api/status?t=' + Date.now());
+                    if (!probeRes.ok) throw new Error(`HTTP ${probeRes.status}`);
+                    const devInfo = await probeRes.json();
+                    const dev = {
+                        name: devInfo.device || '局域网设备',
+                        ip: devInfo.ip || rawIp,
+                        port: devInfo.port || 9527,
+                        platform: devInfo.platform || 'Android',
+                        lastSeen: Date.now()
+                    };
+                    mergeKnownDevices([dev]);
+                    window.switchDeviceNode(base, dev.name);
+                    showToast(`已成功连接至: ${dev.name}`);
+                }
+            } catch (err) {
+                console.error('手动连接错误:', err);
+                alert(`连接失败: ${err.message || err}\n\n排查建议：\n1. 请确认两台设备连接在同一个 WiFi 局域网（关闭路由器的访客隔离）\n2. 确认手机端 WenBox 传输服务已开启\n3. 检查填写的手机 IP 是否完全正确`);
+            } finally {
+                btnConnectCustomIp.disabled = false;
+                btnConnectCustomIp.textContent = '连接设备';
+            }
         });
     }
 
     async function loadFiles() {
         try {
+            if (window.__TAURI__) {
+                currentFiles = await window.__TAURI__.invoke('fetch_node_files', { baseUrl: currentTargetBaseUrl });
+                renderFiles();
+                return;
+            }
+
             const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/files?t=' + Date.now();
             const res = await fetch(api);
-            if (!res.ok) throw new Error('网络异常');
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             currentFiles = data.files || [];
             renderFiles();
         } catch (err) {
-            // 静默失败
+            console.error('loadFiles error:', err);
+            if (fileListContainer && currentFiles.length === 0) {
+                fileListContainer.innerHTML = `
+                    <div style="text-align:center; padding:24px; color:#EF4444; font-size:13px;">
+                        <div>⚠️ 无法拉取该设备的文件列表 (${err.message || err})</div>
+                        <div style="color:#6B7280; font-size:12px; margin-top:4px;">请检查对方设备是否在线且已开启 WenBox 服务</div>
+                        <button onclick="window.loadFiles()" style="margin-top:10px; padding:4px 12px; background:#2563EB; color:#fff; border:none; border-radius:4px; cursor:pointer;">点击重试</button>
+                    </div>
+                `;
+            }
         }
     }
+    window.loadFiles = loadFiles;
 
     function renderFiles() {
         if (!fileCount || !fileListContainer || !emptyState) return;
@@ -289,7 +369,7 @@
             const suffix = (customFolderSuffix && customFolderSuffix.value.trim()) ? `_${customFolderSuffix.value.trim()}` : '';
             const dateFolderName = `${getTodayDateStr()}${suffix}`;
 
-            // 模式 A：如果是 Windows / Mac 客户端原生运行 (Tauri 环境)
+            // 模式 A：如果是 Windows / Mac 客户端原生运行 (Tauri 环境) -> 原生文件夹选择 + Rust 极速流式存盘
             if (window.__TAURI__ && window.__TAURI__.dialog) {
                 try {
                     const selectedPath = await window.__TAURI__.dialog.open({
@@ -309,16 +389,12 @@
                         reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${currentFiles.length}]: ${f.name}...`;
 
                         try {
-                            const fileResp = await fetch((currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}`);
-                            if (!fileResp.ok) throw new Error('下载失败');
-                            const blob = await fileResp.blob();
-                            const b64 = await blobToBase64(blob);
-
-                            await window.__TAURI__.invoke('save_file_to_directory', {
+                            const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : `http://127.0.0.1:9527`) + `/api/download/${f.id}`;
+                            await window.__TAURI__.invoke('save_remote_file_to_directory', {
+                                downloadUrl: downloadUrl,
                                 dirPath: selectedPath,
                                 folderName: dateFolderName,
-                                fileName: f.name,
-                                bytesBase64: b64
+                                fileName: f.name
                             });
                             successCount++;
                         } catch (saveErr) {
@@ -335,7 +411,7 @@
                 return;
             }
 
-            // 模式 B：如果是 Chrome / Edge 浏览器打开网页环境
+            // 模式 B：如果在支持原生本地目录的 Secure Context 浏览器环境下 (如 localhost 或 https)
             if (window.showDirectoryPicker) {
                 try {
                     const rootDirHandle = await window.showDirectoryPicker({
@@ -379,8 +455,37 @@
                 return;
             }
 
-            // 模式 C：降级提示
-            alert('您的环境暂不支持直接选择本地文件夹。建议在 Chrome/Edge 浏览器中打开本网址，或使用最新打包的 WenBox 桌面客户端。');
+            // 模式 C：普通浏览器通过局域网 HTTP 访问 (因浏览器安全规范限制，无法直接调取操作系统底层文件夹选择器)
+            // 自动降级为【一键批量下载全部文件到浏览器的“下载”目录】
+            reimburseStatus.style.display = 'block';
+            reimburseStatus.innerHTML = `
+                <div style="margin-bottom:8px; line-height:1.5;">
+                    💡 <b>提示：</b>当前使用纯网页访问（浏览器安全规范限制非 HTTPS 网站直接读写本地磁盘目录）。<br>
+                    已为您自动开启<b>【批量下载全部文件】</b>至本机的“下载”目录！<br>
+                    <span style="color:#60A5FA;">👉 如需选择电脑任意磁盘位置（如 D:\\发票归档）按日期自动建文件夹直存，推荐直接运行电脑桌面端的 <b>WenBox.exe</b>。</span>
+                </div>
+            `;
+
+            let downloadedCount = 0;
+            for (let i = 0; i < currentFiles.length; i++) {
+                const f = currentFiles[i];
+                reimburseStatus.innerHTML += `<div style="font-size:12px; color:#9CA3AF;">⏳ 正在下载 [${i + 1}/${currentFiles.length}]: ${escapeHtml(f.name)}...</div>`;
+                const dlUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}`;
+
+                const a = document.createElement('a');
+                a.href = dlUrl;
+                a.download = f.name;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                downloadedCount++;
+
+                // 稍微延时 350ms 避免浏览器触发并发弹窗拦截
+                await new Promise(r => setTimeout(r, 350));
+            }
+
+            reimburseStatus.innerHTML += `<div style="font-size:13px; color:#10B981; margin-top:6px; font-weight:bold;">✅ 已触发全部 ${downloadedCount} 个文件的自动批量下载，请前往电脑浏览器的“下载”目录查看！</div>`;
+            showToast(`已批量下载 ${downloadedCount} 个文件`);
         });
     }
 
@@ -497,11 +602,16 @@
 
     async function pollChatMessages() {
         try {
-            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/messages?t=' + Date.now();
-            const res = await fetch(api);
-            if (!res.ok) return;
-            const data = await res.json();
-            const messages = data.messages || [];
+            let messages = [];
+            if (window.__TAURI__) {
+                messages = await window.__TAURI__.invoke('fetch_node_messages', { baseUrl: currentTargetBaseUrl });
+            } else {
+                const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/messages?t=' + Date.now();
+                const res = await fetch(api);
+                if (!res.ok) return;
+                const data = await res.json();
+                messages = data.messages || [];
+            }
 
             let hasNew = false;
             messages.forEach(msg => {
@@ -565,6 +675,17 @@
         if (!text) return;
 
         try {
+            if (window.__TAURI__) {
+                await window.__TAURI__.invoke('send_node_message', {
+                    baseUrl: currentTargetBaseUrl,
+                    senderName: clientSenderName,
+                    content: text
+                });
+                webChatMessageInput.value = '';
+                pollChatMessages();
+                return;
+            }
+
             const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/messages';
             const resp = await fetch(api, {
                 method: 'POST',
