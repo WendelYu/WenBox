@@ -569,7 +569,7 @@ fn save_remote_file_to_directory(download_url: String, dir_path: String, folder_
 }
 
 #[tauri::command]
-fn fetch_node_messages(base_url: String, state: tauri::State<Arc<AppState>>) -> Result<Vec<ChatMessage>, String> {
+fn fetch_node_messages(base_url: String, token: Option<String>, state: tauri::State<Arc<AppState>>) -> Result<Vec<ChatMessage>, String> {
     let clean = base_url.trim().trim_end_matches('/');
     if clean.is_empty() || clean.contains("localhost") || clean.contains("127.0.0.1") {
         let msgs = state.messages.lock().unwrap().clone();
@@ -577,10 +577,13 @@ fn fetch_node_messages(base_url: String, state: tauri::State<Arc<AppState>>) -> 
     }
 
     let url = format!("{}/api/messages", clean);
-    let resp = ureq::get(&url)
-        .timeout(Duration::from_secs(5))
-        .call()
-        .map_err(|e| format!("获取消息失败: {}", e))?;
+    let mut req = ureq::get(&url).timeout(Duration::from_secs(5));
+    if let Some(ref t) = token {
+        if !t.is_empty() {
+            req = req.set("X-Room-Token", t);
+        }
+    }
+    let resp = req.call().map_err(|e| format!("获取消息失败: {}", e))?;
 
     let val: serde_json::Value = resp.into_json().map_err(|e| format!("解析消息失败: {}", e))?;
     let mut list = Vec::new();
@@ -604,7 +607,7 @@ fn fetch_node_messages(base_url: String, state: tauri::State<Arc<AppState>>) -> 
 }
 
 #[tauri::command]
-fn send_node_message(base_url: String, sender_name: String, content: String, state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
+fn send_node_message(base_url: String, sender_name: String, content: String, token: Option<String>, state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
     let clean = base_url.trim().trim_end_matches('/');
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -629,10 +632,15 @@ fn send_node_message(base_url: String, sender_name: String, content: String, sta
         "content": content
     });
 
-    let resp = ureq::post(&url)
+    let mut req = ureq::post(&url)
         .set("Content-Type", "application/json")
-        .timeout(Duration::from_secs(5))
-        .send_string(&body.to_string());
+        .timeout(Duration::from_secs(5));
+    if let Some(ref t) = token {
+        if !t.is_empty() {
+            req = req.set("X-Room-Token", t);
+        }
+    }
+    let resp = req.send_string(&body.to_string());
 
     match resp {
         Ok(_) => {
@@ -651,7 +659,7 @@ fn send_node_message(base_url: String, sender_name: String, content: String, sta
 }
 
 #[tauri::command]
-fn upload_local_file_to_remote(target_base_url: String, file_path: String) -> Result<String, String> {
+fn upload_local_file_to_remote(target_base_url: String, file_path: String, token: Option<String>) -> Result<String, String> {
     let p = PathBuf::from(&file_path);
     if !p.exists() {
         return Err("文件不存在".into());
@@ -671,10 +679,15 @@ fn upload_local_file_to_remote(target_base_url: String, file_path: String) -> Re
     body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
 
     let content_type = format!("multipart/form-data; boundary={}", boundary);
-    let resp = ureq::post(&url)
+    let mut req = ureq::post(&url)
         .set("Content-Type", &content_type)
-        .timeout(Duration::from_secs(300))
-        .send_bytes(&body);
+        .timeout(Duration::from_secs(300));
+    if let Some(ref t) = token {
+        if !t.is_empty() {
+            req = req.set("X-Room-Token", t);
+        }
+    }
+    let resp = req.send_bytes(&body);
 
     match resp {
         Ok(_) => Ok(format!("成功发送文件: {}", file_name)),
@@ -1170,11 +1183,12 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                             mime_type: mime.clone(),
                         };
                         state.received_files.lock().unwrap().insert(0, rec_file.clone());
-                        state.files.lock().unwrap().insert(id, rec_file);
+                        state.files.lock().unwrap().insert(id.clone(), rec_file);
 
                         let json = serde_json::json!({
                             "success": true,
                             "message": format!("文件已成功保存到: {}", target_path.to_string_lossy()),
+                            "fileId": id,
                             "name": safe_name,
                             "size": size
                         }).to_string();

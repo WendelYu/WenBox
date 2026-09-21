@@ -457,6 +457,9 @@
             }
             pollDiscoveredRooms();
         }
+        if (typeof updateChatGatingUi === 'function') {
+            updateChatGatingUi(mode, data);
+        }
     }
 
     // ---------------- 创建房间 (成为服务端) ----------------
@@ -1406,12 +1409,32 @@
     setInterval(checkSelfServerStatus, 6000);
 
 
-    // ---------------- 模块二：局域网双向即时互发消息 / 聊天室 ----------------
+    // ---------------- 模块二：局域网双向即时互发消息 / 聊天室 (需创建或加入房间后才可发送) ----------------
+    const chatLockedState = document.getElementById('chatLockedState');
+    const chatActiveContent = document.getElementById('chatActiveContent');
+    const chatRoomBadge = document.getElementById('chatRoomBadge');
+    const chatRoomPinBadge = document.getElementById('chatRoomPinBadge');
+    const chatRoomSubinfo = document.getElementById('chatRoomSubinfo');
+    const btnChatGoLobby = document.getElementById('btnChatGoLobby');
+    const btnChatCreateRoom = document.getElementById('btnChatCreateRoom');
+
     const webChatMessages = document.getElementById('webChatMessages');
     const webEmptyChat = document.getElementById('webEmptyChat');
     const webChatMessageInput = document.getElementById('webChatMessageInput');
     const webBtnSendMessage = document.getElementById('webBtnSendMessage');
     const webBtnClearChat = document.getElementById('webBtnClearChat');
+
+    const chatBtnSendImage = document.getElementById('chatBtnSendImage');
+    const chatImageFileInput = document.getElementById('chatImageFileInput');
+    const chatBtnSendFile = document.getElementById('chatBtnSendFile');
+    const chatFileInput = document.getElementById('chatFileInput');
+    const chatDropOverlay = document.getElementById('chatDropOverlay');
+
+    const chatImageModal = document.getElementById('chatImageModal');
+    const chatModalImage = document.getElementById('chatModalImage');
+    const btnCloseChatImageModal = document.getElementById('btnCloseChatImageModal');
+    const chatModalDownloadBtn = document.getElementById('chatModalDownloadBtn');
+    const chatModalCopyBtn = document.getElementById('chatModalCopyBtn');
 
     let lastKnownMessageTimestamp = 0;
     const knownMessageIds = new Set();
@@ -1420,13 +1443,73 @@
                        (navigator.userAgent.indexOf('Win') !== -1) ? 'Windows' : '电脑端';
     const clientSenderName = `💻 ${osPlatform}端`;
 
+    // 房间模式与聊天室门禁联动
+    function updateChatGatingUi(mode, data) {
+        if (mode === 'host') {
+            if (chatLockedState) chatLockedState.style.display = 'none';
+            if (chatActiveContent) chatActiveContent.style.display = 'flex';
+            if (chatRoomBadge) {
+                chatRoomBadge.textContent = `👑 房主服务中: ${data && data.roomName ? data.roomName : '我的房间'}`;
+                chatRoomBadge.className = 'chat-room-badge';
+            }
+            if (chatRoomPinBadge) {
+                if (data && data.pin) {
+                    chatRoomPinBadge.style.display = 'inline-block';
+                    chatRoomPinBadge.textContent = `🔒 PIN: ${data.pin}`;
+                } else {
+                    chatRoomPinBadge.style.display = 'none';
+                }
+            }
+            if (chatRoomSubinfo) {
+                chatRoomSubinfo.textContent = `您已作为房主开启房间，同局域网成员加入后可在此秒发富文本、代码、截图与文件`;
+            }
+            pollChatMessages();
+        } else if (mode === 'joined') {
+            if (chatLockedState) chatLockedState.style.display = 'none';
+            if (chatActiveContent) chatActiveContent.style.display = 'flex';
+            if (chatRoomBadge) {
+                chatRoomBadge.textContent = `📱 已入房: ${data && (data.roomName || data.roomId) ? (data.roomName || data.roomId) : '局域网房间'}`;
+                chatRoomBadge.className = 'chat-room-badge';
+            }
+            if (chatRoomPinBadge) chatRoomPinBadge.style.display = 'none';
+            if (chatRoomSubinfo) {
+                chatRoomSubinfo.textContent = `已连接房主「${data && data.hostDevice ? data.hostDevice : '主机'}」，实时双向通讯通道已建立`;
+            }
+            pollChatMessages();
+        } else {
+            // 未在房间中，锁定聊天室
+            if (chatLockedState) chatLockedState.style.display = 'flex';
+            if (chatActiveContent) chatActiveContent.style.display = 'none';
+        }
+    }
+
+    // 锁屏大厅按钮事件绑定
+    if (btnChatGoLobby) {
+        btnChatGoLobby.addEventListener('click', () => {
+            const transferTabBtn = document.querySelector('.nav-tab[data-tab="tab-transfer"]');
+            if (transferTabBtn) transferTabBtn.click();
+        });
+    }
+
+    if (btnChatCreateRoom) {
+        btnChatCreateRoom.addEventListener('click', () => {
+            if (typeof window.openCreateRoomModal === 'function') {
+                window.openCreateRoomModal();
+            }
+        });
+    }
+
+    // 轮询聊天消息
     async function pollChatMessages() {
         if (roomState.mode === 'client') return;
         try {
             let messages = [];
             const invoke = getTauriInvoke();
             if (invoke) {
-                messages = await invoke('fetch_node_messages', { baseUrl: currentTargetBaseUrl });
+                messages = await invoke('fetch_node_messages', {
+                    baseUrl: currentTargetBaseUrl,
+                    token: roomState.token || null
+                });
             } else {
                 const tokenParam = roomState.token ? `&token=${encodeURIComponent(roomState.token)}` : '';
                 const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/messages?t=' + Date.now() + tokenParam;
@@ -1466,6 +1549,39 @@
         return `${h}:${m}:${s}`;
     }
 
+    function escapeHtml(text) {
+        if (!text) return '';
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function resolveChatUrl(url) {
+        if (!url) return '';
+        if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) return url;
+        const base = currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin();
+        return base.replace(/\/+$/, '') + (url.startsWith('/') ? url : '/' + url);
+    }
+
+    function getFileIconByExtension(name) {
+        const ext = (name.split('.').pop() || '').toLowerCase();
+        if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2'].includes(ext)) return '📦';
+        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return '🖼️';
+        if (['pdf'].includes(ext)) return '📑';
+        if (['doc', 'docx'].includes(ext)) return '📄';
+        if (['xls', 'xlsx', 'csv'].includes(ext)) return '📊';
+        if (['ppt', 'pptx'].includes(ext)) return '📽️';
+        if (['mp3', 'wav', 'flac', 'aac', 'ogg'].includes(ext)) return '🎵';
+        if (['mp4', 'mkv', 'avi', 'mov', 'wmv'].includes(ext)) return '🎬';
+        if (['apk'].includes(ext)) return '🤖';
+        if (['js', 'ts', 'py', 'rs', 'c', 'cpp', 'java', 'html', 'css', 'json', 'sh', 'sql'].includes(ext)) return '💻';
+        return '📁';
+    }
+
+    // 格式化渲染富文本消息气泡 (支持 Markdown 代码块、链接识别、图片预览、文件卡片)
     function renderChatMessage(msg) {
         if (!webChatMessages) return;
         if (webEmptyChat) webEmptyChat.style.display = 'none';
@@ -1481,23 +1597,161 @@
 
         const bubble = document.createElement('div');
         bubble.className = 'chat-msg-bubble';
-        bubble.textContent = msg.content;
-        bubble.title = '点击复制此消息';
-        bubble.addEventListener('click', () => {
-            navigator.clipboard.writeText(msg.content).then(() => {
-                showToast('已复制该条消息');
+
+        const content = msg.content || '';
+
+        // 1. 判断是否为图片消息
+        const isImage = (content.startsWith('[image:') && content.endsWith(']'))
+            || content.startsWith('data:image/')
+            || (/^https?:\/\/[^\s]+\.(png|jpe?g|gif|webp|bmp|svg)(\?[^\s]*)?$/i.test(content));
+
+        if (isImage) {
+            let imgSrc = content;
+            if (content.startsWith('[image:') && content.endsWith(']')) {
+                imgSrc = content.slice(7, -1);
+            }
+            imgSrc = resolveChatUrl(imgSrc);
+
+            const thumbWrap = document.createElement('div');
+            thumbWrap.className = 'chat-img-thumb-wrapper';
+            thumbWrap.title = '点击查看大图';
+
+            const img = document.createElement('img');
+            img.className = 'chat-img-thumb';
+            img.src = imgSrc;
+            img.alt = '聊天图片';
+            img.loading = 'lazy';
+
+            const overlay = document.createElement('span');
+            overlay.className = 'chat-img-overlay';
+            overlay.textContent = '🔍 查看原图';
+
+            thumbWrap.appendChild(img);
+            thumbWrap.appendChild(overlay);
+            thumbWrap.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openChatImageModal(imgSrc);
             });
-        });
+
+            bubble.appendChild(thumbWrap);
+        }
+        // 2. 判断是否为文件卡片消息 [file:name|size|url]
+        else if (content.startsWith('[file:') && content.endsWith(']')) {
+            const inner = content.slice(6, -1);
+            const parts = inner.split('|');
+            const fileName = parts[0] || '未知文件';
+            const fileSize = parts[1] || '';
+            const rawUrl = parts[2] || '';
+            const downloadUrl = resolveChatUrl(rawUrl);
+
+            const fileCard = document.createElement('div');
+            fileCard.className = 'chat-file-card';
+
+            const fileIcon = document.createElement('div');
+            fileIcon.className = 'chat-file-icon';
+            fileIcon.textContent = getFileIconByExtension(fileName);
+
+            const fileDetails = document.createElement('div');
+            fileDetails.className = 'chat-file-details';
+
+            const nameEl = document.createElement('div');
+            nameEl.className = 'chat-file-name';
+            nameEl.textContent = fileName;
+            nameEl.title = fileName;
+
+            const sizeEl = document.createElement('div');
+            sizeEl.className = 'chat-file-size';
+            sizeEl.textContent = fileSize ? `大小: ${fileSize}` : '局域网分享文件';
+
+            fileDetails.appendChild(nameEl);
+            fileDetails.appendChild(sizeEl);
+
+            const downloadLink = document.createElement('a');
+            downloadLink.className = 'chat-file-download-btn';
+            downloadLink.href = downloadUrl;
+            downloadLink.download = fileName;
+            downloadLink.target = '_blank';
+            downloadLink.innerHTML = '⬇️ 下载';
+            downloadLink.addEventListener('click', (e) => e.stopPropagation());
+
+            fileCard.appendChild(fileIcon);
+            fileCard.appendChild(fileDetails);
+            fileCard.appendChild(downloadLink);
+
+            bubble.appendChild(fileCard);
+        }
+        // 3. 普通文本消息：格式化 Markdown 代码块、行内代码与链接识别
+        else {
+            // 代码块占位替换，防止与普通标签冲突
+            const codeBlocks = [];
+            let processed = content.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+                const idx = codeBlocks.length;
+                codeBlocks.push({ lang: lang || 'CODE', code: code.trim() });
+                return `__CODE_BLOCK_${idx}__`;
+            });
+
+            // HTML 转义
+            processed = escapeHtml(processed);
+
+            // 还原并渲染代码块
+            codeBlocks.forEach((item, idx) => {
+                const placeholder = `__CODE_BLOCK_${idx}__`;
+                const escapedCode = escapeHtml(item.code);
+                const blockHtml = `
+                    <div class="chat-code-block">
+                        <div class="chat-code-header">
+                            <span>${escapeHtml(item.lang.toUpperCase())}</span>
+                            <button class="chat-code-copy-btn" onclick="window.copyChatCode(this)">📋 复制代码</button>
+                        </div>
+                        <pre class="chat-code-content"><code>${escapedCode}</code></pre>
+                    </div>`;
+                processed = processed.replace(placeholder, blockHtml);
+            });
+
+            // 行内代码识别 `code`
+            processed = processed.replace(/`([^`\n]+)`/g, '<code class="chat-inline-code">$1</code>');
+
+            // URL 超链接自动识别
+            processed = processed.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" class="chat-link">$1 ↗</a>');
+
+            // 换行转换
+            processed = processed.replace(/\n/g, '<br>');
+
+            bubble.innerHTML = processed;
+
+            // 点击消息气泡复制原文
+            bubble.title = '点击复制此消息内容';
+            bubble.addEventListener('click', (e) => {
+                if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') return;
+                navigator.clipboard.writeText(content).then(() => {
+                    showToast('已复制该条消息');
+                });
+            });
+        }
 
         row.appendChild(meta);
         row.appendChild(bubble);
         webChatMessages.appendChild(row);
     }
 
-    async function sendChatMessage() {
-        if (!webChatMessageInput) return;
-        const text = webChatMessageInput.value.trim();
-        if (!text) return;
+    // 全局复制代码辅助函数
+    window.copyChatCode = function(btn) {
+        const block = btn.closest('.chat-code-block');
+        if (!block) return;
+        const codeEl = block.querySelector('code');
+        if (!codeEl) return;
+        navigator.clipboard.writeText(codeEl.textContent).then(() => {
+            const originalText = btn.textContent;
+            btn.textContent = '✅ 已复制';
+            setTimeout(() => { btn.textContent = originalText; }, 1500);
+            showToast('代码已复制到剪贴板');
+        });
+    };
+
+    // 底层通用发送消息函数
+    async function sendChatMessageDirect(text) {
+        if (!text || !text.trim()) return;
+        const content = text.trim();
 
         try {
             const invoke = getTauriInvoke();
@@ -1505,9 +1759,9 @@
                 await invoke('send_node_message', {
                     baseUrl: currentTargetBaseUrl,
                     senderName: clientSenderName,
-                    content: text
+                    content: content,
+                    token: roomState.token || null
                 });
-                webChatMessageInput.value = '';
                 pollChatMessages();
                 return;
             }
@@ -1521,12 +1775,11 @@
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify({
-                    content: text,
+                    content: content,
                     senderName: clientSenderName
                 })
             });
             if (resp.ok) {
-                webChatMessageInput.value = '';
                 pollChatMessages();
             } else {
                 showToast('发送失败');
@@ -1536,17 +1789,182 @@
         }
     }
 
-    if (webBtnSendMessage) {
-        webBtnSendMessage.addEventListener('click', sendChatMessage);
+    // 发送输入框中的消息
+    async function sendChatMessage() {
+        if (!webChatMessageInput) return;
+        const text = webChatMessageInput.value.trim();
+        if (!text) return;
+
+        webChatMessageInput.value = '';
+        webChatMessageInput.style.height = 'auto';
+        await sendChatMessageDirect(text);
     }
 
-    if (webChatMessageInput) {
-        webChatMessageInput.addEventListener('keydown', (e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                e.preventDefault();
-                sendChatMessage();
+    // 发送图片文件 (截图或选择的图片)
+    async function sendChatImageFile(file) {
+        if (!file) return;
+        showToast('正在发送图片...');
+
+        // 若小于 400KB，直接使用 Base64 Data URL 发送，秒级直达全平台
+        if (file.size < 400 * 1024) {
+            const reader = new FileReader();
+            reader.onload = async () => {
+                const dataUrl = reader.result;
+                await sendChatMessageDirect(`[image:${dataUrl}]`);
+            };
+            reader.readAsDataURL(file);
+        } else {
+            // 大图通过上传接口分发
+            try {
+                const res = await uploadFileBlobToRoom(file, file.name || 'image.png');
+                const downloadUrl = `/api/download/${res.fileId || encodeURIComponent(res.fileName)}`;
+                await sendChatMessageDirect(`[image:${downloadUrl}]`);
+            } catch (e) {
+                showToast('图片上传发送失败');
+            }
+        }
+    }
+
+    // 发送通用文件卡片
+    async function sendChatDocFile(file) {
+        if (!file) return;
+        showToast(`正在上传发送文件: ${file.name}...`);
+        try {
+            const res = await uploadFileBlobToRoom(file, file.name);
+            const downloadUrl = `/api/download/${res.fileId || encodeURIComponent(res.fileName)}`;
+            const cardMsg = `[file:${file.name}|${formatBytes(file.size)}|${downloadUrl}]`;
+            await sendChatMessageDirect(cardMsg);
+            showToast(`已成功发送文件「${file.name}」到聊天室`);
+        } catch (e) {
+            showToast(`发送文件失败: ${file.name}`);
+        }
+    }
+
+    // 上传 Blob 到当前活动房间的服务端
+    async function uploadFileBlobToRoom(blob, fileName) {
+        const formData = new FormData();
+        formData.append('file', blob, fileName);
+
+        let uploadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/upload';
+        if (roomState.token) {
+            const sep = uploadUrl.includes('?') ? '&' : '?';
+            uploadUrl += `${sep}token=${encodeURIComponent(roomState.token)}`;
+        }
+
+        const headers = {};
+        if (roomState.token) headers['X-Room-Token'] = roomState.token;
+
+        const res = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: headers,
+            body: formData
+        });
+
+        if (!res.ok) throw new Error('上传失败');
+        const data = await res.json();
+        return {
+            fileId: data.fileId || data.id || '',
+            fileName: data.name || fileName,
+            size: data.size || blob.size
+        };
+    }
+
+    // 图片全屏预览 Modal
+    function openChatImageModal(src) {
+        if (!chatImageModal || !chatModalImage) return;
+        chatModalImage.src = src;
+        if (chatModalDownloadBtn) {
+            chatModalDownloadBtn.href = src;
+            chatModalDownloadBtn.download = `wenbox_img_${Date.now()}.png`;
+        }
+        chatImageModal.style.display = 'flex';
+    }
+
+    function closeChatImageModal() {
+        if (chatImageModal) chatImageModal.style.display = 'none';
+        if (chatModalImage) chatModalImage.src = '';
+    }
+
+    if (btnCloseChatImageModal) {
+        btnCloseChatImageModal.addEventListener('click', closeChatImageModal);
+    }
+    if (chatImageModal) {
+        chatImageModal.addEventListener('click', (e) => {
+            if (e.target === chatImageModal) closeChatImageModal();
+        });
+    }
+    if (chatModalCopyBtn) {
+        chatModalCopyBtn.addEventListener('click', async () => {
+            try {
+                if (chatModalImage && chatModalImage.src) {
+                    const response = await fetch(chatModalImage.src);
+                    const blob = await response.blob();
+                    await navigator.clipboard.write([
+                        new ClipboardItem({ [blob.type]: blob })
+                    ]);
+                    showToast('图片已复制到系统剪贴板');
+                }
+            } catch (e) {
+                showToast('当前环境不支持直接复制图片，请使用下载保存');
             }
         });
+    }
+
+    // 快捷工具栏按钮绑定
+    if (chatBtnSendImage && chatImageFileInput) {
+        chatBtnSendImage.addEventListener('click', () => {
+            chatImageFileInput.click();
+        });
+        chatImageFileInput.addEventListener('change', (e) => {
+            const file = e.target.files && e.target.files[0];
+            if (file) sendChatImageFile(file);
+            chatImageFileInput.value = '';
+        });
+    }
+
+    if (chatBtnSendFile && chatFileInput) {
+        chatBtnSendFile.addEventListener('click', () => {
+            chatFileInput.click();
+        });
+        chatFileInput.addEventListener('change', (e) => {
+            const file = e.target.files && e.target.files[0];
+            if (file) sendChatDocFile(file);
+            chatFileInput.value = '';
+        });
+    }
+
+    // 输入框按键监听：Enter 发送，Shift+Enter 换行
+    if (webChatMessageInput) {
+        webChatMessageInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                    e.preventDefault();
+                    sendChatMessage();
+                }
+            }
+        });
+
+        // 剪贴板截图直接 Ctrl+V 粘贴发送
+        webChatMessageInput.addEventListener('paste', async (e) => {
+            const clipboardData = e.clipboardData || window.clipboardData;
+            if (!clipboardData || !clipboardData.items) return;
+
+            for (let i = 0; i < clipboardData.items.length; i++) {
+                const item = clipboardData.items[i];
+                if (item.type.indexOf('image') !== -1) {
+                    e.preventDefault();
+                    const file = item.getAsFile();
+                    if (file) {
+                        await sendChatImageFile(file);
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    if (webBtnSendMessage) {
+        webBtnSendMessage.addEventListener('click', sendChatMessage);
     }
 
     if (webBtnClearChat) {
@@ -1559,9 +1977,62 @@
                 }
             }
             knownMessageIds.clear();
-            showToast('已清空网页聊天记录');
+            showToast('已清空当前聊天记录');
         });
     }
+
+    // 聊天室文件拖拽发送
+    const chatPane = document.getElementById('tab-chat');
+    if (chatPane && chatDropOverlay) {
+        let dragCounter = 0;
+
+        chatPane.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            dragCounter++;
+            if (roomState.mode !== 'client') {
+                chatDropOverlay.style.display = 'flex';
+            }
+        });
+
+        chatPane.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dragCounter--;
+            if (dragCounter <= 0) {
+                chatDropOverlay.style.display = 'none';
+                dragCounter = 0;
+            }
+        });
+
+        chatPane.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        chatPane.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            dragCounter = 0;
+            chatDropOverlay.style.display = 'none';
+
+            if (roomState.mode === 'client') {
+                showToast('请先创建或加入房间后再发送文件');
+                return;
+            }
+
+            const files = e.dataTransfer && e.dataTransfer.files;
+            if (files && files.length > 0) {
+                for (let i = 0; i < files.length; i++) {
+                    const f = files[i];
+                    if (f.type.startsWith('image/')) {
+                        await sendChatImageFile(f);
+                    } else {
+                        await sendChatDocFile(f);
+                    }
+                }
+            }
+        });
+    }
+
+    // 初始化聊天室锁屏状态联动
+    updateChatGatingUi(roomState.mode, roomState.roomInfo);
 
     // 启动轮询获取最新消息
     pollChatMessages();

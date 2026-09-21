@@ -203,6 +203,7 @@ class TransferFragment : Fragment() {
                 binding.btnLeaveRoom.visibility = View.GONE
                 binding.cardDiscoveredRooms.visibility = View.VISIBLE
                 binding.llHostDetails.visibility = View.GONE
+                binding.cardChatSection.visibility = View.GONE
                 renderDiscoveredRooms(UdpDiscoveryManager.getRooms())
             }
 
@@ -222,6 +223,8 @@ class TransferFragment : Fragment() {
                 binding.btnLeaveRoom.visibility = View.GONE
                 binding.cardDiscoveredRooms.visibility = View.GONE
                 binding.llHostDetails.visibility = View.VISIBLE
+                binding.cardChatSection.visibility = View.VISIBLE
+                binding.tvChatSectionTitle.text = "💬 局域网即时互发消息 (房主服务中)"
 
                 val port = getTransferService()?.currentPort ?: 9527
                 renderNetworkInterfaces(port)
@@ -239,6 +242,8 @@ class TransferFragment : Fragment() {
                 binding.btnLeaveRoom.visibility = View.VISIBLE
                 binding.cardDiscoveredRooms.visibility = View.GONE
                 binding.llHostDetails.visibility = View.GONE
+                binding.cardChatSection.visibility = View.VISIBLE
+                binding.tvChatSectionTitle.text = "💬 局域网即时互发消息 (已加入: ${r.roomName})"
 
                 startJoinedRoomPolling(r)
             }
@@ -504,8 +509,39 @@ class TransferFragment : Fragment() {
         val itemBinding = ItemChatMessageBinding.inflate(LayoutInflater.from(ctx), binding.llChatMessages, false)
         val timeStr = timeFormat.format(Date(msg.timestamp))
         val senderLabel = if (msg.isFromPhone) "📱 手机端 (本机)" else "💻 ${msg.senderName}"
-        itemBinding.tvSenderInfo.text = "$senderLabel • $timeStr"
-        itemBinding.tvMessageContent.text = msg.content
+        val content = msg.content
+        if (content.startsWith("[image:") && content.endsWith("]")) {
+            itemBinding.tvMessageContent.text = "🖼️ [图片/截图消息] 点击复制数据"
+            itemBinding.tvMessageContent.setOnClickListener { copyToClipboard(content) }
+        } else if (content.startsWith("[file:") && content.endsWith("]")) {
+            val inner = content.removePrefix("[file:").removeSuffix("]")
+            val parts = inner.split("|")
+            val fileName = parts.getOrNull(0) ?: "文件"
+            val fileSize = parts.getOrNull(1) ?: ""
+            itemBinding.tvMessageContent.text = "📎 [文件快传] $fileName ($fileSize)\n点击打开下载"
+            itemBinding.tvMessageContent.setOnClickListener {
+                if (parts.size >= 3) {
+                    val fileUrl = parts[2]
+                    try {
+                        val host = joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
+                        val finalUrl = if (fileUrl.startsWith("http")) fileUrl else "$host$fileUrl"
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(finalUrl))
+                        startActivity(intent)
+                    } catch (_: Exception) {
+                        copyToClipboard(fileUrl)
+                    }
+                } else {
+                    copyToClipboard(content)
+                }
+            }
+        } else {
+            itemBinding.tvMessageContent.text = content
+            itemBinding.tvMessageContent.autoLinkMask = android.text.util.Linkify.WEB_URLS
+            itemBinding.tvMessageContent.movementMethod = android.text.method.LinkMovementMethod.getInstance()
+            itemBinding.tvMessageContent.setOnClickListener {
+                copyToClipboard(msg.content)
+            }
+        }
 
         if (msg.isFromPhone) {
             itemBinding.tvMessageContent.setBackgroundColor(Color.parseColor("#1E3A8A"))
@@ -513,10 +549,6 @@ class TransferFragment : Fragment() {
         } else {
             itemBinding.tvMessageContent.setBackgroundColor(Color.parseColor("#1E293B"))
             itemBinding.tvMessageContent.setTextColor(Color.parseColor("#F1F5F9"))
-        }
-
-        itemBinding.tvMessageContent.setOnClickListener {
-            copyToClipboard(msg.content)
         }
 
         binding.llChatMessages.addView(itemBinding.root)

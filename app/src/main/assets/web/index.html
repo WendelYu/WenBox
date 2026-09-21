@@ -280,31 +280,95 @@
             </section>
         </main>
 
-        <!-- 主内容区：Tab 2 局域网即时互发消息 / 聊天室 -->
+        <!-- 主内容区：Tab 2 局域网即时互发消息 / 聊天室 (需创建或加入房间后才可发送) -->
         <main id="tab-chat" class="tab-pane">
-            <section class="card chat-card">
-                <div class="section-header">
+            <!-- 状态 1：未加入任何房间时的锁屏大厅提示 -->
+            <div id="chatLockedState" class="card chat-locked-card">
+                <div class="chat-locked-icon">🔒</div>
+                <h2 class="chat-locked-title">局域网互通聊天室尚未开启</h2>
+                <p class="chat-locked-desc">
+                    为了确保通信安全与数据隔离，即时消息收发、代码分享与文件快传需在同一房间内进行。<br>
+                    请先在「文件快传」大厅中<strong>创建房间</strong>（成为房主），或者<strong>加入局域网内其他设备创建的房间</strong>。
+                </p>
+                <div class="chat-locked-actions">
+                    <button id="btnChatGoLobby" class="btn-primary">
+                        📡 前往大厅选择/发现房间
+                    </button>
+                    <button id="btnChatCreateRoom" class="btn-secondary">
+                        ➕ 立即创建房间 (当房主)
+                    </button>
+                </div>
+            </div>
+
+            <!-- 状态 2：已创建或已加入房间时的完整即时聊天面板 -->
+            <section id="chatActiveContent" class="card chat-card" style="display: none; position: relative;">
+                <!-- 文件拖拽悬停遮罩 -->
+                <div id="chatDropOverlay" class="chat-drop-overlay" style="display: none;">
+                    <div class="chat-drop-content">
+                        <span class="chat-drop-icon">📥</span>
+                        <p>释放文件以直接发送到聊天室</p>
+                        <span>支持任意图片、工程文档、安装包或压缩文件</span>
+                    </div>
+                </div>
+
+                <div class="section-header chat-header-bar">
                     <div class="section-title">
-                        <h2>💬 局域网设备即时互发消息</h2>
-                        <span class="subtitle">自动加入局域网聊天室，电脑与手机互传文本、链接、剪贴板</span>
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                            <h2>💬 局域网即时互发消息</h2>
+                            <span id="chatRoomBadge" class="chat-room-badge">👑 房主服务中</span>
+                            <span id="chatRoomPinBadge" class="chat-pin-badge" style="display: none;">🔒 PIN 保护</span>
+                        </div>
+                        <span id="chatRoomSubinfo" class="subtitle">与局域网内已连通设备实时秒发富文本、超链接、代码块、截图与文件</span>
                     </div>
-                    <button id="webBtnClearChat" class="btn-secondary">清屏</button>
+                    <div class="actions" style="display: flex; gap: 8px;">
+                        <button id="webBtnClearChat" class="btn-secondary" title="清空当前聊天记录">清屏</button>
+                    </div>
                 </div>
 
+                <!-- 消息展示区 -->
                 <div id="webChatMessages" class="chat-message-list">
-                    <div id="webEmptyChat" class="empty-state" style="padding: 30px 0;">
-                        <p>局域网聊天室已就绪，等待发送或接收消息</p>
+                    <div id="webEmptyChat" class="empty-state" style="padding: 36px 0;">
+                        <div class="empty-icon" style="font-size: 36px;">💬</div>
+                        <p style="font-size: 15px; font-weight: 500;">局域网聊天室已就绪</p>
+                        <span style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">可在下方输入文字、粘贴图片(Ctrl+V)或拖拽文件发送</span>
                     </div>
                 </div>
 
+                <!-- 快捷工具栏 (参考 internal-chat 常用交互) -->
+                <div class="chat-toolbar">
+                    <div class="chat-toolbar-left">
+                        <button id="chatBtnSendImage" class="chat-tool-btn" title="发送图片或本地截图">
+                            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                <polyline points="21 15 16 10 5 21"></polyline>
+                            </svg>
+                            发送图片
+                        </button>
+                        <input type="file" id="chatImageFileInput" accept="image/*" style="display: none;">
+
+                        <button id="chatBtnSendFile" class="chat-tool-btn" title="发送任意文档或压缩包">
+                            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                            </svg>
+                            发送文件
+                        </button>
+                        <input type="file" id="chatFileInput" style="display: none;">
+                    </div>
+                    <div class="chat-toolbar-right">
+                        <span class="chat-input-shortcut-hint">💡 Enter 发送 / Shift+Enter 换行 / 支持 Ctrl+V 粘贴截图 / 拖入文件</span>
+                    </div>
+                </div>
+
+                <!-- 输入栏 -->
                 <div class="chat-input-bar">
-                    <textarea id="webChatMessageInput" class="chat-textarea" placeholder="输入要发送给手机的内容（支持回车换行，Ctrl+Enter 或点击发送）..." rows="2"></textarea>
-                    <button id="webBtnSendMessage" class="btn-send-message">
+                    <textarea id="webChatMessageInput" class="chat-textarea" placeholder="输入要发送的消息内容（支持 Markdown 代码块 ```、链接自动识别、Ctrl+V 粘贴截图、拖拽文件）..." rows="2"></textarea>
+                    <button id="webBtnSendMessage" class="btn-send-message" title="快捷键: Enter 直接发送，Shift+Enter 换行">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="22" y1="2" x2="11" y2="13"></line>
                             <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                         </svg>
-                        发送
+                        发送 (Enter)
                     </button>
                 </div>
             </section>
@@ -538,6 +602,25 @@
             </div>
             <div class="modal-footer" style="justify-content: center;">
                 <button class="btn-primary-action" onclick="window.closeHostQrModal()">完成</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 聊天室图片全屏预览 Modal -->
+    <div id="chatImageModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card" style="max-width: 90vw; max-height: 90vh; width: auto; background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(255, 255, 255, 0.15); display: flex; flex-direction: column; align-items: center; padding: 16px;">
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span style="font-size: 14px; color: #94A3B8; font-weight: 500;">🖼️ 图片全屏预览</span>
+                <button class="modal-close" id="btnCloseChatImageModal">✕</button>
+            </div>
+            <div style="max-height: 75vh; overflow: auto; display: flex; justify-content: center; align-items: center;">
+                <img id="chatModalImage" src="" alt="预览图" style="max-width: 100%; max-height: 75vh; border-radius: 8px; object-fit: contain; box-shadow: 0 8px 32px rgba(0,0,0,0.5);">
+            </div>
+            <div style="margin-top: 14px; display: flex; gap: 12px;">
+                <a id="chatModalDownloadBtn" href="#" download="wenbox_image.png" class="btn-primary-mini" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+                    ⬇️ 下载原图
+                </a>
+                <button id="chatModalCopyBtn" class="btn-secondary-mini">📋 复制图片</button>
             </div>
         </div>
     </div>

@@ -614,30 +614,106 @@ body {
     border-left: 3px solid #3B82F6;
 }
 
-/* ================= 局域网即时互发消息 / 聊天室样式 ================= */
+/* ================= 局域网互通聊天室 / 富文本样式 ================= */
+.chat-locked-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 60px 30px;
+    background: linear-gradient(180deg, rgba(17, 24, 39, 0.7), rgba(15, 23, 42, 0.9));
+    border: 1px dashed rgba(59, 130, 246, 0.3);
+    border-radius: 16px;
+    margin-top: 10px;
+}
+
+.chat-locked-icon {
+    font-size: 54px;
+    margin-bottom: 16px;
+    filter: drop-shadow(0 4px 12px rgba(59, 130, 246, 0.3));
+}
+
+.chat-locked-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: #F8FAFC;
+    margin-bottom: 10px;
+}
+
+.chat-locked-desc {
+    font-size: 14px;
+    color: var(--text-muted);
+    max-width: 520px;
+    line-height: 1.6;
+    margin-bottom: 24px;
+}
+
+.chat-locked-actions {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
 .chat-card {
     display: flex;
     flex-direction: column;
-    height: 600px;
+    height: 640px;
+    position: relative;
 }
 
+.chat-header-bar {
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 14px;
+    margin-bottom: 14px;
+}
+
+.chat-room-badge {
+    font-size: 12px;
+    font-weight: 600;
+    color: #34D399;
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    padding: 3px 10px;
+    border-radius: 99px;
+}
+
+.chat-pin-badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: #FBBF24;
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    padding: 3px 8px;
+    border-radius: 99px;
+}
+
+/* 消息流容器 */
 .chat-message-list {
     flex: 1;
     overflow-y: auto;
-    background: rgba(11, 15, 25, 0.6);
+    background: rgba(11, 15, 25, 0.65);
     border: 1px solid var(--border-color);
     border-radius: 12px;
-    padding: 16px;
+    padding: 16px 20px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    margin-bottom: 16px;
+    gap: 14px;
+    margin-bottom: 10px;
+    scroll-behavior: smooth;
 }
 
 .chat-msg-row {
     display: flex;
     flex-direction: column;
-    max-width: 80%;
+    max-width: 82%;
+    animation: fadeInMsg 0.2s ease-out;
+}
+
+@keyframes fadeInMsg {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .chat-msg-row.from-me {
@@ -654,30 +730,281 @@ body {
     font-size: 11px;
     color: var(--text-muted);
     margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .chat-msg-bubble {
-    padding: 10px 14px;
-    border-radius: 12px;
+    padding: 10px 15px;
+    border-radius: 14px;
     font-size: 14px;
-    line-height: 1.5;
+    line-height: 1.55;
     word-break: break-word;
-    white-space: pre-wrap;
-    cursor: pointer;
     position: relative;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
 .chat-msg-row.from-me .chat-msg-bubble {
-    background: #1E3A8A;
-    color: #DBEAFE;
-    border-bottom-right-radius: 2px;
+    background: linear-gradient(135deg, #1E3A8A, #1D4ED8);
+    color: #EFF6FF;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-bottom-right-radius: 3px;
 }
 
 .chat-msg-row.from-other .chat-msg-bubble {
     background: #1E293B;
-    color: #F1F5F9;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-bottom-left-radius: 2px;
+    color: #F8FAFC;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom-left-radius: 3px;
+}
+
+/* 消息内的超链接 */
+.chat-link {
+    color: #60A5FA;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    font-weight: 500;
+    transition: color 0.15s;
+    word-break: break-all;
+}
+.chat-link:hover {
+    color: #93C5FD;
+}
+
+/* 消息内的代码块 (Markdown ```) */
+.chat-code-block {
+    margin: 8px 0;
+    background: #0D1117;
+    border: 1px solid #30363D;
+    border-radius: 8px;
+    overflow: hidden;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+}
+
+.chat-code-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #161B22;
+    padding: 4px 10px;
+    border-bottom: 1px solid #30363D;
+    font-size: 11px;
+    color: #8B949E;
+}
+
+.chat-code-copy-btn {
+    background: transparent;
+    border: 1px solid #30363D;
+    color: #C9D1D9;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.chat-code-copy-btn:hover {
+    background: #21262D;
+    color: #58A6FF;
+    border-color: #58A6FF;
+}
+
+.chat-code-content {
+    margin: 0;
+    padding: 10px 12px;
+    overflow-x: auto;
+    color: #E6EDF3;
+    line-height: 1.45;
+    white-space: pre;
+}
+
+/* 行内代码标签 */
+.chat-inline-code {
+    background: rgba(0, 0, 0, 0.35);
+    color: #38BDF8;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 13px;
+}
+
+/* 聊天室内图片缩略图 */
+.chat-img-thumb-wrapper {
+    margin: 4px 0;
+    position: relative;
+    display: inline-block;
+    cursor: pointer;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.chat-img-thumb {
+    display: block;
+    max-width: 280px;
+    max-height: 200px;
+    border-radius: 8px;
+    object-fit: contain;
+    background: #000;
+    transition: transform 0.2s;
+}
+
+.chat-img-thumb-wrapper:hover .chat-img-thumb {
+    transform: scale(1.02);
+}
+
+.chat-img-overlay {
+    position: absolute;
+    bottom: 6px;
+    right: 6px;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+/* 聊天室内文件卡片 */
+.chat-file-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin: 4px 0;
+    min-width: 220px;
+    max-width: 320px;
+}
+
+.chat-file-icon {
+    font-size: 28px;
+    flex-shrink: 0;
+}
+
+.chat-file-details {
+    flex: 1;
+    overflow: hidden;
+}
+
+.chat-file-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #F8FAFC;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-file-size {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.chat-file-download-btn {
+    background: #2563EB;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+.chat-file-download-btn:hover {
+    background: #1D4ED8;
+}
+
+/* 工具栏与快捷按钮 */
+.chat-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 4px;
+    flex-wrap: wrap;
+}
+
+.chat-toolbar-left {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.chat-tool-btn {
+    background: rgba(30, 41, 59, 0.7);
+    border: 1px solid var(--border-color);
+    color: #CBD5E1;
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s;
+}
+.chat-tool-btn:hover {
+    background: rgba(59, 130, 246, 0.2);
+    border-color: #3B82F6;
+    color: #60A5FA;
+}
+
+.chat-input-shortcut-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* 拖拽覆盖遮罩 */
+.chat-drop-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.88);
+    backdrop-filter: blur(4px);
+    border: 2px dashed #3B82F6;
+    border-radius: 12px;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.chat-drop-content {
+    text-align: center;
+    color: #F8FAFC;
+}
+
+.chat-drop-icon {
+    font-size: 48px;
+    display: block;
+    margin-bottom: 8px;
+    animation: bounce 0.6s infinite alternate;
+}
+
+@keyframes bounce {
+    from { transform: translateY(0); }
+    to { transform: translateY(-8px); }
+}
+
+.chat-drop-content p {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.chat-drop-content span {
+    font-size: 12px;
+    color: #94A3B8;
 }
 
 .chat-input-bar {
