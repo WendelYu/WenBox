@@ -36,15 +36,198 @@ class LanServer(
                 uri == "/style.css" -> serveAsset("web/style.css", "text/css; charset=UTF-8")
                 uri == "/app.js" -> serveAsset("web/app.js", "application/javascript; charset=UTF-8")
 
+                // 1.4 已发现房间列表
+                method == Method.GET && uri == "/api/discovered_rooms" -> {
+                    val rooms = UdpDiscoveryManager.getRooms()
+                    val jsonArray = JSONArray()
+                    for (r in rooms) {
+                        val item = JSONObject().apply {
+                            put("roomId", r.roomId)
+                            put("roomName", r.roomName)
+                            put("hostDevice", r.hostDevice)
+                            put("ip", r.ip)
+                            put("port", r.port)
+                            put("needPassword", r.needPassword)
+                            put("memberCount", r.memberCount)
+                            put("lastSeen", r.lastSeen)
+                        }
+                        jsonArray.put(item)
+                    }
+                    val result = JSONObject().apply {
+                        put("rooms", jsonArray)
+                    }
+                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", result.toString())
+                }
+
+                // 1.41 房间状态
+                method == Method.GET && uri == "/api/room/status" -> {
+                    val room = RoomManager.currentRoom
+                    val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
+                    val json = if (room != null && room.isActive) {
+                        JSONObject().apply {
+                            put("isActive", true)
+                            put("roomId", room.roomId)
+                            put("roomName", room.roomName)
+                            put("needPassword", room.needPassword)
+                            put("hostDevice", room.hostDevice)
+                            put("hostIp", primaryIp)
+                            put("hostPort", serverPort)
+                            put("memberCount", RoomManager.getMembers().size)
+                        }
+                    } else {
+                        JSONObject().apply {
+                            put("isActive", false)
+                        }
+                    }
+                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", json.toString())
+                }
+
+                // 1.42 创建房间
+                method == Method.POST && uri == "/api/room/create" -> {
+                    val map = HashMap<String, String>()
+                    try { session.parseBody(map) } catch (_: Exception) {}
+                    val postData = map["postData"]
+                    var rName = ""
+                    var pin = ""
+                    if (!postData.isNullOrBlank()) {
+                        try {
+                            val json = JSONObject(postData)
+                            rName = json.optString("roomName", "")
+                            pin = json.optString("pin", "")
+                        } catch (_: Exception) {}
+                    }
+                    val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
+                    val cfg = RoomManager.createRoom(
+                        roomName = rName,
+                        pin = pin,
+                        hostDevice = "${Build.BRAND} ${Build.MODEL}",
+                        hostIp = primaryIp,
+                        hostPort = serverPort
+                    )
+                    val result = JSONObject().apply {
+                        put("isActive", cfg.isActive)
+                        put("roomId", cfg.roomId)
+                        put("roomName", cfg.roomName)
+                        put("pin", cfg.pin)
+                        put("needPassword", cfg.needPassword)
+                        put("hostDevice", cfg.hostDevice)
+                        put("hostIp", cfg.hostIp)
+                        put("hostPort", cfg.hostPort)
+                    }
+                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", result.toString())
+                }
+
+                // 1.43 解散房间
+                method == Method.POST && uri == "/api/room/close" -> {
+                    RoomManager.closeRoom()
+                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", "{\"success\":true}")
+                }
+
+                // 1.44 加入房间
+                method == Method.POST && uri == "/api/room/join" -> {
+                    val map = HashMap<String, String>()
+                    try { session.parseBody(map) } catch (_: Exception) {}
+                    val postData = map["postData"]
+                    var pin = ""
+                    var clientName = "访客设备"
+                    var clientPlatform = "Browser"
+                    if (!postData.isNullOrBlank()) {
+                        try {
+                            val json = JSONObject(postData)
+                            pin = json.optString("pin", "")
+                            clientName = json.optString("name", "访客设备")
+                            clientPlatform = json.optString("platform", "Browser")
+                        } catch (_: Exception) {}
+                    }
+                    val clientIp = session.headers["http-client-ip"]
+                        ?: session.headers["remote-addr"]
+                        ?: session.remoteIpAddress
+                        ?: "127.0.0.1"
+
+                    val (ok, msg, token) = RoomManager.verifyAndJoin(pin, clientName, clientIp, clientPlatform)
+                    val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
+                    val room = RoomManager.currentRoom
+                    val roomObj = if (ok && room != null) {
+                        JSONObject().apply {
+                            put("roomId", room.roomId)
+                            put("roomName", room.roomName)
+                            put("hostDevice", room.hostDevice)
+                            put("hostIp", primaryIp)
+                            put("hostPort", serverPort)
+                        }
+                    } else JSONObject.NULL
+
+                    val result = JSONObject().apply {
+                        put("success", ok)
+                        put("message", msg)
+                        put("token", token)
+                        put("room", roomObj)
+                    }
+                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", result.toString())
+                }
+
+                // 1.45 房间心跳
+                method == Method.POST && uri == "/api/room/heartbeat" -> {
+                    val clientIp = session.headers["http-client-ip"]
+                        ?: session.headers["remote-addr"]
+                        ?: session.remoteIpAddress
+                        ?: "127.0.0.1"
+                    RoomManager.heartbeat(clientIp)
+                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", "{\"success\":true}")
+                }
+
+                // 1.46 房间成员
+                method == Method.GET && uri == "/api/room/members" -> {
+                    val members = RoomManager.getMembers()
+                    val jsonArray = JSONArray()
+                    for (m in members) {
+                        val item = JSONObject().apply {
+                            put("id", m.id)
+                            put("name", m.name)
+                            put("ip", m.ip)
+                            put("platform", m.platform)
+                            put("joinedAt", m.joinedAt)
+                            put("lastSeen", m.lastSeen)
+                        }
+                        jsonArray.put(item)
+                    }
+                    val result = JSONObject().apply {
+                        put("members", jsonArray)
+                    }
+                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", result.toString())
+                }
+
                 // 1.5 服务状态信息 (供局域网其他设备/网页感知本端信息)
                 method == Method.GET && uri == "/api/status" -> {
                     val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
+                    val allIps = NetworkUtils.getAllLocalIpAddresses(context).map {
+                        JSONObject().apply {
+                            put("ip", it.ip)
+                            put("name", it.name)
+                            put("is_preferred", it.isPreferred)
+                        }
+                    }
+                    val room = RoomManager.currentRoom
+                    val roomJson = if (room != null && room.isActive) {
+                        JSONObject().apply {
+                            put("isActive", true)
+                            put("roomId", room.roomId)
+                            put("roomName", room.roomName)
+                            put("needPassword", room.needPassword)
+                        }
+                    } else {
+                        JSONObject().apply {
+                            put("isActive", false)
+                        }
+                    }
                     val json = JSONObject().apply {
                         put("device", "${Build.BRAND} ${Build.MODEL}")
                         put("ip", primaryIp)
+                        put("all_ips", JSONArray(allIps))
                         put("port", serverPort)
                         put("running", true)
                         put("platform", "Android")
+                        put("room", roomJson)
                     }
                     newFixedLengthResponse(
                         Response.Status.OK,
@@ -304,6 +487,6 @@ class LanServer(
     private fun addCorsHeaders(response: Response) {
         response.addHeader("Access-Control-Allow-Origin", "*")
         response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
-        response.addHeader("Access-Control-Allow-Headers", "Content-Type, Range, Authorization")
+        response.addHeader("Access-Control-Allow-Headers", "Content-Type, Range, Authorization, X-Room-Token")
     }
 }

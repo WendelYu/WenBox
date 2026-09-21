@@ -3,7 +3,8 @@
     "beforeDevCommand": "",
     "beforeBuildCommand": "",
     "devPath": "../app/src/main/assets/web",
-    "distDir": "../app/src/main/assets/web"
+    "distDir": "../app/src/main/assets/web",
+    "withGlobalTauri": true
   },
   "package": {
     "productName": "WenBox",

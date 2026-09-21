@@ -42,6 +42,7 @@ class TransferService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        com.landrop.utils.UdpDiscoveryManager.startReceiver()
     }
 
     fun startServer(port: Int = 9527): Boolean {
@@ -55,7 +56,7 @@ class TransferService : Service() {
 
             acquireLocks()
             startForeground(NOTIFICATION_ID, buildNotification())
-            com.landrop.utils.UdpDiscoveryManager.start(port)
+            com.landrop.utils.UdpDiscoveryManager.startBroadcaster(port)
             onStatusChanged?.invoke(true)
             return true
         } catch (e: Exception) {
@@ -67,7 +68,7 @@ class TransferService : Service() {
 
     fun stopServer() {
         try {
-            com.landrop.utils.UdpDiscoveryManager.stop()
+            com.landrop.utils.UdpDiscoveryManager.stopBroadcaster()
             lanServer?.stop()
             lanServer = null
         } catch (e: Exception) {

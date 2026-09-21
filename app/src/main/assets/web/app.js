@@ -254,9 +254,42 @@
     const multiIpSelectorContainer = document.getElementById('multiIpSelectorContainer');
     const multiIpPills = document.getElementById('multiIpPills');
 
+    function isTauriDesktop() {
+        return window.location.hostname === 'tauri.localhost' || window.location.protocol === 'tauri:';
+    }
+
+    function getApiOrigin() {
+        if (isTauriDesktop()) {
+            return 'http://127.0.0.1:9527';
+        }
+        return '';
+    }
+
+    function getTauriInvoke() {
+        if (typeof window !== 'undefined' && window.__TAURI__ && typeof window.__TAURI__.invoke === 'function') {
+            return window.__TAURI__.invoke.bind(window.__TAURI__);
+        }
+        if (typeof window !== 'undefined' && typeof window.__TAURI_INVOKE__ === 'function') {
+            return window.__TAURI_INVOKE__;
+        }
+        return null;
+    }
+
+    function getTauriDialog() {
+        if (typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.dialog) {
+            return window.__TAURI__.dialog;
+        }
+        return null;
+    }
+
+    let initialIp = '127.0.0.1';
+    if (window.location.hostname && !isTauriDesktop() && window.location.hostname !== 'localhost') {
+        initialIp = window.location.hostname;
+    }
+
     let selfDeviceInfo = {
         device: '本机',
-        ip: window.location.hostname || '127.0.0.1',
+        ip: initialIp,
         port: 9527,
         platform: 'Windows'
     };
@@ -300,23 +333,24 @@
     }
 
     async function checkSelfServerStatus() {
-        if (window.__TAURI__) {
+        const invoke = getTauriInvoke();
+        if (invoke) {
             try {
-                const ips = await window.__TAURI__.invoke('get_all_lan_ips_cmd');
+                const ips = await invoke('get_all_lan_ips_cmd');
                 selfLanIps = ips || [];
-                const primary = await window.__TAURI__.invoke('get_local_ip');
-                selfDeviceInfo.ip = primary || (ips.length > 0 ? ips[0].ip : '127.0.0.1');
+                const primary = await invoke('get_local_ip');
+                selfDeviceInfo.ip = primary || (ips.length > 0 ? (ips[0].ip || ips[0]) : '127.0.0.1');
                 renderMultiIpPills(selfLanIps, selfDeviceInfo.ip);
                 if (roomState.mode === 'host') updateHostBannerDisplay();
+                return;
             } catch (e) {
                 console.error('Tauri get IPs error:', e);
             }
-            return;
         }
 
-        // 浏览器环境
+        // 浏览器环境或 HTTP 回退
         try {
-            const res = await fetch('/api/status?t=' + Date.now());
+            const res = await fetch(getApiOrigin() + '/api/status?t=' + Date.now());
             if (res.ok) {
                 const data = await res.json();
                 selfDeviceInfo = data;
@@ -435,8 +469,9 @@
             modalBtnConfirmCreateRoom.textContent = '正在开启房间服务...';
 
             try {
-                if (window.__TAURI__) {
-                    const cfg = await window.__TAURI__.invoke('create_room_cmd', {
+                const invoke = getTauriInvoke();
+                if (invoke) {
+                    const cfg = await invoke('create_room_cmd', {
                         roomName: rName,
                         pin: rPin
                     });
@@ -444,7 +479,7 @@
                     setRoomMode('host', cfg);
                     showToast(`房间「${rName}」已创建！本机已变身服务端`);
                 } else {
-                    const resp = await fetch('/api/room/create', {
+                    const resp = await fetch(getApiOrigin() + '/api/room/create', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ roomName: rName, pin: rPin })
@@ -469,10 +504,11 @@
         btnCloseRoom.addEventListener('click', async () => {
             if (!confirm('确定要解散当前房间吗？解散后本机将恢复为客户端发现模式。')) return;
             try {
-                if (window.__TAURI__) {
-                    await window.__TAURI__.invoke('close_room_cmd');
+                const invoke = getTauriInvoke();
+                if (invoke) {
+                    await invoke('close_room_cmd');
                 } else {
-                    await fetch('/api/room/close', { method: 'POST' });
+                    await fetch(getApiOrigin() + '/api/room/close', { method: 'POST' });
                 }
                 showToast('房间已解散，已切换回客户端发现大厅');
                 setRoomMode('client');
@@ -498,10 +534,11 @@
         if (roomState.mode !== 'client') return;
         try {
             let rooms = [];
-            if (window.__TAURI__) {
-                rooms = await window.__TAURI__.invoke('get_discovered_rooms_cmd');
+            const invoke = getTauriInvoke();
+            if (invoke) {
+                rooms = await invoke('get_discovered_rooms_cmd');
             } else {
-                const res = await fetch('/api/discovered_rooms?t=' + Date.now());
+                const res = await fetch(getApiOrigin() + '/api/discovered_rooms?t=' + Date.now());
                 if (res.ok) {
                     const data = await res.json();
                     rooms = data.rooms || [];
@@ -600,8 +637,9 @@
             showToast('正在验证并接入房间...');
             let joinRes = null;
 
-            if (window.__TAURI__) {
-                joinRes = await window.__TAURI__.invoke('join_remote_room_cmd', {
+            const invoke = getTauriInvoke();
+            if (invoke) {
+                joinRes = await invoke('join_remote_room_cmd', {
                     hostUrl: hostUrl,
                     pin: pin,
                     myName: whoami_device_name_client()
@@ -654,10 +692,11 @@
         if (roomState.mode !== 'host') return;
         try {
             let members = [];
-            if (window.__TAURI__) {
-                members = await window.__TAURI__.invoke('get_room_members_cmd');
+            const invoke = getTauriInvoke();
+            if (invoke) {
+                members = await invoke('get_room_members_cmd');
             } else {
-                const res = await fetch('/api/room/members?t=' + Date.now());
+                const res = await fetch(getApiOrigin() + '/api/room/members?t=' + Date.now());
                 if (res.ok) {
                     const data = await res.json();
                     members = data.members || [];
@@ -685,14 +724,15 @@
 
     async function loadFiles() {
         try {
-            if (window.__TAURI__) {
-                currentFiles = await window.__TAURI__.invoke('fetch_node_files', { baseUrl: currentTargetBaseUrl });
+            const invoke = getTauriInvoke();
+            if (invoke) {
+                currentFiles = await invoke('fetch_node_files', { baseUrl: currentTargetBaseUrl });
                 renderFiles();
                 return;
             }
 
             const tokenParam = roomState.token ? `&token=${encodeURIComponent(roomState.token)}` : '';
-            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/files?t=' + Date.now() + tokenParam;
+            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/files?t=' + Date.now() + tokenParam;
             const headers = {};
             if (roomState.token) {
                 headers['X-Room-Token'] = roomState.token;
@@ -720,9 +760,11 @@
     // 远程文件按需下载
     window.downloadRemoteFile = async function(fileId, fileName) {
         const tokenQuery = roomState.token ? `?token=${encodeURIComponent(roomState.token)}` : '';
-        if (window.__TAURI__ && window.__TAURI__.dialog) {
+        const tauriDialog = getTauriDialog();
+        const invoke = getTauriInvoke();
+        if (tauriDialog && invoke) {
             try {
-                const savePath = await window.__TAURI__.dialog.save({
+                const savePath = await tauriDialog.save({
                     defaultPath: fileName,
                     title: `保存文件 ${fileName}`
                 });
@@ -731,8 +773,8 @@
                 const dir = savePath.substring(0, Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')));
                 const name = savePath.substring(Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')) + 1);
 
-                const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : 'http://127.0.0.1:9527') + `/api/download/${fileId}${tokenQuery}`;
-                await window.__TAURI__.invoke('save_remote_file_to_directory', {
+                const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : (getApiOrigin() || 'http://127.0.0.1:9527')) + `/api/download/${fileId}${tokenQuery}`;
+                await invoke('save_remote_file_to_directory', {
                     downloadUrl: downloadUrl,
                     dirPath: dir,
                     folderName: '',
@@ -745,7 +787,7 @@
             }
         }
 
-        const dlUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${fileId}${tokenQuery}`;
+        const dlUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + `/api/download/${fileId}${tokenQuery}`;
         const a = document.createElement('a');
         a.href = dlUrl;
         a.download = fileName;
@@ -793,10 +835,11 @@
         if (!localSharedFileListContainer) return;
         try {
             let files = [];
-            if (window.__TAURI__) {
-                files = await window.__TAURI__.invoke('fetch_node_files', { baseUrl: '' });
+            const invoke = getTauriInvoke();
+            if (invoke) {
+                files = await invoke('fetch_node_files', { baseUrl: '' });
             } else {
-                const res = await fetch('/api/files?t=' + Date.now());
+                const res = await fetch(getApiOrigin() + '/api/files?t=' + Date.now());
                 if (res.ok) {
                     const data = await res.json();
                     files = data.files || [];
@@ -820,7 +863,7 @@
         localSharedFileListContainer.innerHTML = files.map(file => {
             const icon = getFileIcon(file.name, file.mimeType || '');
             const size = formatBytes(file.size);
-            const dlUrl = `/api/download/${file.id}`;
+            const dlUrl = `${getApiOrigin()}/api/download/${file.id}`;
 
             return `
                 <div class="file-item">
@@ -849,10 +892,11 @@
 
     window.removeLocalSharedFile = async function (fileId) {
         try {
-            if (window.__TAURI__) {
-                await window.__TAURI__.invoke('remove_share_file', { fileId });
+            const invoke = getTauriInvoke();
+            if (invoke) {
+                await invoke('remove_share_file', { fileId });
             } else {
-                await fetch(`/api/files/remove?id=${encodeURIComponent(fileId)}`, { method: 'POST' });
+                await fetch(getApiOrigin() + `/api/files/remove?id=${encodeURIComponent(fileId)}`, { method: 'POST' });
             }
             showToast('已移除该分享文件');
             loadLocalSharedFiles();
@@ -865,10 +909,11 @@
         if (!receivedFileListContainer) return;
         try {
             let files = [];
-            if (window.__TAURI__) {
-                files = await window.__TAURI__.invoke('get_received_files');
+            const invoke = getTauriInvoke();
+            if (invoke) {
+                files = await invoke('get_received_files');
             } else {
-                const res = await fetch('/api/received_files?t=' + Date.now());
+                const res = await fetch(getApiOrigin() + '/api/received_files?t=' + Date.now());
                 if (res.ok) {
                     const data = await res.json();
                     files = data.files || [];
@@ -892,7 +937,7 @@
         receivedFileListContainer.innerHTML = files.map(file => {
             const icon = getFileIcon(file.name, file.mimeType || '');
             const size = formatBytes(file.size);
-            const dlUrl = `/api/download/${file.id}`;
+            const dlUrl = `${getApiOrigin()}/api/download/${file.id}`;
 
             return `
                 <div class="file-item">
@@ -913,16 +958,18 @@
 
     if (btnSelectShareFile) {
         btnSelectShareFile.addEventListener('click', async () => {
-            if (window.__TAURI__ && window.__TAURI__.dialog) {
+            const tauriDialog = getTauriDialog();
+            const invoke = getTauriInvoke();
+            if (tauriDialog && invoke) {
                 try {
-                    const selected = await window.__TAURI__.dialog.open({
+                    const selected = await tauriDialog.open({
                         multiple: true,
                         title: '选择要对外分享的电脑文件'
                     });
                     if (selected) {
                         const paths = Array.isArray(selected) ? selected : [selected];
                         for (const p of paths) {
-                            await window.__TAURI__.invoke('add_share_file', { pathStr: p });
+                            await invoke('add_share_file', { pathStr: p });
                         }
                         showToast(`已添加 ${paths.length} 个电脑文件到分享列表！`);
                         loadLocalSharedFiles();
@@ -940,10 +987,11 @@
         btnClearShareFiles.addEventListener('click', async () => {
             if (!confirm('确定要清空本机所有对外分享的文件吗？')) return;
             try {
-                if (window.__TAURI__) {
-                    await window.__TAURI__.invoke('clear_share_files');
+                const invoke = getTauriInvoke();
+                if (invoke) {
+                    await invoke('clear_share_files');
                 } else {
-                    await fetch('/api/files/clear', { method: 'POST' });
+                    await fetch(getApiOrigin() + '/api/files/clear', { method: 'POST' });
                 }
                 showToast('已清空本机所有对外分享文件');
                 loadLocalSharedFiles();
@@ -962,9 +1010,10 @@
 
     if (btnOpenDownloadFolder) {
         btnOpenDownloadFolder.addEventListener('click', async () => {
-            if (window.__TAURI__) {
+            const invoke = getTauriInvoke();
+            if (invoke) {
                 try {
-                    const p = await window.__TAURI__.invoke('open_download_folder');
+                    const p = await invoke('open_download_folder');
                     showToast(`已打开保存目录: ${p}`);
                 } catch (e) {
                     showToast(`打开目录失败: ${e.message || e}`);
@@ -1020,9 +1069,11 @@
             const dateFolderName = `${getTodayDateStr()}${suffix}`;
 
             // 模式 A：如果是 Windows / Mac 客户端原生运行 (Tauri 环境) -> 原生文件夹选择 + Rust 极速流式存盘
-            if (window.__TAURI__ && window.__TAURI__.dialog) {
+            const tauriDialog = getTauriDialog();
+            const invoke = getTauriInvoke();
+            if (tauriDialog && invoke) {
                 try {
-                    const selectedPath = await window.__TAURI__.dialog.open({
+                    const selectedPath = await tauriDialog.open({
                         directory: true,
                         multiple: false,
                         title: '请选择电脑上的归档根目录'
@@ -1039,8 +1090,8 @@
                         reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${currentFiles.length}]: ${f.name}...`;
 
                         try {
-                            const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : `http://127.0.0.1:9527`) + `/api/download/${f.id}`;
-                            await window.__TAURI__.invoke('save_remote_file_to_directory', {
+                            const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : (getApiOrigin() || `http://127.0.0.1:9527`)) + `/api/download/${f.id}`;
+                            await invoke('save_remote_file_to_directory', {
                                 downloadUrl: downloadUrl,
                                 dirPath: selectedPath,
                                 folderName: dateFolderName,
@@ -1180,12 +1231,13 @@
 
     async function uploadSingleFile(file) {
         // 如果是在 Tauri 桌面客户端运行
-        if (window.__TAURI__) {
+        const invoke = getTauriInvoke();
+        if (invoke) {
             // 情况 1：在「本端 (本机)」视图，直接将本地文件添加为对外分享
             if (currentTargetBaseUrl === '') {
                 if (file.path) {
                     try {
-                        await window.__TAURI__.invoke('add_share_file', { pathStr: file.path });
+                        await invoke('add_share_file', { pathStr: file.path });
                         showToast(`已添加电脑分享文件: ${file.name}`);
                         loadLocalSharedFiles();
                         return;
@@ -1201,7 +1253,7 @@
                     uploadProgressBar.style.width = '50%';
                     uploadPercent.textContent = '传输中...';
                     try {
-                        const msg = await window.__TAURI__.invoke('upload_local_file_to_remote', {
+                        const msg = await invoke('upload_local_file_to_remote', {
                             targetBaseUrl: currentTargetBaseUrl,
                             filePath: file.path
                         });
@@ -1259,10 +1311,7 @@
                 resolve();
             });
 
-            let uploadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/upload';
-            if (!currentTargetBaseUrl && window.__TAURI__) {
-                uploadUrl = 'http://127.0.0.1:9527/api/upload';
-            }
+            let uploadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/upload';
             if (roomState.token) {
                 const sep = uploadUrl.includes('?') ? '&' : '?';
                 uploadUrl += `${sep}token=${encodeURIComponent(roomState.token)}`;
@@ -1311,9 +1360,10 @@
     async function initRoomState() {
         if (checkUrlAutoJoin()) return;
 
-        if (window.__TAURI__) {
+        const invoke = getTauriInvoke();
+        if (invoke) {
             try {
-                const st = await window.__TAURI__.invoke('get_room_status_cmd');
+                const st = await invoke('get_room_status_cmd');
                 if (st && st.isActive) {
                     setRoomMode('host', st);
                     return;
@@ -1323,7 +1373,7 @@
             }
         } else {
             try {
-                const res = await fetch('/api/room/status?t=' + Date.now());
+                const res = await fetch(getApiOrigin() + '/api/room/status?t=' + Date.now());
                 if (res.ok) {
                     const st = await res.json();
                     if (st && st.isActive) {
@@ -1374,11 +1424,12 @@
         if (roomState.mode === 'client') return;
         try {
             let messages = [];
-            if (window.__TAURI__) {
-                messages = await window.__TAURI__.invoke('fetch_node_messages', { baseUrl: currentTargetBaseUrl });
+            const invoke = getTauriInvoke();
+            if (invoke) {
+                messages = await invoke('fetch_node_messages', { baseUrl: currentTargetBaseUrl });
             } else {
                 const tokenParam = roomState.token ? `&token=${encodeURIComponent(roomState.token)}` : '';
-                const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + '/api/messages?t=' + Date.now() + tokenParam;
+                const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/messages?t=' + Date.now() + tokenParam;
                 const headers = {};
                 if (roomState.token) headers['X-Room-Token'] = roomState.token;
                 const res = await fetch(api, { headers });
@@ -1449,8 +1500,9 @@
         if (!text) return;
 
         try {
-            if (window.__TAURI__) {
-                await window.__TAURI__.invoke('send_node_message', {
+            const invoke = getTauriInvoke();
+            if (invoke) {
+                await invoke('send_node_message', {
                     baseUrl: currentTargetBaseUrl,
                     senderName: clientSenderName,
                     content: text
@@ -1461,7 +1513,7 @@
             }
 
             const tokenParam = roomState.token ? `?token=${encodeURIComponent(roomState.token)}` : '';
-            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/messages${tokenParam}`;
+            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + `/api/messages${tokenParam}`;
             const headers = { 'Content-Type': 'application/json' };
             if (roomState.token) headers['X-Room-Token'] = roomState.token;
 

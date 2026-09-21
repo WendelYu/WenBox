@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="20dp"
+    android:background="@color/card_bg">
+
+    <TextView
+        android:id="@+id/tvJoinRoomTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="🔒 输入房间密码"
+        android:textColor="@color/text_primary"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/tvJoinRoomSubtitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="该房间设置了入房 PIN 密码，请输入密码加入直连。"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp" />
+
+    <EditText
+        android:id="@+id/etJoinPin"
+        android:layout_width="match_parent"
+        android:layout_height="46dp"
+        android:layout_marginTop="16dp"
+        android:background="#162032"
+        android:hint="请输入房间 PIN 码"
+        android:textColor="@color/text_primary"
+        android:textColorHint="@color/text_secondary"
+        android:textSize="15sp"
+        android:paddingHorizontal="12dp"
+        android:inputType="textPassword"
+        android:singleLine="true" />
+
+</LinearLayout>

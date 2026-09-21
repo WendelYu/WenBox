@@ -782,6 +782,78 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 continue;
             }
 
+            if url == "/api/room/create" && method == Method::Post {
+                let mut body = String::new();
+                let _ = req.as_reader().read_to_string(&mut body);
+                let mut room_name = String::new();
+                let mut pin = String::new();
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(rn) = val["roomName"].as_str() {
+                        room_name = rn.trim().to_string();
+                    }
+                    if let Some(p) = val["pin"].as_str() {
+                        pin = p.trim().to_string();
+                    }
+                }
+
+                let dev_name = whoami_device_name();
+                let primary_ip = get_primary_ip();
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                let clean_pin = pin.trim().to_string();
+                let need_password = !clean_pin.is_empty();
+                let clean_name = if room_name.trim().is_empty() {
+                    format!("WenBox-{}", &uuid::Uuid::new_v4().to_string()[..4].to_uppercase())
+                } else {
+                    room_name.trim().to_string()
+                };
+                let room_id = clean_name.clone();
+
+                let cfg = RoomConfig {
+                    is_active: true,
+                    room_id,
+                    room_name: clean_name,
+                    pin: clean_pin,
+                    need_password,
+                    host_device: dev_name.clone(),
+                    host_ip: primary_ip.clone(),
+                    host_port: port,
+                    created_at: now,
+                };
+
+                *state.room.lock().unwrap() = cfg.clone();
+                state.members.lock().unwrap().clear();
+                state.auth_tokens.lock().unwrap().clear();
+
+                let host_token = uuid::Uuid::new_v4().to_string();
+                state.auth_tokens.lock().unwrap().insert(host_token);
+                let host_member = RoomMember {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: format!("{} (房主)", dev_name),
+                    ip: primary_ip,
+                    platform: "Windows".into(),
+                    joined_at: now,
+                    last_seen: now,
+                };
+                state.members.lock().unwrap().insert("127.0.0.1".into(), host_member);
+
+                let json = serde_json::to_string(&cfg).unwrap_or_default();
+                let mut resp = Response::from_string(json);
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
+            if url == "/api/room/close" && method == Method::Post {
+                let mut room = state.room.lock().unwrap();
+                room.is_active = false;
+                state.members.lock().unwrap().clear();
+                state.auth_tokens.lock().unwrap().clear();
+                let mut resp = Response::from_string("{\"success\":true}");
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                continue;
+            }
+
             if url == "/api/room/join" && method == Method::Post {
                 let mut body = String::new();
                 let _ = req.as_reader().read_to_string(&mut body);
