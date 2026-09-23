@@ -386,7 +386,11 @@
                 }
                 showToast(`已复制入房直链: ${directUrl}`);
             } catch (e) {
-                alert(`入房直链为:\n${directUrl}`);
+                if (typeof window.showAlertDialog === 'function') {
+                    window.showAlertDialog('入房直链', `直链地址已生成：\n${directUrl}`);
+                } else {
+                    showToast(`入房直链: ${directUrl}`);
+                }
             }
         });
     }
@@ -497,7 +501,7 @@
         }
     }
 
-    // ---------------- 通用 Promise 模态确认弹窗 (替代有 Bug 的 window.confirm) ----------------
+    // ---------------- 通用 Promise 模态确认弹窗 (替代 window.confirm) ----------------
     window._appConfirmResolver = null;
     window.showConfirmDialog = function (title, message, okText = '确定', okColor = '#EF4444') {
         return new Promise((resolve) => {
@@ -506,7 +510,7 @@
             const msgEl = document.getElementById('appConfirmMessage');
             const okBtn = document.getElementById('appConfirmOkBtn');
             if (!modal || !titleEl || !msgEl || !okBtn) {
-                resolve(true);
+                resolve(false);
                 return;
             }
             titleEl.textContent = title;
@@ -529,6 +533,40 @@
 
     document.getElementById('appConfirmOkBtn')?.addEventListener('click', () => {
         window.closeAppConfirm(true);
+    });
+
+    // ---------------- 通用 Promise 模态提示弹窗 (替代 window.alert) ----------------
+    window._appAlertResolver = null;
+    window.showAlertDialog = function (title, message, okText = '我知道了') {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('appAlertModal');
+            const titleEl = document.getElementById('appAlertTitle');
+            const msgEl = document.getElementById('appAlertMessage');
+            const okBtn = document.getElementById('appAlertOkBtn');
+            if (!modal || !titleEl || !msgEl || !okBtn) {
+                showToast(`${title}: ${message}`);
+                resolve();
+                return;
+            }
+            titleEl.textContent = title;
+            msgEl.textContent = message;
+            okBtn.textContent = okText;
+            modal.style.display = 'flex';
+            window._appAlertResolver = resolve;
+        });
+    };
+
+    window.closeAppAlert = function () {
+        const modal = document.getElementById('appAlertModal');
+        if (modal) modal.style.display = 'none';
+        if (window._appAlertResolver) {
+            window._appAlertResolver();
+            window._appAlertResolver = null;
+        }
+    };
+
+    document.getElementById('appAlertOkBtn')?.addEventListener('click', () => {
+        window.closeAppAlert();
     });
 
     // ---------------- 创建房间 (成为服务端) ----------------
@@ -563,7 +601,7 @@
                     showToast(`房间「${rName}」已创建！`);
                 }
             } catch (err) {
-                alert(`创建房间失败: ${err.message || err}`);
+                window.showAlertDialog('创建房间失败', err.message || err);
             } finally {
                 modalBtnConfirmCreateRoom.disabled = false;
                 modalBtnConfirmCreateRoom.textContent = '立即创建并开启服务';
@@ -614,11 +652,19 @@
     }
 
     // ---------------- 发现房间轮询与卡片渲染 ----------------
+    let isPollingRooms = false;
     async function pollDiscoveredRooms() {
+        if (isPollingRooms) return;
         if (roomState.mode !== 'client') return;
+        isPollingRooms = true;
         try {
-            let rooms = [];
             const invoke = getTauriInvoke();
+            if (invoke) {
+                try {
+                    await invoke('send_room_probe_cmd');
+                } catch (_) {}
+            }
+            let rooms = [];
             if (invoke) {
                 rooms = await invoke('get_discovered_rooms_cmd');
             } else {
@@ -631,6 +677,8 @@
             renderDiscoveredRooms(rooms || []);
         } catch (e) {
             // ignore
+        } finally {
+            isPollingRooms = false;
         }
     }
 
@@ -778,16 +826,20 @@
                 throw new Error(joinRes.message || '入房密码不正确');
             }
         } catch (e) {
-            alert(`加入房间失败: ${e.message || e}`);
+            window.showAlertDialog('加入房间失败', e.message || e);
         }
     }
 
     function whoami_device_name_client() {
+        const storedNick = localStorage.getItem('wenbox_nickname');
+        if (storedNick && storedNick.trim()) return storedNick.trim();
         const plat = (navigator.userAgent.indexOf('Mac') !== -1) ? 'Mac' :
                      (navigator.userAgent.indexOf('Win') !== -1) ? 'Windows' :
                      (navigator.userAgent.indexOf('Android') !== -1) ? 'Android' : 'Web';
         return `${plat}用户-${Math.floor(100 + Math.random() * 900)}`;
     }
+
+    let latestRoomMembers = [];
 
     // 房主轮询房间成员
     async function pollRoomMembers() {
@@ -804,12 +856,13 @@
                     members = data.members || [];
                 }
             }
+            latestRoomMembers = members;
             if (hostMemberCount) hostMemberCount.textContent = (members.length || 1);
             const onlineBadge = document.getElementById('chatOnlineMemberBadge');
-            if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length || 1} 人`;
+            if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length || 1} 人 (点击查看)`;
             if (hostMembersContainer) {
                 hostMembersContainer.innerHTML = members.map(m => `
-                    <span class="member-pill ${m.name.includes('房主') ? 'is-host' : ''}">
+                    <span class="member-pill ${m.name.includes('房主') ? 'is-host' : ''}" style="cursor: pointer;" onclick="window.openOnlineMembersModal()">
                         ${m.name.includes('房主') ? '👑' : '📱'} ${escapeHtml(m.name)}
                     </span>
                 `).join('');
@@ -828,11 +881,60 @@
             if (res.ok) {
                 const data = await res.json();
                 const members = data.members || [];
+                latestRoomMembers = members;
                 const onlineBadge = document.getElementById('chatOnlineMemberBadge');
-                if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length || 2} 人`;
+                if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length || 2} 人 (点击查看)`;
             }
         } catch (_) {}
     }
+
+    window.openOnlineMembersModal = function() {
+        const modal = document.getElementById('onlineMembersModal');
+        const listEl = document.getElementById('onlineMembersModalList');
+        if (!modal || !listEl) return;
+
+        let members = latestRoomMembers;
+        if (!members || members.length === 0) {
+            const myIp = selfDeviceInfo.ip || (currentTargetBaseUrl ? currentTargetBaseUrl.replace(/https?:\/\/([^:]+).*/, '$1') : '127.0.0.1');
+            members = [{ name: '当前设备 (本机)', ip: myIp }];
+        }
+
+        listEl.innerHTML = members.map(m => {
+            const ip = m.ip || '127.0.0.1';
+            const name = m.name || '局域网成员';
+            return `
+                <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(30, 41, 59, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px;">
+                    <div style="display: flex; flex-direction: column; gap: 2px; overflow: hidden; margin-right: 8px;">
+                        <span style="font-size: 13px; font-weight: 600; color: #F8FAFC; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${escapeHtml(name)}</span>
+                        <span style="font-size: 12px; color: #38BDF8; font-family: monospace;">IP: ${escapeHtml(ip)}</span>
+                    </div>
+                    <button class="btn-copy-mini" style="font-size: 11px; padding: 4px 10px; background: #2563EB; color: #fff; border: none; border-radius: 6px; cursor: pointer; flex-shrink: 0;" onclick="window.copyMemberIp('${escapeHtml(ip)}')">复制 IP</button>
+                </div>
+            `;
+        }).join('');
+
+        modal.style.display = 'flex';
+    };
+
+    window.closeOnlineMembersModal = function() {
+        const modal = document.getElementById('onlineMembersModal');
+        if (modal) modal.style.display = 'none';
+    };
+
+    window.copyMemberIp = function(ip) {
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(ip).then(() => showToast(`已复制 IP: ${ip}`));
+        } else {
+            showToast(`IP: ${ip}`);
+        }
+    };
+
+    document.getElementById('btnShowChatMembersModal')?.addEventListener('click', () => {
+        window.openOnlineMembersModal();
+    });
+    document.getElementById('chatOnlineMemberBadge')?.addEventListener('click', () => {
+        window.openOnlineMembersModal();
+    });
 
     if (btnRefreshDiscoveredRooms) {
         btnRefreshDiscoveredRooms.addEventListener('click', async () => {
@@ -841,7 +943,10 @@
         });
     }
 
+    let isLoadingFiles = false;
     async function loadFiles() {
+        if (isLoadingFiles) return;
+        isLoadingFiles = true;
         try {
             const invoke = getTauriInvoke();
             if (invoke) {
@@ -872,6 +977,8 @@
                     </div>
                 `;
             }
+        } finally {
+            isLoadingFiles = false;
         }
     }
     window.loadFiles = loadFiles;
@@ -1104,7 +1211,13 @@
 
     if (btnClearShareFiles) {
         btnClearShareFiles.addEventListener('click', async () => {
-            if (!confirm('确定要清空本机所有对外分享的文件吗？')) return;
+            const ok = await window.showConfirmDialog(
+                '清空分享',
+                '确定要清空本机所有对外分享的文件吗？',
+                '确认清空',
+                '#EF4444'
+            );
+            if (!ok) return;
             try {
                 const invoke = getTauriInvoke();
                 if (invoke) {
@@ -1180,7 +1293,7 @@
     if (btnSelectReimburseDir) {
         btnSelectReimburseDir.addEventListener('click', async () => {
             if (!currentFiles || currentFiles.length === 0) {
-                alert('当前选定设备还没有待传文件，请先在对方设备上添加待传发票或文件！');
+                window.showAlertDialog('暂无待传文件', '当前选定设备还没有待传文件，请先在对方设备上添加待传发票或文件！');
                 return;
             }
 
@@ -1557,7 +1670,14 @@
 
     const osPlatform = (navigator.userAgent.indexOf('Mac') !== -1) ? 'Mac' :
                        (navigator.userAgent.indexOf('Win') !== -1) ? 'Windows' : '电脑端';
-    const clientSenderName = `💻 ${osPlatform}端`;
+
+    function getClientSenderName() {
+        const storedNick = localStorage.getItem('wenbox_nickname');
+        if (storedNick && storedNick.trim()) {
+            return `💻 ${storedNick.trim()}`;
+        }
+        return `💻 ${osPlatform}端`;
+    }
 
     // 房间模式与聊天室门禁联动
     function updateChatGatingUi(mode, data) {
@@ -1616,10 +1736,13 @@
     }
 
     let joinedDisconnectCount = 0;
+    let isPollingChat = false;
 
     // 轮询聊天消息
     async function pollChatMessages() {
+        if (isPollingChat) return;
         if (roomState.mode === 'client') return;
+        isPollingChat = true;
         try {
             let messages = [];
             const invoke = getTauriInvoke();
@@ -1680,6 +1803,8 @@
                     setRoomMode('client');
                 }
             }
+        } finally {
+            isPollingChat = false;
         }
     }
 
@@ -1728,14 +1853,19 @@
         if (!webChatMessages) return;
         if (webEmptyChat) webEmptyChat.style.display = 'none';
 
-        const isMe = !msg.isFromPhone && msg.senderName.includes(osPlatform);
+        const myName = getClientSenderName();
+        const isMe = (!msg.isFromPhone && (msg.senderName === myName || msg.senderName.includes(osPlatform)));
         const row = document.createElement('div');
         row.className = `chat-msg-row ${isMe ? 'from-me' : 'from-other'}`;
 
-        const senderTitle = msg.isFromPhone ? '📱 手机端' : msg.senderName;
+        let senderTitle = msg.senderName;
+        if (!senderTitle) {
+            senderTitle = msg.isFromPhone ? '📱 手机端' : '💻 成员';
+        }
+        const ipTag = msg.senderIp ? ` (${msg.senderIp})` : '';
         const meta = document.createElement('div');
         meta.className = 'chat-msg-meta';
-        meta.textContent = `${senderTitle} • ${formatTime(msg.timestamp)}`;
+        meta.textContent = `${senderTitle}${ipTag} • ${formatTime(msg.timestamp)}`;
 
         const bubble = document.createElement('div');
         bubble.className = 'chat-msg-bubble';
@@ -1894,13 +2024,14 @@
     async function sendChatMessageDirect(text) {
         if (!text || !text.trim()) return;
         const content = text.trim();
+        const myName = getClientSenderName();
 
         try {
             const invoke = getTauriInvoke();
             if (invoke) {
                 await invoke('send_node_message', {
                     baseUrl: currentTargetBaseUrl,
-                    senderName: clientSenderName,
+                    senderName: myName,
                     content: content,
                     token: roomState.token || null
                 });
@@ -1918,7 +2049,7 @@
                 headers: headers,
                 body: JSON.stringify({
                     content: content,
-                    senderName: clientSenderName
+                    senderName: myName
                 })
             });
             if (resp.ok) {

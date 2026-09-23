@@ -23,6 +23,7 @@ data class PeerDevice(
 object UdpDiscoveryManager {
 
     private const val DISCOVERY_PORT = 9528
+    private const val MULTICAST_IPV4 = "239.255.255.250"
     private val activeDevices = ConcurrentHashMap<String, PeerDevice>()
     private val activeRooms = ConcurrentHashMap<String, DiscoveredRoom>()
     private var isReceiverRunning = false
@@ -56,11 +57,14 @@ object UdpDiscoveryManager {
 
         recvThread = thread(name = "UDP-Recv") {
             try {
-                val socket = DatagramSocket(null).apply {
+                val socket = java.net.MulticastSocket(DISCOVERY_PORT).apply {
                     reuseAddress = true
                     broadcast = true
-                    bind(java.net.InetSocketAddress(DISCOVERY_PORT))
                 }
+                try {
+                    socket.joinGroup(InetAddress.getByName(MULTICAST_IPV4))
+                } catch (_: Exception) {}
+
                 val buffer = ByteArray(2048)
                 val packet = DatagramPacket(buffer, buffer.size)
 
@@ -100,7 +104,27 @@ object UdpDiscoveryManager {
                         activeRooms[key] = r
                         notifyRoomsChanged()
                     }
-                    // 2. 房间解散通知 (对端已下线解散，立即从列表剔除)
+                    // 2. 主动探测请求 (Ping): 如果本机开房中，单播秒级应答
+                    else if (action == "wenbox_search_room") {
+                        val room = RoomManager.currentRoom
+                        if (room != null && room.isActive) {
+                            val roomMsg = JSONObject().apply {
+                                put("action", "wenbox_room_broadcast")
+                                put("roomId", room.roomId)
+                                put("roomName", room.roomName)
+                                put("needPassword", room.needPassword)
+                                put("hostDevice", room.hostDevice)
+                                put("hostIp", room.hostIp)
+                                put("hostPort", room.hostPort)
+                                put("memberCount", RoomManager.getMembers().size)
+                            }.toString().toByteArray(Charsets.UTF_8)
+                            try {
+                                val replyPacket = DatagramPacket(roomMsg, roomMsg.size, packet.address, packet.port)
+                                socket.send(replyPacket)
+                            } catch (_: Exception) {}
+                        }
+                    }
+                    // 3. 房间解散通知 (对端已下线解散，立即从列表剔除)
                     else if (action == "wenbox_room_closed") {
                         val closedRoomId = json.optString("roomId")
                         var changed = false
@@ -114,7 +138,7 @@ object UdpDiscoveryManager {
                         }
                         if (changed) notifyRoomsChanged()
                     }
-                    // 3. 设备发现通知
+                    // 4. 设备发现通知
                     else if (action == "wenbox_discovery") {
                         val devName = json.optString("device", "未知设备")
                         val platform = json.optString("platform", "Android")
@@ -315,8 +339,29 @@ object UdpDiscoveryManager {
         } catch (_: Exception) {}
         try {
             list.add(InetAddress.getByName("255.255.255.255"))
+            list.add(InetAddress.getByName(MULTICAST_IPV4))
         } catch (_: Exception) {}
         return list.distinct()
+    }
+
+    fun sendSearchProbe() {
+        thread(name = "UDP-Probe") {
+            try {
+                val socket = DatagramSocket()
+                socket.broadcast = true
+                val msg = JSONObject().apply {
+                    put("action", "wenbox_search_room")
+                }.toString().toByteArray(Charsets.UTF_8)
+                val targetAddrs = getBroadcastAddresses()
+                for (bAddr in targetAddrs) {
+                    try {
+                        val packet = DatagramPacket(msg, msg.size, bAddr, DISCOVERY_PORT)
+                        socket.send(packet)
+                    } catch (_: Exception) {}
+                }
+                socket.close()
+            } catch (_: Exception) {}
+        }
     }
 
     fun registerDevice(name: String, ip: String, port: Int, platform: String = "Windows") {
@@ -335,8 +380,20 @@ object UdpDiscoveryManager {
     fun getDevices(): List<PeerDevice> = activeDevices.values.toList()
 
     fun getRooms(): List<DiscoveredRoom> {
+        val now = System.currentTimeMillis()
         val localIps = getLocalIpAddresses()
         val curRoomId = RoomManager.currentRoom?.roomId
+        val it = activeRooms.entries.iterator()
+        var changed = false
+        while (it.hasNext()) {
+            val entry = it.next()
+            if (now - entry.value.lastSeen > 15000) {
+                it.remove()
+                changed = true
+            }
+        }
+        if (changed) notifyRoomsChanged()
+
         return activeRooms.values.filter { room ->
             // 过滤掉本机创建的房间或同机IP，避免解散后或在同一台机上发现自己
             (curRoomId == null || room.roomId != curRoomId) && !localIps.contains(room.ip)

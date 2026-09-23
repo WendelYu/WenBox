@@ -55,7 +55,15 @@ class TransferService : Service() {
             isRunning = true
 
             acquireLocks()
-            startForeground(NOTIFICATION_ID, buildNotification())
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildNotification(),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification())
+            }
             com.landrop.utils.UdpDiscoveryManager.startBroadcaster(port)
             onStatusChanged?.invoke(true)
             return true
@@ -87,14 +95,21 @@ class TransferService : Service() {
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "WenDrop::TransferWakeLock"
             ).apply {
-                acquire(10 * 60 * 1000L)
+                setReferenceCounted(false)
+                acquire()
             }
 
             val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val wifiMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            } else {
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            }
             wifiLock = wifiManager.createWifiLock(
-                WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                wifiMode,
                 "WenDrop::TransferWifiLock"
             ).apply {
+                setReferenceCounted(false)
                 acquire()
             }
 

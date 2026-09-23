@@ -333,6 +333,7 @@ class LanServer(
                             put("content", m.content)
                             put("timestamp", m.timestamp)
                             put("isFromPhone", m.isFromPhone)
+                            put("senderIp", m.senderIp)
                         }
                         jsonArray.put(item)
                     }
@@ -409,12 +410,15 @@ class LanServer(
         val postData = getUtf8PostData(map)
         var content = ""
         var senderName = "💻 电脑端"
+        var senderIp = ""
+        val clientIp = session.remoteIpAddress ?: ""
 
         if (!postData.isNullOrBlank()) {
             try {
                 val json = JSONObject(postData)
                 content = json.optString("content", "")
                 senderName = json.optString("senderName", "💻 电脑端")
+                senderIp = json.optString("senderIp", "")
             } catch (_: Exception) {}
         }
 
@@ -422,10 +426,14 @@ class LanServer(
             val params = session.parameters
             content = params["content"]?.firstOrNull() ?: ""
             senderName = params["senderName"]?.firstOrNull() ?: "💻 电脑端"
+            senderIp = params["senderIp"]?.firstOrNull() ?: ""
+        }
+        if (senderIp.isBlank()) {
+            senderIp = clientIp
         }
 
         if (content.isNotBlank()) {
-            val msg = MessageManager.addClientMessage(content, senderName)
+            val msg = MessageManager.addClientMessage(content, senderName, senderIp)
             return newFixedLengthResponse(
                 Response.Status.OK,
                 "application/json",

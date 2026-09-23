@@ -5,5 +5,6 @@ data class ChatMessage(
     val senderName: String,
     val content: String,
     val timestamp: Long,
-    val isFromPhone: Boolean
+    val isFromPhone: Boolean,
+    val senderIp: String = ""
 )

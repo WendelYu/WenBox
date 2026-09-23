@@ -5,25 +5,26 @@
     android:id="@+id/llMessageContainer"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginBottom="8dp"
+    android:layout_marginBottom="12dp"
     android:orientation="vertical">
 
     <TextView
         android:id="@+id/tvSenderInfo"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_marginBottom="3dp"
         android:textColor="@color/text_secondary"
         android:textSize="11sp"
-        tools:text="💻 电脑端 • 14:32:05" />
+        tools:text="💻 电脑端 (192.168.1.100) • 14:32:05" />
 
     <TextView
         android:id="@+id/tvMessageContent"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="3dp"
-        android:background="#1E293B"
-        android:paddingHorizontal="12dp"
-        android:paddingVertical="8dp"
+        android:maxWidth="280dp"
+        android:background="@drawable/bg_chat_bubble_other"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="9dp"
         android:textColor="@color/text_primary"
         android:textSize="14sp"
         android:lineSpacingExtra="2dp"

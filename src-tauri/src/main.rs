@@ -36,6 +36,8 @@ pub struct ChatMessage {
     pub timestamp: u64,
     #[serde(rename = "isFromPhone")]
     pub is_from_phone: bool,
+    #[serde(rename = "senderIp", default)]
+    pub sender_ip: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -333,25 +335,40 @@ fn create_room_cmd(room_name: String, pin: String, state: tauri::State<Arc<AppSt
 #[tauri::command]
 fn close_room_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
     let old_room_id = {
-        let mut room = state.room.lock().unwrap();
+        let mut room = state.room.lock().unwrap_or_else(|e| e.into_inner());
         let id = room.room_id.clone();
         room.is_active = false;
         *room = RoomConfig::default();
         id
     };
-    state.members.lock().unwrap().clear();
-    state.auth_tokens.lock().unwrap().clear();
+    state.members.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    state.auth_tokens.lock().unwrap_or_else(|e| e.into_inner()).clear();
 
     if !old_room_id.is_empty() {
         thread::spawn(move || {
+            let msg = serde_json::json!({
+                "action": "wenbox_room_closed",
+                "roomId": old_room_id
+            }).to_string();
+            let bytes = msg.as_bytes();
+
+            // 针对每个物理网卡独立绑定发送
+            let ifaces = get_ipv4_interfaces();
+            for (_name, iface_ip) in ifaces {
+                if let Ok(socket) = UdpSocket::bind((iface_ip, 0)) {
+                    let _ = socket.set_broadcast(true);
+                    let octets = iface_ip.octets();
+                    let subnet_bcast = format!("{}.{}.{}.255:9528", octets[0], octets[1], octets[2]);
+                    let _ = socket.send_to(bytes, &subnet_bcast);
+                    let _ = socket.send_to(bytes, "255.255.255.255:9528");
+                    let _ = socket.send_to(bytes, format!("{}:9528", MULTICAST_IPV4));
+                }
+            }
+
             if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
                 let _ = socket.set_broadcast(true);
-                let msg = serde_json::json!({
-                    "action": "wenbox_room_closed",
-                    "roomId": old_room_id
-                }).to_string();
                 for target in get_all_broadcast_addrs() {
-                    let _ = socket.send_to(msg.as_bytes(), &target);
+                    let _ = socket.send_to(bytes, &target);
                 }
             }
         });
@@ -599,12 +616,12 @@ fn save_remote_file_to_directory(download_url: String, dir_path: String, folder_
 fn fetch_node_messages(base_url: String, token: Option<String>, state: tauri::State<Arc<AppState>>) -> Result<Vec<ChatMessage>, String> {
     let clean = base_url.trim().trim_end_matches('/');
     if clean.is_empty() || clean.contains("localhost") || clean.contains("127.0.0.1") {
-        let msgs = state.messages.lock().unwrap().clone();
+        let msgs = state.messages.lock().unwrap_or_else(|e| e.into_inner()).clone();
         return Ok(msgs);
     }
 
     let url = format!("{}/api/messages", clean);
-    let mut req = ureq::get(&url).timeout(Duration::from_secs(5));
+    let mut req = ureq::get(&url).timeout(Duration::from_millis(2500));
     if let Some(ref t) = token {
         if !t.is_empty() {
             req = req.set("X-Room-Token", t);
@@ -621,12 +638,14 @@ fn fetch_node_messages(base_url: String, token: Option<String>, state: tauri::St
             let content = item["content"].as_str().unwrap_or("").to_string();
             let timestamp = item["timestamp"].as_u64().unwrap_or(0);
             let is_from_phone = item["isFromPhone"].as_bool().unwrap_or(false);
+            let sender_ip = item["senderIp"].as_str().unwrap_or("").to_string();
             list.push(ChatMessage {
                 id,
                 sender_name,
                 content,
                 timestamp,
                 is_from_phone,
+                sender_ip,
             });
         }
     }
@@ -640,6 +659,7 @@ fn send_node_message(base_url: String, sender_name: String, content: String, tok
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
+    let my_ip = get_primary_ip();
 
     if clean.is_empty() || clean.contains("localhost") || clean.contains("127.0.0.1") {
         let msg = ChatMessage {
@@ -648,20 +668,22 @@ fn send_node_message(base_url: String, sender_name: String, content: String, tok
             content,
             timestamp: now_ms,
             is_from_phone: false,
+            sender_ip: my_ip,
         };
-        state.messages.lock().unwrap().push(msg);
+        state.messages.lock().unwrap_or_else(|e| e.into_inner()).push(msg);
         return Ok(true);
     }
 
     let url = format!("{}/api/messages", clean);
     let body = serde_json::json!({
         "senderName": sender_name,
-        "content": content
+        "content": content,
+        "senderIp": my_ip
     });
 
     let mut req = ureq::post(&url)
         .set("Content-Type", "application/json")
-        .timeout(Duration::from_secs(5));
+        .timeout(Duration::from_millis(3000));
     if let Some(ref t) = token {
         if !t.is_empty() {
             req = req.set("X-Room-Token", t);
@@ -677,8 +699,9 @@ fn send_node_message(base_url: String, sender_name: String, content: String, tok
                 content,
                 timestamp: now_ms,
                 is_from_phone: false,
+                sender_ip: my_ip,
             };
-            state.messages.lock().unwrap().push(msg);
+            state.messages.lock().unwrap_or_else(|e| e.into_inner()).push(msg);
             Ok(true)
         }
         Err(e) => Err(format!("发送失败: {}", e)),
@@ -1265,7 +1288,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
             // 5. 局域网消息获取与发送
             if url.starts_with("/api/messages") {
                 if method == Method::Get {
-                    let msgs = state.messages.lock().unwrap().clone();
+                    let msgs = state.messages.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     let json = serde_json::json!({ "messages": msgs }).to_string();
                     let mut resp = Response::from_string(json);
                     resp.add_header(cors_origin);
@@ -1276,7 +1299,11 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                     let _ = req.as_reader().read_to_string(&mut body);
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
                         let content = val["content"].as_str().unwrap_or("").to_string();
-                        let sender_name = val["senderName"].as_str().unwrap_or("💻 Windows端").to_string();
+                        let sender_name = val["senderName"].as_str().unwrap_or("未知用户").to_string();
+                        let sender_ip_field = val["senderIp"].as_str().unwrap_or("").trim().to_string();
+                        let remote_ip = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_else(|| "127.0.0.1".into());
+                        let sender_ip = if !sender_ip_field.is_empty() { sender_ip_field } else { remote_ip };
+                        let is_from_phone = sender_name.contains("手机") || sender_name.contains("Android") || sender_name.contains("iPhone") || sender_name.contains("iPad");
                         let now_ms = SystemTime::now()
                             .duration_since(UNIX_EPOCH)
                             .unwrap_or_default()
@@ -1287,9 +1314,10 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                             sender_name,
                             content,
                             timestamp: now_ms,
-                            is_from_phone: false,
+                            is_from_phone,
+                            sender_ip,
                         };
-                        state.messages.lock().unwrap().push(msg);
+                        state.messages.lock().unwrap_or_else(|e| e.into_inner()).push(msg);
                     }
                     let mut resp = Response::from_string("{\"success\":true}");
                     resp.add_header(cors_origin);
@@ -1323,23 +1351,60 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
     });
 }
 
-// ---------------- UDP 局域网多设备自发现机制 (9528) ----------------
-fn get_all_broadcast_addrs() -> Vec<String> {
-    let mut addrs = vec!["255.255.255.255:9528".to_string()];
+// ---------------- UDP 局域网多网卡自发现与主动探测机制 (9528) ----------------
+const MULTICAST_IPV4: &str = "239.255.255.250";
+const DISCOVERY_PORT: u16 = 9528;
+
+fn get_ipv4_interfaces() -> Vec<(String, std::net::Ipv4Addr)> {
+    let mut list = Vec::new();
     if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
-        for (_name, ip) in interfaces {
+        for (name, ip) in interfaces {
             if let std::net::IpAddr::V4(ipv4) = ip {
-                if !ipv4.is_loopback() {
-                    let octets = ipv4.octets();
-                    let bcast = format!("{}.{}.{}.255:9528", octets[0], octets[1], octets[2]);
-                    if !addrs.contains(&bcast) {
-                        addrs.push(bcast);
-                    }
+                if !ipv4.is_loopback() && !ipv4.is_link_local() {
+                    list.push((name, ipv4));
                 }
             }
         }
     }
+    list
+}
+
+fn get_all_broadcast_addrs() -> Vec<String> {
+    let mut addrs = vec!["255.255.255.255:9528".to_string(), format!("{}:9528", MULTICAST_IPV4)];
+    for (_name, ipv4) in get_ipv4_interfaces() {
+        let octets = ipv4.octets();
+        let bcast = format!("{}.{}.{}.255:9528", octets[0], octets[1], octets[2]);
+        if !addrs.contains(&bcast) {
+            addrs.push(bcast);
+        }
+    }
     addrs
+}
+
+#[tauri::command]
+fn send_room_probe_cmd() -> Result<bool, String> {
+    let msg = serde_json::json!({
+        "action": "wenbox_search_room"
+    }).to_string();
+    let bytes = msg.as_bytes();
+
+    let ifaces = get_ipv4_interfaces();
+    for (_name, iface_ip) in ifaces {
+        if let Ok(socket) = UdpSocket::bind((iface_ip, 0)) {
+            let _ = socket.set_broadcast(true);
+            let octets = iface_ip.octets();
+            let subnet_bcast = format!("{}.{}.{}.255:9528", octets[0], octets[1], octets[2]);
+            let _ = socket.send_to(bytes, &subnet_bcast);
+            let _ = socket.send_to(bytes, "255.255.255.255:9528");
+            let _ = socket.send_to(bytes, format!("{}:9528", MULTICAST_IPV4));
+        }
+    }
+    if let Ok(s) = UdpSocket::bind("0.0.0.0:0") {
+        let _ = s.set_broadcast(true);
+        let _ = s.send_to(bytes, "255.255.255.255:9528");
+        let _ = s.send_to(bytes, format!("{}:9528", MULTICAST_IPV4));
+    }
+    Ok(true)
 }
 
 fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
@@ -1348,13 +1413,27 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
 
     // 1. 启动接收监听线程
     let state_recv = state.clone();
+    let dev_name_recv = dev_name.clone();
+    let platform_recv = platform.clone();
     thread::spawn(move || {
         let socket = match UdpSocket::bind("0.0.0.0:9528") {
             Ok(s) => s,
-            Err(_) => return,
+            Err(e) => {
+                eprintln!("Failed to bind UDP 9528: {}", e);
+                return;
+            }
         };
         let _ = socket.set_broadcast(true);
-        let mut buf = [0u8; 1024];
+
+        // 加入多播组
+        if let Ok(mcast_addr) = MULTICAST_IPV4.parse::<std::net::Ipv4Addr>() {
+            for (_name, iface_ip) in get_ipv4_interfaces() {
+                let _ = socket.join_multicast_v4(&mcast_addr, &iface_ip);
+            }
+            let _ = socket.join_multicast_v4(&mcast_addr, &std::net::Ipv4Addr::UNSPECIFIED);
+        }
+
+        let mut buf = [0u8; 2048];
         loop {
             if let Ok((len, src)) = socket.recv_from(&mut buf) {
                 if let Ok(text) = std::str::from_utf8(&buf[..len]) {
@@ -1371,14 +1450,19 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                             let room_name = val["roomName"].as_str().unwrap_or(&room_id).to_string();
                             let host_dev = val["hostDevice"].as_str().unwrap_or("").to_string();
                             let plat = val["platform"].as_str().unwrap_or("Windows").to_string();
-                            let port = val["port"].as_u64().unwrap_or(9527) as u16;
+                            let port = val["port"].as_u64().or_else(|| val["hostPort"].as_u64()).unwrap_or(9527) as u16;
                             let need_password = val["needPassword"].as_bool().unwrap_or(false);
-                            let ip = src.ip().to_string();
+                            let host_ip_field = val["hostIp"].as_str().unwrap_or("").trim().to_string();
+                            let ip = if !host_ip_field.is_empty() {
+                                host_ip_field
+                            } else {
+                                src.ip().to_string()
+                            };
 
                             // 检查是否为自己发送的广播
-                            let my_room = state_recv.room.lock().unwrap().clone();
+                            let my_room = state_recv.room.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             let is_my_active_room = my_room.is_active && my_room.room_id == room_id;
-                            let is_self_ip = get_all_lan_ips().iter().any(|item| item.ip == ip);
+                            let is_self_ip = get_all_lan_ips().iter().any(|item| item.ip == ip || item.ip == src.ip().to_string());
 
                             if !(is_my_active_room && is_self_ip) {
                                 let key = format!("{}:{}", ip, port);
@@ -1392,7 +1476,7 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                     need_password,
                                     last_seen: now,
                                 };
-                                state_recv.discovered_rooms.lock().unwrap().insert(key.clone(), disc);
+                                state_recv.discovered_rooms.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone(), disc);
 
                                 // 同时也作为普通在线节点缓存
                                 let node = LanDevice {
@@ -1402,21 +1486,42 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                     platform: plat,
                                     last_seen: now,
                                 };
-                                state_recv.devices.lock().unwrap().insert(key, node);
+                                state_recv.devices.lock().unwrap_or_else(|e| e.into_inner()).insert(key, node);
                             }
                         }
 
-                        // 2. 房间解散通知
+                        // 2. 主动探测请求 (Ping): 如果本机开房中，单播秒级应答
+                        if action == "wenbox_search_room" {
+                            let my_room = state_recv.room.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                            if my_room.is_active {
+                                let member_count = state_recv.members.lock().unwrap_or_else(|e| e.into_inner()).len();
+                                let reply = serde_json::json!({
+                                    "action": "wenbox_room_broadcast",
+                                    "roomId": my_room.room_id,
+                                    "roomName": my_room.room_name,
+                                    "hostDevice": dev_name_recv,
+                                    "platform": platform_recv,
+                                    "port": my_port,
+                                    "hostPort": my_port,
+                                    "hostIp": my_room.host_ip,
+                                    "needPassword": my_room.need_password,
+                                    "memberCount": member_count
+                                }).to_string();
+                                let _ = socket.send_to(reply.as_bytes(), src);
+                            }
+                        }
+
+                        // 3. 房间解散通知
                         if action == "wenbox_room_closed" {
                             let closed_room_id = val["roomId"].as_str().unwrap_or("");
                             let sender_ip = src.ip().to_string();
-                            let mut rooms = state_recv.discovered_rooms.lock().unwrap();
+                            let mut rooms = state_recv.discovered_rooms.lock().unwrap_or_else(|e| e.into_inner());
                             rooms.retain(|_k, v| v.room_id != closed_room_id && v.ip != sender_ip);
-                            let mut devs = state_recv.devices.lock().unwrap();
+                            let mut devs = state_recv.devices.lock().unwrap_or_else(|e| e.into_inner());
                             devs.retain(|_k, v| v.ip != sender_ip);
                         }
 
-                        // 3. 传统设备节点探测广播
+                        // 4. 传统设备节点探测广播
                         if action == "wenbox_discovery" {
                             let name = val["device"].as_str().unwrap_or("").to_string();
                             let plat = val["platform"].as_str().unwrap_or("Android").to_string();
@@ -1431,7 +1536,7 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                 platform: plat,
                                 last_seen: now,
                             };
-                            state_recv.devices.lock().unwrap().insert(key, node);
+                            state_recv.devices.lock().unwrap_or_else(|e| e.into_inner()).insert(key, node);
                         }
                     }
                 }
@@ -1439,18 +1544,12 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
         }
     });
 
-    // 2. 启动定时广播线程 (仅当本机作为房主开启房间后，才对外宣告自身房间信息)
+    // 2. 启动定时广播线程 (LocalSend 架构：遍历每个物理网卡独立绑定发包)
     let state_bcast = state.clone();
     thread::spawn(move || {
-        let socket = match UdpSocket::bind("0.0.0.0:0") {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        let _ = socket.set_broadcast(true);
-
         loop {
             let active_room = {
-                let r = state_bcast.room.lock().unwrap();
+                let r = state_bcast.room.lock().unwrap_or_else(|e| e.into_inner());
                 if r.is_active {
                     Some(r.clone())
                 } else {
@@ -1460,26 +1559,60 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
 
             // 仅当房主开房后，才对外进行房间广播；默认客户端模式下绝不广播
             if let Some(room) = active_room {
-                let member_count = state_bcast.members.lock().unwrap().len();
-                let msg = serde_json::json!({
-                    "action": "wenbox_room_broadcast",
-                    "roomId": room.room_id,
-                    "roomName": room.room_name,
-                    "hostDevice": dev_name,
-                    "platform": platform,
-                    "port": my_port,
-                    "hostPort": my_port,
-                    "hostIp": room.host_ip,
-                    "needPassword": room.need_password,
-                    "memberCount": member_count
-                }).to_string();
+                let member_count = state_bcast.members.lock().unwrap_or_else(|e| e.into_inner()).len();
+                let ifaces = get_ipv4_interfaces();
 
-                let targets = get_all_broadcast_addrs();
-                for target in targets {
-                    let _ = socket.send_to(msg.as_bytes(), &target);
+                // 针对每一个网卡独立绑定 socket 发送，彻底解决多网卡（WiFi+网口）路由限制
+                for (_name, iface_ip) in &ifaces {
+                    if let Ok(socket) = UdpSocket::bind((*iface_ip, 0)) {
+                        let _ = socket.set_broadcast(true);
+                        let _ = socket.set_multicast_loop_v4(false);
+
+                        let octets = iface_ip.octets();
+                        let subnet_bcast = format!("{}.{}.{}.255:9528", octets[0], octets[1], octets[2]);
+                        let host_ip_str = iface_ip.to_string();
+
+                        let msg = serde_json::json!({
+                            "action": "wenbox_room_broadcast",
+                            "roomId": room.room_id,
+                            "roomName": room.room_name,
+                            "hostDevice": dev_name,
+                            "platform": platform,
+                            "port": my_port,
+                            "hostPort": my_port,
+                            "hostIp": host_ip_str,
+                            "needPassword": room.need_password,
+                            "memberCount": member_count
+                        }).to_string();
+
+                        let bytes = msg.as_bytes();
+                        let _ = socket.send_to(bytes, &subnet_bcast);
+                        let _ = socket.send_to(bytes, "255.255.255.255:9528");
+                        let _ = socket.send_to(bytes, format!("{}:9528", MULTICAST_IPV4));
+                    }
+                }
+
+                // 额外兜底：从 0.0.0.0:0 发出全局与组播
+                if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+                    let _ = socket.set_broadcast(true);
+                    let msg = serde_json::json!({
+                        "action": "wenbox_room_broadcast",
+                        "roomId": room.room_id,
+                        "roomName": room.room_name,
+                        "hostDevice": dev_name,
+                        "platform": platform,
+                        "port": my_port,
+                        "hostPort": my_port,
+                        "hostIp": room.host_ip,
+                        "needPassword": room.need_password,
+                        "memberCount": member_count
+                    }).to_string();
+                    let bytes = msg.as_bytes();
+                    let _ = socket.send_to(bytes, "255.255.255.255:9528");
+                    let _ = socket.send_to(bytes, format!("{}:9528", MULTICAST_IPV4));
                 }
             }
-            thread::sleep(Duration::from_secs(3));
+            thread::sleep(Duration::from_millis(2500));
         }
     });
 }
@@ -1531,7 +1664,8 @@ fn main() {
             save_file_to_directory,
             upload_local_file_to_remote,
             fetch_node_messages,
-            send_node_message
+            send_node_message,
+            send_room_probe_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running wenbox application");

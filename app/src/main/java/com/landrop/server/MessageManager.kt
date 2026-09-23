@@ -18,26 +18,28 @@ object MessageManager {
         }
     }
 
-    fun addPhoneMessage(content: String, senderName: String = "📱 手机端"): ChatMessage {
+    fun addPhoneMessage(content: String, senderName: String = "📱 手机端", senderIp: String = ""): ChatMessage {
         val msg = ChatMessage(
             id = UUID.randomUUID().toString(),
             senderName = senderName,
             content = content,
             timestamp = System.currentTimeMillis(),
-            isFromPhone = true
+            isFromPhone = true,
+            senderIp = senderIp
         )
         messages.add(msg)
         onMessageReceivedListener?.invoke(msg)
         return msg
     }
 
-    fun addClientMessage(content: String, senderName: String = "💻 电脑端"): ChatMessage {
+    fun addClientMessage(content: String, senderName: String = "💻 电脑端", senderIp: String = ""): ChatMessage {
         val msg = ChatMessage(
             id = UUID.randomUUID().toString(),
             senderName = senderName,
             content = content,
             timestamp = System.currentTimeMillis(),
-            isFromPhone = false
+            isFromPhone = false,
+            senderIp = senderIp
         )
         messages.add(msg)
         onMessageReceivedListener?.invoke(msg)
