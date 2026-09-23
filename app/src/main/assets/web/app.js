@@ -294,6 +294,28 @@
         platform: 'Windows'
     };
     let selfLanIps = [];
+    let latestRoomMembers = [];
+
+    function getReachableHostAddress(port) {
+        let ip = selfDeviceInfo.ip;
+        if (!ip || ip === '127.0.0.1' || ip === 'localhost' || ip === 'tauri.localhost') {
+            if (Array.isArray(selfLanIps) && selfLanIps.length > 0) {
+                const found = selfLanIps.find(item => {
+                    const s = typeof item === 'string' ? item : (item && item.ip);
+                    return s && s !== '127.0.0.1' && s !== 'localhost';
+                });
+                if (found) {
+                    ip = typeof found === 'string' ? found : found.ip;
+                }
+            }
+        }
+        if ((!ip || ip === '127.0.0.1' || ip === 'tauri.localhost') && window.location.hostname && !isTauriDesktop() && window.location.hostname !== 'localhost') {
+            ip = window.location.hostname;
+        }
+        if (!ip) ip = '127.0.0.1';
+        const p = port || (roomState.roomInfo && roomState.roomInfo.hostPort) || selfDeviceInfo.port || 9527;
+        return `http://${ip}:${p}`;
+    }
 
     function renderMultiIpPills(ips, activeIp) {
         if (!multiIpSelectorContainer || !multiIpPills) return;
@@ -319,13 +341,16 @@
         selfDeviceInfo.ip = ip;
         updateHostBannerDisplay();
         renderMultiIpPills(selfLanIps, ip);
+        if (roomState.mode) {
+            updateChatStatusBar(roomState.mode, roomState.roomInfo);
+        }
         showToast(`已切换展示 IP 为: ${ip}`);
     };
 
     function updateHostBannerDisplay() {
         if (!roomState.roomInfo) return;
         const info = roomState.roomInfo;
-        const fullUrl = `http://${selfDeviceInfo.ip}:${info.hostPort || 9527}`;
+        const fullUrl = getReachableHostAddress(info.hostPort);
         if (hostRoomUrlDisplay) hostRoomUrlDisplay.textContent = fullUrl;
         if (phoneNameBadge) {
             phoneNameBadge.innerHTML = `👑 房主服务中: <b style="color:#10B981;">${info.roomName || '房间'}</b> (${fullUrl})`;
@@ -341,7 +366,10 @@
                 const primary = await invoke('get_local_ip');
                 selfDeviceInfo.ip = primary || (ips.length > 0 ? (ips[0].ip || ips[0]) : '127.0.0.1');
                 renderMultiIpPills(selfLanIps, selfDeviceInfo.ip);
-                if (roomState.mode === 'host') updateHostBannerDisplay();
+                if (roomState.mode === 'host') {
+                    updateHostBannerDisplay();
+                    updateChatStatusBar('host', roomState.roomInfo);
+                }
                 return;
             } catch (e) {
                 console.error('Tauri get IPs error:', e);
@@ -356,7 +384,10 @@
                 selfDeviceInfo = data;
                 selfLanIps = data.all_ips || [data.ip];
                 renderMultiIpPills(selfLanIps, data.ip);
-                if (roomState.mode === 'host') updateHostBannerDisplay();
+                if (roomState.mode === 'host') {
+                    updateHostBannerDisplay();
+                    updateChatStatusBar('host', roomState.roomInfo);
+                }
             }
         } catch (e) {
             // ignore
@@ -368,8 +399,8 @@
         btnCopyRoomDirectLink.addEventListener('click', async () => {
             if (!roomState.roomInfo) return;
             const info = roomState.roomInfo;
-            const targetIp = selfDeviceInfo.ip || info.hostIp || '127.0.0.1';
-            let directUrl = `http://${targetIp}:${info.hostPort || 9527}/?room=${encodeURIComponent(info.roomId || '')}`;
+            const hostBase = getReachableHostAddress(info.hostPort);
+            let directUrl = `${hostBase}/?room=${encodeURIComponent(info.roomId || '')}`;
             if (info.pin) {
                 directUrl += `&pin=${encodeURIComponent(info.pin)}`;
             }
@@ -473,31 +504,42 @@
         const copyBtn = document.getElementById('btnCopyChatRoomUrl');
 
         if (mode === 'host') {
-            const origin = getApiOrigin() || 'http://127.0.0.1:9527';
-            if (onlineBadge) onlineBadge.textContent = '👥 在线: 1 人';
-            if (ipBadge) ipBadge.textContent = `🌐 访问地址: ${origin}`;
+            const reachableUrl = getReachableHostAddress(data ? data.hostPort : null);
+            const memberCount = (latestRoomMembers && latestRoomMembers.length) || 1;
+            if (onlineBadge) onlineBadge.textContent = `👥 在线: ${memberCount} 人 (点击查看)`;
+            if (ipBadge) ipBadge.textContent = `🌐 访问地址: ${reachableUrl}`;
             if (copyBtn) {
                 copyBtn.onclick = () => {
                     if (navigator.clipboard) {
-                        navigator.clipboard.writeText(origin).then(() => showToast(`已复制房间网址: ${origin}`));
+                        navigator.clipboard.writeText(reachableUrl).then(() => showToast(`已复制房间网址: ${reachableUrl}`));
                     } else {
-                        showToast(`房间网址: ${origin}`);
+                        showToast(`房间网址: ${reachableUrl}`);
                     }
                 };
             }
         } else if (mode === 'joined' && data) {
-            const hUrl = data.hostUrl || currentTargetBaseUrl;
-            if (onlineBadge) onlineBadge.textContent = '👥 在线: 2 人';
-            if (ipBadge) ipBadge.textContent = `🌐 房主地址: ${hUrl}`;
+            let hUrl = data.hostUrl || currentTargetBaseUrl;
+            if (!hUrl && data.hostIp && data.hostPort) {
+                hUrl = `http://${data.hostIp}:${data.hostPort}`;
+            }
+            const memberCount = (latestRoomMembers && latestRoomMembers.length) || 2;
+            if (onlineBadge) onlineBadge.textContent = `👥 在线: ${memberCount} 人 (点击查看)`;
+            if (ipBadge) ipBadge.textContent = `🌐 房主地址: ${hUrl || '已连接'}`;
             if (copyBtn) {
                 copyBtn.onclick = () => {
-                    if (navigator.clipboard) {
-                        navigator.clipboard.writeText(hUrl).then(() => showToast(`已复制房主网址: ${hUrl}`));
-                    } else {
-                        showToast(`房主网址: ${hUrl}`);
+                    if (hUrl) {
+                        if (navigator.clipboard) {
+                            navigator.clipboard.writeText(hUrl).then(() => showToast(`已复制房主网址: ${hUrl}`));
+                        } else {
+                            showToast(`房主网址: ${hUrl}`);
+                        }
                     }
                 };
             }
+        } else {
+            if (onlineBadge) onlineBadge.textContent = '👥 未进入房间';
+            if (ipBadge) ipBadge.textContent = '🌐 未进入房间';
+            if (copyBtn) copyBtn.onclick = null;
         }
     }
 
@@ -838,8 +880,6 @@
                      (navigator.userAgent.indexOf('Android') !== -1) ? 'Android' : 'Web';
         return `${plat}用户-${Math.floor(100 + Math.random() * 900)}`;
     }
-
-    let latestRoomMembers = [];
 
     // 房主轮询房间成员
     async function pollRoomMembers() {

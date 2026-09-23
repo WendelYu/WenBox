@@ -30,6 +30,7 @@ object UdpDiscoveryManager {
     private var isBroadcasterRunning = false
     private var sendThread: Thread? = null
     private var recvThread: Thread? = null
+    private var clientProbeThread: Thread? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     var appContext: Context? = null
 
@@ -54,6 +55,21 @@ object UdpDiscoveryManager {
 
         if (isReceiverRunning) return
         isReceiverRunning = true
+
+        // 客户端模式持续探测线程：非房主模式下每 2.5 秒主动发送搜索探测，秒级发现新开房间
+        clientProbeThread = thread(name = "UDP-ClientProbe") {
+            while (isReceiverRunning) {
+                val room = RoomManager.currentRoom
+                if (room == null || !room.isActive) {
+                    sendSearchProbe()
+                }
+                try {
+                    Thread.sleep(2500)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+        }
 
         recvThread = thread(name = "UDP-Recv") {
             try {
@@ -88,7 +104,15 @@ object UdpDiscoveryManager {
                         val needPassword = json.optBoolean("needPassword", false)
                         val hostPort = if (json.has("hostPort")) json.optInt("hostPort", 9527) else json.optInt("port", 9527)
                         val memberCount = json.optInt("memberCount", 0)
-                        val hostIp = json.optString("hostIp").ifBlank { senderIp }
+                        val hostIpField = json.optString("hostIp").trim()
+                        // 物理网络直接到达的 senderIp 最具通信可达性，优先用于房间通信，避免被对端多网卡中的虚拟/以太网网卡 IP 干扰
+                        val hostIp = if (senderIp.isNotBlank() && !senderIp.startsWith("127.")) {
+                            senderIp
+                        } else if (hostIpField.isNotBlank()) {
+                            hostIpField
+                        } else {
+                            senderIp
+                        }
 
                         val key = "$hostIp:$hostPort"
                         val r = DiscoveredRoom(
@@ -121,6 +145,11 @@ object UdpDiscoveryManager {
                             try {
                                 val replyPacket = DatagramPacket(roomMsg, roomMsg.size, packet.address, packet.port)
                                 socket.send(replyPacket)
+                                // 同时向对方来源 IP 的 9528 端口发送单播回包，因为 Windows 探测时通常以临时端口发包，真正监听在 9528
+                                if (packet.port != DISCOVERY_PORT) {
+                                    val replyPacket9528 = DatagramPacket(roomMsg, roomMsg.size, packet.address, DISCOVERY_PORT)
+                                    socket.send(replyPacket9528)
+                                }
                             } catch (_: Exception) {}
                         }
                     }
@@ -209,6 +238,17 @@ object UdpDiscoveryManager {
                                 socket.send(packet)
                             } catch (_: Exception) {}
                         }
+
+                        // 额外向已知在线节点单播发包，穿透无线路由器对广播包的丢弃与睡眠抑制
+                        for (dev in activeDevices.values) {
+                            if (dev.ip.isNotBlank() && !dev.ip.startsWith("127.")) {
+                                try {
+                                    val devAddr = InetAddress.getByName(dev.ip)
+                                    val devPacket = DatagramPacket(roomMsg, roomMsg.size, devAddr, DISCOVERY_PORT)
+                                    socket.send(devPacket)
+                                } catch (_: Exception) {}
+                            }
+                        }
                     }
 
                     // 3. 清理超时房间与下线节点 (15秒)
@@ -258,8 +298,10 @@ object UdpDiscoveryManager {
         isBroadcasterRunning = false
         sendThread?.interrupt()
         recvThread?.interrupt()
+        clientProbeThread?.interrupt()
         sendThread = null
         recvThread = null
+        clientProbeThread = null
         try {
             if (multicastLock?.isHeld == true) {
                 multicastLock?.release()
@@ -334,6 +376,14 @@ object UdpDiscoveryManager {
                     if (broadcast != null) {
                         list.add(broadcast)
                     }
+                    val inetAddr = addr.address
+                    if (inetAddr is java.net.Inet4Address && !inetAddr.isLoopbackAddress) {
+                        try {
+                            val octets = inetAddr.address
+                            octets[3] = 255.toByte()
+                            list.add(InetAddress.getByAddress(octets))
+                        } catch (_: Exception) {}
+                    }
                 }
             }
         } catch (_: Exception) {}
@@ -358,6 +408,16 @@ object UdpDiscoveryManager {
                         val packet = DatagramPacket(msg, msg.size, bAddr, DISCOVERY_PORT)
                         socket.send(packet)
                     } catch (_: Exception) {}
+                }
+                // 向已知在线节点也单播发送探测
+                for (dev in activeDevices.values) {
+                    if (dev.ip.isNotBlank() && !dev.ip.startsWith("127.")) {
+                        try {
+                            val devAddr = InetAddress.getByName(dev.ip)
+                            val devPacket = DatagramPacket(msg, msg.size, devAddr, DISCOVERY_PORT)
+                            socket.send(devPacket)
+                        } catch (_: Exception) {}
+                    }
                 }
                 socket.close()
             } catch (_: Exception) {}

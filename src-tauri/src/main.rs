@@ -400,7 +400,7 @@ fn get_discovered_rooms_cmd(state: tauri::State<Arc<AppState>>) -> Vec<Discovere
 fn get_room_members_cmd(state: tauri::State<Arc<AppState>>) -> Vec<RoomMember> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     let mut mem = state.members.lock().unwrap();
-    mem.retain(|_, m| now.saturating_sub(m.last_seen) < 30);
+    mem.retain(|k, m| k == "127.0.0.1" || now.saturating_sub(m.last_seen) < 30);
     mem.values().cloned().collect()
 }
 
@@ -806,23 +806,32 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
 
         println!("WenBox 内置服务已在端口 {} 启动", port);
 
-        for mut req in server.incoming_requests() {
-            let raw_url = req.url().to_string();
-            let url = raw_url.split('?').next().unwrap_or(&raw_url).to_string();
-            let method = req.method().clone();
+        for req in server.incoming_requests() {
+            let state_clone = state.clone();
+            thread::spawn(move || {
+                handle_http_request(req, state_clone, port);
+            });
+        }
+    });
+}
 
-            let cors_origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
-            let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS, PUT, DELETE"[..]).unwrap();
-            let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization, X-Room-Token"[..]).unwrap();
+fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: u16) {
+    let raw_url = req.url().to_string();
+    let url = raw_url.split('?').next().unwrap_or(&raw_url).to_string();
+    let method = req.method().clone();
 
-            if method == Method::Options {
-                let mut resp = Response::empty(200);
-                resp.add_header(cors_origin);
-                resp.add_header(cors_methods);
-                resp.add_header(cors_headers);
-                let _ = req.respond(resp);
-                continue;
-            }
+    let cors_origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
+    let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS, PUT, DELETE"[..]).unwrap();
+    let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization, X-Room-Token"[..]).unwrap();
+
+    if method == Method::Options {
+        let mut resp = Response::empty(200);
+        resp.add_header(cors_origin);
+        resp.add_header(cors_methods);
+        resp.add_header(cors_headers);
+        let _ = req.respond(resp);
+        return;
+    }
 
             // 0. 房间系统接口 (公开接口：查看状态、加入房间、心跳、成员与已发现房间)
             if (url == "/api/room/status" || url == "/api/room/info") && method == Method::Get {
@@ -842,7 +851,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             if url == "/api/room/create" && method == Method::Post {
@@ -903,7 +912,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             if url == "/api/room/close" && method == Method::Post {
@@ -935,7 +944,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string("{\"success\":true}");
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             if url == "/api/room/join" && method == Method::Post {
@@ -1002,7 +1011,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             if url == "/api/room/heartbeat" && method == Method::Post {
@@ -1014,19 +1023,19 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string("{\"success\":true}");
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             if url == "/api/room/members" && method == Method::Get {
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                 let mut members_map = state.members.lock().unwrap();
-                members_map.retain(|_, m| now.saturating_sub(m.last_seen) < 30);
+                members_map.retain(|k, m| k == "127.0.0.1" || now.saturating_sub(m.last_seen) < 30);
                 let list: Vec<RoomMember> = members_map.values().cloned().collect();
                 let json = serde_json::json!({ "members": list }).to_string();
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             if url == "/api/discovered_rooms" && method == Method::Get {
@@ -1038,7 +1047,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             // 1. 获取本端信息 (供前端展示自身 IP 与服务状态)
@@ -1064,7 +1073,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             // 2. 获取在线节点设备列表
@@ -1080,7 +1089,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             // 2.5 节点主动探测握手
@@ -1134,7 +1143,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             // 鉴权拦截检查 (当房间处于活跃且设置密码保护时，未授权的客户端拒绝访问敏感文件与消息接口)
@@ -1148,7 +1157,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                     .with_status_code(401);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             // 3. 待发文件列表
@@ -1159,7 +1168,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             // 3.1 清空待发文件
@@ -1168,7 +1177,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string("{\"success\":true}");
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             // 3.2 接收到的文件列表
@@ -1178,7 +1187,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             // 4. 文件下载 (支持下载分享的文件或接收到的文件)
@@ -1202,13 +1211,13 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                         resp.add_header(Header::from_bytes(&b"Content-Disposition"[..], disp.as_bytes()).unwrap());
                         resp.add_header(cors_origin);
                         let _ = req.respond(resp);
-                        continue;
+                        return;
                     }
                 }
                 let mut resp = Response::from_string("File Not Found").with_status_code(404);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             // 4.5 电脑接收文件上传 (手机或其他设备向这台电脑发送文件)
@@ -1275,14 +1284,14 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                         let mut resp = Response::from_string(json);
                         resp.add_header(cors_origin);
                         let _ = req.respond(resp);
-                        continue;
+                        return;
                     }
                 }
 
                 let mut resp = Response::from_string("{\"success\":false,\"message\":\"保存文件失败\"}").with_status_code(500);
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             // 5. 局域网消息获取与发送
@@ -1293,7 +1302,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                     let mut resp = Response::from_string(json);
                     resp.add_header(cors_origin);
                     let _ = req.respond(resp);
-                    continue;
+                    return;
                 } else if method == Method::Post {
                     let mut body = String::new();
                     let _ = req.as_reader().read_to_string(&mut body);
@@ -1322,7 +1331,7 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                     let mut resp = Response::from_string("{\"success\":true}");
                     resp.add_header(cors_origin);
                     let _ = req.respond(resp);
-                    continue;
+                    return;
                 }
             }
 
@@ -1340,15 +1349,13 @@ fn start_embedded_http_server(state: Arc<AppState>, port: u16) {
                 resp.add_header(Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap());
                 resp.add_header(cors_origin);
                 let _ = req.respond(resp);
-                continue;
+                return;
             }
 
             // 默认返回 404
             let mut resp = Response::empty(404);
             resp.add_header(cors_origin);
             let _ = req.respond(resp);
-        }
-    });
 }
 
 // ---------------- UDP 局域网多网卡自发现与主动探测机制 (9528) ----------------
@@ -1453,7 +1460,11 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                             let port = val["port"].as_u64().or_else(|| val["hostPort"].as_u64()).unwrap_or(9527) as u16;
                             let need_password = val["needPassword"].as_bool().unwrap_or(false);
                             let host_ip_field = val["hostIp"].as_str().unwrap_or("").trim().to_string();
-                            let ip = if !host_ip_field.is_empty() {
+                            let src_ip_str = src.ip().to_string();
+                            // 优先以物理网络到达的真实 UDP 源 IP 作为房间连接 IP，防止被对端的多网卡/虚拟网卡 IP 干扰
+                            let ip = if !src_ip_str.starts_with("127.") && !src_ip_str.is_empty() {
+                                src_ip_str
+                            } else if !host_ip_field.is_empty() {
                                 host_ip_field
                             } else {
                                 src.ip().to_string()
@@ -1495,6 +1506,22 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                             let my_room = state_recv.room.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             if my_room.is_active {
                                 let member_count = state_recv.members.lock().unwrap_or_else(|e| e.into_inner()).len();
+                                // 如果发来探测的 src 在某个物理网卡子网，优先以该子网的 IP 应答
+                                let target_ip = src.ip();
+                                let matched_iface_ip = get_ipv4_interfaces()
+                                    .into_iter()
+                                    .find(|(_name, ipv4)| {
+                                        if let std::net::IpAddr::V4(target_v4) = target_ip {
+                                            let o1 = ipv4.octets();
+                                            let o2 = target_v4.octets();
+                                            o1[0] == o2[0] && o1[1] == o2[1] && o1[2] == o2[2]
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .map(|(_name, ip)| ip.to_string())
+                                    .unwrap_or_else(|| my_room.host_ip.clone());
+
                                 let reply = serde_json::json!({
                                     "action": "wenbox_room_broadcast",
                                     "roomId": my_room.room_id,
@@ -1503,11 +1530,14 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                     "platform": platform_recv,
                                     "port": my_port,
                                     "hostPort": my_port,
-                                    "hostIp": my_room.host_ip,
+                                    "hostIp": matched_iface_ip,
                                     "needPassword": my_room.need_password,
                                     "memberCount": member_count
                                 }).to_string();
+
+                                // 同时向对方来源端口以及 9528 发送单播回包，防止对端临时端口已关闭
                                 let _ = socket.send_to(reply.as_bytes(), src);
+                                let _ = socket.send_to(reply.as_bytes(), (src.ip(), DISCOVERY_PORT));
                             }
                         }
 
@@ -1592,24 +1622,29 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                     }
                 }
 
-                // 额外兜底：从 0.0.0.0:0 发出全局与组播
-                if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
-                    let _ = socket.set_broadcast(true);
-                    let msg = serde_json::json!({
-                        "action": "wenbox_room_broadcast",
-                        "roomId": room.room_id,
-                        "roomName": room.room_name,
-                        "hostDevice": dev_name,
-                        "platform": platform,
-                        "port": my_port,
-                        "hostPort": my_port,
-                        "hostIp": room.host_ip,
-                        "needPassword": room.need_password,
-                        "memberCount": member_count
-                    }).to_string();
-                    let bytes = msg.as_bytes();
-                    let _ = socket.send_to(bytes, "255.255.255.255:9528");
-                    let _ = socket.send_to(bytes, format!("{}:9528", MULTICAST_IPV4));
+                // 额外向已发现的在线节点单播发包，彻底穿透路由器针对广播包的睡眠抑制与过滤
+                let known_ips: Vec<String> = state_bcast.devices.lock().unwrap_or_else(|e| e.into_inner())
+                    .values()
+                    .map(|d| d.ip.clone())
+                    .collect();
+                if let Ok(unicast_socket) = UdpSocket::bind("0.0.0.0:0") {
+                    for tip in known_ips {
+                        if !tip.starts_with("127.") {
+                            let msg = serde_json::json!({
+                                "action": "wenbox_room_broadcast",
+                                "roomId": room.room_id,
+                                "roomName": room.room_name,
+                                "hostDevice": dev_name,
+                                "platform": platform,
+                                "port": my_port,
+                                "hostPort": my_port,
+                                "hostIp": room.host_ip,
+                                "needPassword": room.need_password,
+                                "memberCount": member_count
+                            }).to_string();
+                            let _ = unicast_socket.send_to(msg.as_bytes(), format!("{}:9528", tip));
+                        }
+                    }
                 }
             }
             thread::sleep(Duration::from_millis(2500));

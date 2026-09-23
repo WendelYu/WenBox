@@ -542,15 +542,18 @@ class TransferFragment : Fragment() {
         clientPollJob = lifecycleScope.launch {
             var failCount = 0
             while (isActive && currentRoomMode == RoomMode.JOINED) {
+                var cycleSuccess = false
                 try {
                     // 1. 发送心跳与拉取成员
                     val hbUrl = "http://${room.ip}:${room.port}/api/room/heartbeat"
-                    HttpHelper.postJson(hbUrl, JSONObject())
+                    try {
+                        HttpHelper.postJson(hbUrl, JSONObject())
+                    } catch (_: Exception) {}
 
                     val memUrl = "http://${room.ip}:${room.port}/api/room/members"
                     val (mCode, mRes) = HttpHelper.getJson(memUrl)
                     if (mCode == 200) {
-                        failCount = 0
+                        cycleSuccess = true
                         val mJson = JSONObject(mRes)
                         val mArr = mJson.optJSONArray("members")
                         val count = mArr?.length() ?: 1
@@ -565,8 +568,6 @@ class TransferFragment : Fragment() {
                             }
                         }
                         joinedRoomMembers = list
-                    } else if (mCode == 404) {
-                        failCount++
                     }
 
                     // 2. 拉取房间聊天消息
@@ -575,7 +576,7 @@ class TransferFragment : Fragment() {
                     joinedToken?.let { headers["X-Room-Token"] = it }
                     val (code, res) = HttpHelper.getJson(msgUrl, headers)
                     if (code == 200) {
-                        failCount = 0
+                        cycleSuccess = true
                         val json = JSONObject(res)
                         val arr = json.optJSONArray("messages")
                         if (arr != null) {
@@ -593,14 +594,16 @@ class TransferFragment : Fragment() {
                                 }
                             }
                         }
-                    } else {
-                        failCount++
                     }
-                } catch (_: Exception) {
+                } catch (_: Exception) {}
+
+                if (cycleSuccess) {
+                    failCount = 0
+                } else {
                     failCount++
                 }
 
-                if (failCount >= 3) {
+                if (failCount >= 5) {
                     context?.let { ctx ->
                         Toast.makeText(ctx, "房主已解散房间或网络中断，已返回大厅", Toast.LENGTH_SHORT).show()
                     }
@@ -953,6 +956,7 @@ class TransferFragment : Fragment() {
     ) {
         val ctx = context ?: return
         selectedIpUrl = url
+        binding.tvChatRoomUrl.text = "🌐 访问: $url"
 
         allBindings.forEach { (b, itemUrl) ->
             if (itemUrl == url) {
