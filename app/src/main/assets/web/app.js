@@ -164,8 +164,8 @@
     function showHostQrModal() {
         if (!hostQrModal || !roomState.roomInfo) return;
         const info = roomState.roomInfo;
-        const targetIp = selfDeviceInfo.ip || info.hostIp || '127.0.0.1';
-        let directUrl = `http://${targetIp}:${info.hostPort || 9527}/?room=${encodeURIComponent(info.roomId || '')}`;
+        const hostBase = getReachableHostAddress(info.hostPort);
+        let directUrl = `${hostBase}/?room=${encodeURIComponent(info.roomId || '')}`;
         if (info.pin) {
             directUrl += `&pin=${encodeURIComponent(info.pin)}`;
         }
@@ -287,9 +287,14 @@
         initialIp = window.location.hostname;
     }
 
+    let userSelectedIp = null;
+    try {
+        userSelectedIp = localStorage.getItem('wenbox_selected_ip') || null;
+    } catch (_) {}
+
     let selfDeviceInfo = {
         device: '本机',
-        ip: initialIp,
+        ip: userSelectedIp || initialIp,
         port: 9527,
         platform: 'Windows'
     };
@@ -338,7 +343,21 @@
     }
 
     window.switchActiveServerIp = function (ip) {
+        userSelectedIp = ip;
+        try {
+            localStorage.setItem('wenbox_selected_ip', ip);
+        } catch (_) {}
         selfDeviceInfo.ip = ip;
+        const invoke = getTauriInvoke();
+        if (invoke) {
+            invoke('set_room_host_ip_cmd', { ip }).catch(() => {});
+        } else {
+            fetch(getApiOrigin() + '/api/room/set_ip', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip })
+            }).catch(() => {});
+        }
         updateHostBannerDisplay();
         renderMultiIpPills(selfLanIps, ip);
         if (roomState.mode) {
@@ -364,7 +383,18 @@
                 const ips = await invoke('get_all_lan_ips_cmd');
                 selfLanIps = ips || [];
                 const primary = await invoke('get_local_ip');
-                selfDeviceInfo.ip = primary || (ips.length > 0 ? (ips[0].ip || ips[0]) : '127.0.0.1');
+
+                const hasSelected = userSelectedIp && selfLanIps.some(item => {
+                    const s = typeof item === 'string' ? item : (item && item.ip);
+                    return s === userSelectedIp;
+                });
+
+                if (hasSelected) {
+                    selfDeviceInfo.ip = userSelectedIp;
+                } else {
+                    selfDeviceInfo.ip = primary || (selfLanIps.length > 0 ? (selfLanIps[0].ip || selfLanIps[0]) : '127.0.0.1');
+                }
+
                 renderMultiIpPills(selfLanIps, selfDeviceInfo.ip);
                 if (roomState.mode === 'host') {
                     updateHostBannerDisplay();
@@ -381,9 +411,23 @@
             const res = await fetch(getApiOrigin() + '/api/status?t=' + Date.now());
             if (res.ok) {
                 const data = await res.json();
-                selfDeviceInfo = data;
                 selfLanIps = data.all_ips || [data.ip];
-                renderMultiIpPills(selfLanIps, data.ip);
+
+                const hasSelected = userSelectedIp && selfLanIps.some(item => {
+                    const s = typeof item === 'string' ? item : (item && item.ip);
+                    return s === userSelectedIp;
+                });
+
+                if (hasSelected) {
+                    selfDeviceInfo.ip = userSelectedIp;
+                } else {
+                    selfDeviceInfo.ip = data.ip;
+                }
+                selfDeviceInfo.device = data.device;
+                selfDeviceInfo.port = data.port;
+                selfDeviceInfo.platform = data.platform;
+
+                renderMultiIpPills(selfLanIps, selfDeviceInfo.ip);
                 if (roomState.mode === 'host') {
                     updateHostBannerDisplay();
                     updateChatStatusBar('host', roomState.roomInfo);

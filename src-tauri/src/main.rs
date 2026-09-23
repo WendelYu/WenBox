@@ -201,6 +201,13 @@ fn get_all_lan_ips_cmd() -> Vec<LocalIpInfo> {
 }
 
 #[tauri::command]
+fn set_room_host_ip_cmd(ip: String, state: tauri::State<Arc<AppState>>) -> Result<(), String> {
+    let mut room = state.room.lock().map_err(|e| e.to_string())?;
+    room.host_ip = ip.trim().to_string();
+    Ok(())
+}
+
+#[tauri::command]
 fn add_share_file(path_str: String, state: tauri::State<Arc<AppState>>) -> Result<SharedFile, String> {
     let p = PathBuf::from(&path_str);
     if !p.exists() {
@@ -947,6 +954,21 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 return;
             }
 
+            if url.starts_with("/api/room/set_ip") && method == Method::Post {
+                let mut body = String::new();
+                let _ = req.as_reader().read_to_string(&mut body);
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(ip) = val["ip"].as_str() {
+                        let mut room = state.room.lock().unwrap();
+                        room.host_ip = ip.trim().to_string();
+                    }
+                }
+                let mut resp = Response::from_string("{\"success\":true}");
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                return;
+            }
+
             if url == "/api/room/join" && method == Method::Post {
                 let mut body = String::new();
                 let _ = req.as_reader().read_to_string(&mut body);
@@ -1681,6 +1703,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_local_ip,
             get_all_lan_ips_cmd,
+            set_room_host_ip_cmd,
             get_lan_devices,
             connect_device_node,
             create_room_cmd,

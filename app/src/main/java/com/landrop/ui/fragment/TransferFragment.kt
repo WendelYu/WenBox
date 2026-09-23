@@ -943,9 +943,13 @@ class TransferFragment : Fragment() {
             itemBindings.add(Pair(itemBinding, url))
         }
 
-        val defaultInfo = interfaces.first()
-        val defaultUrl = "http://${defaultInfo.ip}:$port"
-        selectIpForQr(defaultUrl, defaultInfo.displayName, itemBindings.first().first, itemBindings)
+        val defaultPair = if (selectedIpUrl != null && itemBindings.any { it.second == selectedIpUrl }) {
+            itemBindings.first { it.second == selectedIpUrl }
+        } else {
+            itemBindings.first()
+        }
+        val defaultInfo = interfaces.firstOrNull { "http://${it.ip}:$port" == defaultPair.second } ?: interfaces.first()
+        selectIpForQr(defaultPair.second, defaultInfo.displayName, defaultPair.first, itemBindings)
     }
 
     private fun selectIpForQr(
