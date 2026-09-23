@@ -215,6 +215,9 @@ class TransferFragment : Fragment() {
         if (_binding == null) return
         val ctx = context ?: return
 
+        MessageManager.clearAll()
+        refreshChatUi()
+
         when (mode) {
             RoomMode.CLIENT -> {
                 clientPollJob?.cancel()
@@ -540,6 +543,7 @@ class TransferFragment : Fragment() {
     private fun startJoinedRoomPolling(room: DiscoveredRoom) {
         clientPollJob?.cancel()
         clientPollJob = lifecycleScope.launch {
+            val knownJoinedMsgIds = mutableSetOf<String>()
             var failCount = 0
             while (isActive && currentRoomMode == RoomMode.JOINED) {
                 var cycleSuccess = false
@@ -582,15 +586,25 @@ class TransferFragment : Fragment() {
                         if (arr != null) {
                             for (i in 0 until arr.length()) {
                                 val item = arr.getJSONObject(i)
+                                val msgId = item.optString("id", "")
                                 val sender = item.optString("senderName", "成员")
                                 val content = item.optString("content", "")
                                 val ts = item.optLong("timestamp", System.currentTimeMillis())
                                 val isFromPhone = item.optBoolean("isFromPhone", false)
                                 val senderIp = item.optString("senderIp", "")
 
-                                val exists = MessageManager.getMessages().any { it.content == content && Math.abs(it.timestamp - ts) < 2000 }
-                                if (!exists && !isFromPhone) {
-                                    MessageManager.addClientMessage(content, sender, senderIp)
+                                if (msgId.isNotBlank()) {
+                                    if (!knownJoinedMsgIds.contains(msgId)) {
+                                        knownJoinedMsgIds.add(msgId)
+                                        if (!isFromPhone) {
+                                            MessageManager.addReceivedMessage(msgId, content, sender, ts, senderIp, false)
+                                        }
+                                    }
+                                } else {
+                                    val exists = MessageManager.getMessages().any { it.content == content && Math.abs(it.timestamp - ts) < 2000 }
+                                    if (!exists && !isFromPhone) {
+                                        MessageManager.addClientMessage(content, sender, senderIp)
+                                    }
                                 }
                             }
                         }

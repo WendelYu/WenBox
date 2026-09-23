@@ -11,6 +11,7 @@
     // ---------------- 顶部 Tab 导航切换 ----------------
     const navTabs = document.querySelectorAll('.nav-tab');
     const tabPanes = document.querySelectorAll('.tab-pane');
+    let currentActiveTab = 'tab-transfer';
 
     navTabs.forEach(tab => {
         tab.addEventListener('click', () => {
@@ -19,8 +20,24 @@
 
             tab.classList.add('active');
             const targetId = tab.getAttribute('data-tab');
+            currentActiveTab = targetId;
             const targetPane = document.getElementById(targetId);
             if (targetPane) targetPane.classList.add('active');
+
+            if (currentActiveTab === 'tab-transfer') {
+                if (roomState.mode === 'joined') {
+                    loadFiles();
+                } else if (roomState.mode === 'host') {
+                    loadLocalSharedFiles();
+                    loadReceivedFiles();
+                } else {
+                    pollDiscoveredRooms();
+                }
+            } else if (currentActiveTab === 'tab-chat') {
+                if (roomState.mode === 'host' || roomState.mode === 'joined') {
+                    pollChatMessages();
+                }
+            }
         });
     });
 
@@ -472,6 +489,11 @@
 
     // ---------------- 房间系统核心：模式渲染与切换 ----------------
     function setRoomMode(mode, data) {
+        if (roomState.mode !== mode || (data && roomState.roomInfo && data.roomId !== roomState.roomInfo.roomId)) {
+            if (typeof resetChatRoomHistory === 'function') {
+                resetChatRoomHistory();
+            }
+        }
         roomState.mode = mode;
         if (mode === 'host') {
             roomState.roomInfo = data;
@@ -961,7 +983,9 @@
         if (roomState.mode !== 'joined' || !currentTargetBaseUrl) return;
         try {
             const api = currentTargetBaseUrl + '/api/room/members?t=' + Date.now();
-            const res = await fetch(api);
+            const res = await fetch(api, {
+                signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(2000) : undefined
+            });
             if (res.ok) {
                 const data = await res.json();
                 const members = data.members || [];
@@ -1710,13 +1734,19 @@
 
     setInterval(() => {
         if (roomState.mode === 'host') {
-            loadLocalSharedFiles();
-            loadReceivedFiles();
+            if (currentActiveTab === 'tab-transfer') {
+                loadLocalSharedFiles();
+                loadReceivedFiles();
+            }
             pollRoomMembers();
         } else if (roomState.mode === 'joined') {
-            loadFiles();
+            if (currentActiveTab === 'tab-transfer') {
+                loadFiles();
+            }
         } else {
-            pollDiscoveredRooms();
+            if (currentActiveTab === 'tab-transfer') {
+                pollDiscoveredRooms();
+            }
         }
     }, 3000);
     setInterval(checkSelfServerStatus, 6000);
@@ -1751,6 +1781,26 @@
 
     let lastKnownMessageTimestamp = 0;
     const knownMessageIds = new Set();
+
+    async function resetChatRoomHistory() {
+        if (webChatMessages) {
+            webChatMessages.innerHTML = '';
+            if (webEmptyChat) {
+                webEmptyChat.style.display = 'block';
+                webChatMessages.appendChild(webEmptyChat);
+            }
+        }
+        knownMessageIds.clear();
+        lastKnownMessageTimestamp = 0;
+        const invoke = getTauriInvoke();
+        if (invoke) {
+            try {
+                await invoke('clear_chat_messages_cmd');
+            } catch (e) {
+                // ignore
+            }
+        }
+    }
 
     const osPlatform = (navigator.userAgent.indexOf('Mac') !== -1) ? 'Mac' :
                        (navigator.userAgent.indexOf('Win') !== -1) ? 'Windows' : '电脑端';
@@ -1838,9 +1888,12 @@
             } else {
                 const tokenParam = roomState.token ? `&token=${encodeURIComponent(roomState.token)}` : '';
                 const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/messages?t=' + Date.now() + tokenParam;
-                const headers = {};
+                const headers = { 'Accept': 'application/json' };
                 if (roomState.token) headers['X-Room-Token'] = roomState.token;
-                const res = await fetch(api, { headers });
+                const res = await fetch(api, {
+                    headers,
+                    signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(2000) : undefined
+                });
                 if (!res.ok) {
                     if (roomState.mode === 'joined' && (res.status === 404 || res.status === 502)) {
                         joinedDisconnectCount++;
@@ -2125,12 +2178,13 @@
 
             const tokenParam = roomState.token ? `?token=${encodeURIComponent(roomState.token)}` : '';
             const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + `/api/messages${tokenParam}`;
-            const headers = { 'Content-Type': 'application/json' };
+            const headers = { 'Content-Type': 'application/json; charset=utf-8' };
             if (roomState.token) headers['X-Room-Token'] = roomState.token;
 
             const resp = await fetch(api, {
                 method: 'POST',
                 headers: headers,
+                signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(3000) : undefined,
                 body: JSON.stringify({
                     content: content,
                     senderName: myName
@@ -2325,15 +2379,8 @@
     }
 
     if (webBtnClearChat) {
-        webBtnClearChat.addEventListener('click', () => {
-            if (webChatMessages) {
-                webChatMessages.innerHTML = '';
-                if (webEmptyChat) {
-                    webEmptyChat.style.display = 'block';
-                    webChatMessages.appendChild(webEmptyChat);
-                }
-            }
-            knownMessageIds.clear();
+        webBtnClearChat.addEventListener('click', async () => {
+            await resetChatRoomHistory();
             showToast('已清空当前聊天记录');
         });
     }
@@ -2393,7 +2440,7 @@
 
     // 启动轮询获取最新消息
     pollChatMessages();
-    setInterval(pollChatMessages, 1500);
+    setInterval(pollChatMessages, 2000);
 
 
     // ---------------- 模块三：JSON 格式化与校验 ----------------

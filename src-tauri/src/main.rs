@@ -322,6 +322,7 @@ fn create_room_cmd(room_name: String, pin: String, state: tauri::State<Arc<AppSt
     *state.room.lock().unwrap() = cfg.clone();
     state.members.lock().unwrap().clear();
     state.auth_tokens.lock().unwrap().clear();
+    state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
 
     // 房主自身加入 member
     let host_token = uuid::Uuid::new_v4().to_string();
@@ -350,6 +351,7 @@ fn close_room_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
     };
     state.members.lock().unwrap_or_else(|e| e.into_inner()).clear();
     state.auth_tokens.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
 
     if !old_room_id.is_empty() {
         thread::spawn(move || {
@@ -411,8 +413,22 @@ fn get_room_members_cmd(state: tauri::State<Arc<AppState>>) -> Vec<RoomMember> {
     mem.values().cloned().collect()
 }
 
+fn get_http_client() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_millis(1200))
+        .timeout_read(Duration::from_millis(2000))
+        .timeout_write(Duration::from_millis(2000))
+        .build()
+}
+
 #[tauri::command]
-fn join_remote_room_cmd(host_url: String, pin: String, my_name: String) -> Result<serde_json::Value, String> {
+fn clear_chat_messages_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
+    state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    Ok(true)
+}
+
+#[tauri::command]
+fn join_remote_room_cmd(host_url: String, pin: String, my_name: String, state: tauri::State<Arc<AppState>>) -> Result<serde_json::Value, String> {
     let clean = host_url.trim().trim_end_matches('/');
     let url = format!("{}/api/room/join", clean);
     let dev_name = if my_name.trim().is_empty() {
@@ -427,14 +443,15 @@ fn join_remote_room_cmd(host_url: String, pin: String, my_name: String) -> Resul
         "platform": "Windows"
     });
 
-    let resp = ureq::post(&url)
-        .set("Content-Type", "application/json")
-        .timeout(Duration::from_secs(6))
+    let client = get_http_client();
+    let resp = client.post(&url)
+        .set("Content-Type", "application/json; charset=utf-8")
         .send_string(&body.to_string())
         .map_err(|e| format!("连接房间失败: {}", e))?;
 
     let val: serde_json::Value = resp.into_json().map_err(|e| format!("解析房间响应失败: {}", e))?;
     if val["success"].as_bool().unwrap_or(false) {
+        state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
         Ok(val)
     } else {
         Err(val["message"].as_str().unwrap_or("加入房间失败").to_string())
@@ -511,12 +528,12 @@ fn connect_device_node(target: String, state: tauri::State<Arc<AppState>>) -> Re
         "ip": my_ip
     });
 
-    let resp_res = ureq::post(&format!("{}/api/probe", base_url))
-        .timeout(Duration::from_secs(3))
+    let client = get_http_client();
+    let resp_res = client.post(&format!("{}/api/probe", base_url))
+        .set("Content-Type", "application/json; charset=utf-8")
         .send_json(&probe_body)
         .or_else(|_| {
-            ureq::get(&format!("{}/api/status", base_url))
-                .timeout(Duration::from_secs(3))
+            client.get(&format!("{}/api/status", base_url))
                 .call()
         });
 
@@ -572,8 +589,8 @@ fn fetch_node_files(base_url: String, state: tauri::State<Arc<AppState>>) -> Res
     }
 
     let url = format!("{}/api/files", clean);
-    let resp = ureq::get(&url)
-        .timeout(Duration::from_secs(5))
+    let client = get_http_client();
+    let resp = client.get(&url)
         .call()
         .map_err(|e| format!("拉取文件列表失败: {}", e))?;
 
@@ -628,7 +645,8 @@ fn fetch_node_messages(base_url: String, token: Option<String>, state: tauri::St
     }
 
     let url = format!("{}/api/messages", clean);
-    let mut req = ureq::get(&url).timeout(Duration::from_millis(2500));
+    let client = get_http_client();
+    let mut req = client.get(&url);
     if let Some(ref t) = token {
         if !t.is_empty() {
             req = req.set("X-Room-Token", t);
@@ -688,9 +706,9 @@ fn send_node_message(base_url: String, sender_name: String, content: String, tok
         "senderIp": my_ip
     });
 
-    let mut req = ureq::post(&url)
-        .set("Content-Type", "application/json")
-        .timeout(Duration::from_millis(3000));
+    let client = get_http_client();
+    let mut req = client.post(&url)
+        .set("Content-Type", "application/json; charset=utf-8");
     if let Some(ref t) = token {
         if !t.is_empty() {
             req = req.set("X-Room-Token", t);
@@ -1322,6 +1340,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     let msgs = state.messages.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     let json = serde_json::json!({ "messages": msgs }).to_string();
                     let mut resp = Response::from_string(json);
+                    resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap());
                     resp.add_header(cors_origin);
                     let _ = req.respond(resp);
                     return;
@@ -1723,7 +1742,8 @@ fn main() {
             upload_local_file_to_remote,
             fetch_node_messages,
             send_node_message,
-            send_room_probe_cmd
+            send_room_probe_cmd,
+            clear_chat_messages_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running wenbox application");

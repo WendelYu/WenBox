@@ -7,6 +7,7 @@ import com.landrop.utils.UdpDiscoveryManager
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
@@ -340,10 +341,12 @@ class LanServer(
                     val result = JSONObject().apply {
                         put("messages", jsonArray)
                     }
+                    val jsonBytes = result.toString().toByteArray(Charsets.UTF_8)
                     newFixedLengthResponse(
                         Response.Status.OK,
-                        "application/json; charset=UTF-8",
-                        result.toString()
+                        "application/json; charset=utf-8",
+                        ByteArrayInputStream(jsonBytes),
+                        jsonBytes.size.toLong()
                     )
                 }
 
@@ -434,10 +437,12 @@ class LanServer(
 
         if (content.isNotBlank()) {
             val msg = MessageManager.addClientMessage(content, senderName, senderIp)
+            val respBytes = "{\"success\": true, \"id\": \"${msg.id}\"}".toByteArray(Charsets.UTF_8)
             return newFixedLengthResponse(
                 Response.Status.OK,
-                "application/json",
-                "{\"success\": true, \"id\": \"${msg.id}\"}"
+                "application/json; charset=utf-8",
+                ByteArrayInputStream(respBytes),
+                respBytes.size.toLong()
             )
         }
 
@@ -489,13 +494,23 @@ class LanServer(
             put("running", true)
             put("platform", "Android")
         }
-        return newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", respJson.toString())
+        val respBytes = respJson.toString().toByteArray(Charsets.UTF_8)
+        return newFixedLengthResponse(
+            Response.Status.OK,
+            "application/json; charset=utf-8",
+            ByteArrayInputStream(respBytes),
+            respBytes.size.toLong()
+        )
     }
 
     private fun getUtf8PostData(map: Map<String, String>): String? {
         val raw = map["postData"] ?: return null
+        if (raw.any { it.code > 0xFF }) {
+            return raw
+        }
         return try {
-            String(raw.toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8)
+            val converted = String(raw.toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8)
+            if (converted.contains('\uFFFD')) raw else converted
         } catch (_: Exception) {
             raw
         }

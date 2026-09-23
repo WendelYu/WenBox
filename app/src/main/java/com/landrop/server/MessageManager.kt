@@ -46,6 +46,28 @@ object MessageManager {
         return msg
     }
 
+    fun addReceivedMessage(
+        id: String,
+        content: String,
+        senderName: String,
+        timestamp: Long,
+        senderIp: String = "",
+        isFromPhone: Boolean = false
+    ): ChatMessage? {
+        if (messages.any { it.id == id }) return null
+        val msg = ChatMessage(
+            id = id,
+            senderName = senderName,
+            content = content,
+            timestamp = timestamp,
+            isFromPhone = isFromPhone,
+            senderIp = senderIp
+        )
+        messages.add(msg)
+        onMessageReceivedListener?.invoke(msg)
+        return msg
+    }
+
     fun clearAll() {
         messages.clear()
     }
