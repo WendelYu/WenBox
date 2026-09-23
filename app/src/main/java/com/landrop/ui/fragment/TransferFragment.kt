@@ -707,47 +707,51 @@ class TransferFragment : Fragment() {
         itemBinding.tvSenderInfo.text = senderLabel
 
         val content = msg.content
+        var textToCopy = content
+
         if (content.startsWith("[image:") && content.endsWith("]")) {
-            itemBinding.tvMessageContent.text = "🖼️ [图片/截图消息] 点击复制数据"
-            itemBinding.tvMessageContent.setOnClickListener { copyToClipboard(content) }
+            itemBinding.tvMessageContent.text = "🖼️ [图片/截图消息]"
+            textToCopy = content.removePrefix("[image:").removeSuffix("]")
         } else if (content.startsWith("[file:") && content.endsWith("]")) {
             val inner = content.removePrefix("[file:").removeSuffix("]")
             val parts = inner.split("|")
             val fileName = parts.getOrNull(0) ?: "文件"
             val fileSize = parts.getOrNull(1) ?: ""
             itemBinding.tvMessageContent.text = "📎 [文件快传] $fileName ($fileSize)\n点击打开下载"
-            itemBinding.tvMessageContent.setOnClickListener {
-                if (parts.size >= 3) {
-                    val fileUrl = parts[2]
+            if (parts.size >= 3) {
+                val fileUrl = parts[2]
+                val host = joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
+                val finalUrl = if (fileUrl.startsWith("http")) fileUrl else "$host$fileUrl"
+                textToCopy = "$fileName - $finalUrl"
+                itemBinding.tvMessageContent.setOnClickListener {
                     try {
-                        val host = joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
-                        val finalUrl = if (fileUrl.startsWith("http")) fileUrl else "$host$fileUrl"
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(finalUrl))
                         startActivity(intent)
                     } catch (_: Exception) {
-                        copyToClipboard(fileUrl)
+                        copyToClipboard(finalUrl)
                     }
-                } else {
-                    copyToClipboard(content)
                 }
             }
         } else {
             itemBinding.tvMessageContent.text = content
             itemBinding.tvMessageContent.autoLinkMask = android.text.util.Linkify.WEB_URLS
             itemBinding.tvMessageContent.movementMethod = android.text.method.LinkMovementMethod.getInstance()
-            itemBinding.tvMessageContent.setOnClickListener {
-                copyToClipboard(msg.content)
-            }
+        }
+
+        itemBinding.btnCopyMessage.setOnClickListener {
+            copyToClipboard(textToCopy)
         }
 
         if (msg.isFromPhone) {
             itemBinding.llMessageContainer.gravity = Gravity.END
             itemBinding.tvSenderInfo.gravity = Gravity.END
+            itemBinding.llBubbleRow.layoutDirection = View.LAYOUT_DIRECTION_RTL
             itemBinding.tvMessageContent.setBackgroundResource(R.drawable.bg_chat_bubble_me)
             itemBinding.tvMessageContent.setTextColor(Color.WHITE)
         } else {
             itemBinding.llMessageContainer.gravity = Gravity.START
             itemBinding.tvSenderInfo.gravity = Gravity.START
+            itemBinding.llBubbleRow.layoutDirection = View.LAYOUT_DIRECTION_LTR
             itemBinding.tvMessageContent.setBackgroundResource(R.drawable.bg_chat_bubble_other)
             itemBinding.tvMessageContent.setTextColor(ContextCompat.getColor(ctx, R.color.text_primary))
         }

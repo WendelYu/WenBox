@@ -153,14 +153,18 @@
         if (hostQrModal) hostQrModal.style.display = 'none';
     };
 
+    window.openCreateRoomModal = function () {
+        if (modalInputRoomName) {
+            const randomNum = Math.floor(1000 + Math.random() * 9000);
+            modalInputRoomName.value = `WenBox-${randomNum}`;
+        }
+        if (modalInputRoomPin) modalInputRoomPin.value = '';
+        if (createRoomModal) createRoomModal.style.display = 'flex';
+    };
+
     if (btnOpenCreateRoomModal) {
         btnOpenCreateRoomModal.addEventListener('click', () => {
-            if (modalInputRoomName) {
-                const randomNum = Math.floor(1000 + Math.random() * 9000);
-                modalInputRoomName.value = `WenBox-${randomNum}`;
-            }
-            if (modalInputRoomPin) modalInputRoomPin.value = '';
-            if (createRoomModal) createRoomModal.style.display = 'flex';
+            window.openCreateRoomModal();
         });
     }
 
@@ -1999,10 +2003,29 @@
         if (!senderTitle) {
             senderTitle = msg.isFromPhone ? '📱 手机端' : '💻 成员';
         }
-        const ipTag = msg.senderIp ? ` (${msg.senderIp})` : '';
+
         const meta = document.createElement('div');
         meta.className = 'chat-msg-meta';
-        meta.textContent = `${senderTitle}${ipTag} • ${formatTime(msg.timestamp)}`;
+
+        const senderSpan = document.createElement('span');
+        senderSpan.className = 'chat-sender-name';
+        senderSpan.textContent = senderTitle;
+        meta.appendChild(senderSpan);
+
+        if (msg.senderIp) {
+            const ipSpan = document.createElement('span');
+            ipSpan.className = 'chat-ip-pill';
+            ipSpan.textContent = msg.senderIp;
+            meta.appendChild(ipSpan);
+        }
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'chat-time-pill';
+        timeSpan.textContent = formatTime(msg.timestamp);
+        meta.appendChild(timeSpan);
+
+        const bubbleContainer = document.createElement('div');
+        bubbleContainer.className = 'chat-msg-bubble-container';
 
         const bubble = document.createElement('div');
         bubble.className = 'chat-msg-bubble';
@@ -2127,21 +2150,64 @@
             processed = processed.replace(/\n/g, '<br>');
 
             bubble.innerHTML = processed;
-
-            // 点击消息气泡复制原文
-            bubble.title = '点击复制此消息内容';
-            bubble.addEventListener('click', (e) => {
-                if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') return;
-                navigator.clipboard.writeText(content).then(() => {
-                    showToast('已复制该条消息');
-                });
-            });
         }
 
+        // 独立复制按钮
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'chat-msg-copy-btn';
+        copyBtn.title = '复制消息内容';
+        copyBtn.innerHTML = `
+            <svg class="chat-copy-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <span class="copy-text">复制</span>
+        `;
+        copyBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            window.copyChatMessage(content, copyBtn);
+        });
+
+        bubbleContainer.appendChild(bubble);
+        bubbleContainer.appendChild(copyBtn);
+
         row.appendChild(meta);
-        row.appendChild(bubble);
+        row.appendChild(bubbleContainer);
         webChatMessages.appendChild(row);
     }
+
+    // 全局复制消息辅助函数
+    window.copyChatMessage = function(text, btn) {
+        if (!text) return;
+        let copyText = text;
+        if (text.startsWith('[file:') && text.endsWith(']')) {
+            const inner = text.slice(6, -1);
+            const parts = inner.split('|');
+            const fileName = parts[0] || '';
+            const rawUrl = parts[2] || '';
+            copyText = `${fileName} - ${resolveChatUrl(rawUrl)}`;
+        } else if (text.startsWith('[image:') && text.endsWith(']')) {
+            const rawUrl = text.slice(7, -1);
+            copyText = resolveChatUrl(rawUrl);
+        }
+
+        navigator.clipboard.writeText(copyText).then(() => {
+            showToast('已复制该条消息');
+            if (btn) {
+                btn.classList.add('copied');
+                const textEl = btn.querySelector('.copy-text');
+                const orig = textEl ? textEl.textContent : '复制';
+                if (textEl) textEl.textContent = '已复制';
+                setTimeout(() => {
+                    btn.classList.remove('copied');
+                    if (textEl) textEl.textContent = orig;
+                }, 1500);
+            }
+        }).catch(() => {
+            showToast('复制失败');
+        });
+    };
 
     // 全局复制代码辅助函数
     window.copyChatCode = function(btn) {

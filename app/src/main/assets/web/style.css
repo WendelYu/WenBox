@@ -706,8 +706,9 @@ body {
 .chat-msg-row {
     display: flex;
     flex-direction: column;
-    max-width: 82%;
+    max-width: 85%;
     animation: fadeInMsg 0.2s ease-out;
+    position: relative;
 }
 
 @keyframes fadeInMsg {
@@ -728,34 +729,115 @@ body {
 .chat-msg-meta {
     font-size: 11px;
     color: var(--text-muted);
-    margin-bottom: 4px;
+    margin-bottom: 5px;
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: wrap;
+}
+
+.chat-sender-name {
+    font-weight: 600;
+    color: #CBD5E1;
+}
+
+.chat-ip-pill {
+    display: inline-block;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    background: rgba(56, 189, 248, 0.12);
+    color: #38BDF8;
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    border-radius: 4px;
+}
+
+.chat-time-pill {
+    font-size: 10px;
+    color: #64748B;
+    font-family: monospace;
+}
+
+.chat-msg-bubble-container {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    max-width: 100%;
+    position: relative;
+}
+
+.chat-msg-row.from-me .chat-msg-bubble-container {
+    flex-direction: row-reverse;
+}
+
+.chat-msg-row.from-other .chat-msg-bubble-container {
+    flex-direction: row;
 }
 
 .chat-msg-bubble {
-    padding: 10px 15px;
-    border-radius: 14px;
+    padding: 10px 16px;
+    border-radius: 16px;
     font-size: 14px;
-    line-height: 1.55;
+    line-height: 1.6;
     word-break: break-word;
     position: relative;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    user-select: text;
+    cursor: text;
+    max-width: 100%;
 }
 
 .chat-msg-row.from-me .chat-msg-bubble {
-    background: linear-gradient(135deg, #1E3A8A, #1D4ED8);
-    color: #EFF6FF;
-    border: 1px solid rgba(59, 130, 246, 0.3);
-    border-bottom-right-radius: 3px;
+    background: linear-gradient(135deg, #2563EB, #1D4ED8);
+    color: #FFFFFF;
+    border: 1px solid rgba(147, 197, 253, 0.25);
+    border-radius: 16px 16px 4px 16px;
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
 }
 
 .chat-msg-row.from-other .chat-msg-bubble {
     background: #1E293B;
     color: #F8FAFC;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-bottom-left-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px 16px 16px 4px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.chat-msg-copy-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: #94A3B8;
+    background: rgba(30, 41, 59, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    opacity: 0.45;
+    flex-shrink: 0;
+    user-select: none;
+    backdrop-filter: blur(4px);
+    margin-bottom: 2px;
+}
+
+.chat-msg-row:hover .chat-msg-copy-btn {
+    opacity: 1;
+}
+
+.chat-msg-copy-btn:hover {
+    color: #38BDF8;
+    background: rgba(56, 189, 248, 0.15);
+    border-color: rgba(56, 189, 248, 0.4);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.chat-msg-copy-btn.copied {
+    color: #34D399;
+    background: rgba(52, 211, 153, 0.15);
+    border-color: rgba(52, 211, 153, 0.4);
+    opacity: 1;
 }
 
 /* 消息内的超链接 */
