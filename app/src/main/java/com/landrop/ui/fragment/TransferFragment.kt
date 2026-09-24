@@ -47,11 +47,25 @@ import com.landrop.utils.HttpHelper
 import com.landrop.utils.NetworkUtils
 import com.landrop.utils.QrCodeUtils
 import com.landrop.utils.UdpDiscoveryManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.os.Environment
+import android.provider.MediaStore
+import android.provider.OpenableColumns
+import android.text.format.Formatter
+import android.content.ContentValues
+import android.widget.ImageView
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.net.URL
+import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -77,6 +91,8 @@ class TransferFragment : Fragment() {
     private var joinedRoomMembers = mutableListOf<Pair<String, String>>()
     private var clientPollJob: Job? = null
 
+    private val bitmapCache = android.util.LruCache<String, Bitmap>(24)
+
     private val selectFilesLauncher = registerForActivityResult(
         ActivityResultContracts.GetMultipleContents()
     ) { uris: List<Uri> ->
@@ -86,6 +102,123 @@ class TransferFragment : Fragment() {
                 FileManager.addFile(ctx, uri)
             }
             Toast.makeText(ctx, "已添加 ${uris.size} 个待发文件", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private val chatImagePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val ctx = context ?: return@registerForActivityResult
+            Toast.makeText(ctx, "正在处理并发送图片...", Toast.LENGTH_SHORT).show()
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val cr = ctx.contentResolver
+                    val inStream = cr.openInputStream(uri) ?: return@launch
+                    val bmp = BitmapFactory.decodeStream(inStream)
+                    inStream.close()
+                    if (bmp == null) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(ctx, "无法读取图片", Toast.LENGTH_SHORT).show()
+                        }
+                        return@launch
+                    }
+
+                    // 缩放到最大 1280 边长，保持高质量与轻量级传输
+                    val maxDim = 1280
+                    val width = bmp.width
+                    val height = bmp.height
+                    val scaled = if (width > maxDim || height > maxDim) {
+                        val ratio = if (width > height) maxDim.toFloat() / width else maxDim.toFloat() / height
+                        Bitmap.createScaledBitmap(bmp, (width * ratio).toInt(), (height * ratio).toInt(), true)
+                    } else {
+                        bmp
+                    }
+
+                    val baos = ByteArrayOutputStream()
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 82, baos)
+                    val bytes = baos.toByteArray()
+                    val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                    val imgMsg = "[image:data:image/jpeg;base64,$base64]"
+
+                    withContext(Dispatchers.Main) {
+                        sendChatContent(imgMsg)
+                        Toast.makeText(ctx, "图片已发送", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(ctx, "发送图片失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
+
+    private val chatFilePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val ctx = context ?: return@registerForActivityResult
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val cr = ctx.contentResolver
+                    var fileName = "file_${System.currentTimeMillis()}"
+                    var fileSize: Long = 0
+                    cr.query(uri, null, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                            if (nameIdx != -1) {
+                                val n = cursor.getString(nameIdx)
+                                if (!n.isNullOrBlank()) fileName = n
+                            }
+                            if (sizeIdx != -1) fileSize = cursor.getLong(sizeIdx)
+                        }
+                    }
+
+                    val sizeStr = Formatter.formatFileSize(ctx, fileSize)
+
+                    if (currentRoomMode == RoomMode.HOST) {
+                        val sf = FileManager.addFile(ctx, uri)
+                        val dlUrl = "/api/download/${sf.id}"
+                        val msg = "[file:$fileName|$sizeStr|$dlUrl]"
+                        withContext(Dispatchers.Main) {
+                            sendChatContent(msg)
+                            Toast.makeText(ctx, "文件「$fileName」已共享到聊天室", Toast.LENGTH_SHORT).show()
+                        }
+                    } else if (currentRoomMode == RoomMode.JOINED) {
+                        val r = joinedRoom ?: return@launch
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(ctx, "正在上传发送「$fileName」...", Toast.LENGTH_SHORT).show()
+                        }
+                        val uploadUrl = "http://${r.ip}:${r.port}/api/upload"
+                        val headers = mutableMapOf<String, String>()
+                        joinedToken?.let { headers["X-Room-Token"] = it }
+
+                        cr.openInputStream(uri)?.use { inStream ->
+                            val (uCode, uRes) = HttpHelper.uploadFile(uploadUrl, fileName, inStream, headers)
+                            if (uCode in 200..299) {
+                                val uJson = JSONObject(uRes)
+                                val fileId = uJson.optString("fileId", "")
+                                val dlUrl = if (fileId.isNotBlank()) "/api/download/$fileId" else "/api/download/${URLEncoder.encode(fileName, "UTF-8")}"
+                                val msg = "[file:$fileName|$sizeStr|$dlUrl]"
+                                withContext(Dispatchers.Main) {
+                                    sendChatContent(msg)
+                                    Toast.makeText(ctx, "文件「$fileName」发送成功", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(ctx, "上传文件失败 (code: $uCode)", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(ctx, "发送文件出错: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
     }
 
@@ -548,12 +681,50 @@ class TransferFragment : Fragment() {
             while (isActive && currentRoomMode == RoomMode.JOINED) {
                 var cycleSuccess = false
                 try {
-                    // 1. 发送心跳与拉取成员
+                    // 1. 发送心跳向房主注册本客户端身份，并拉取最新房间状态
                     val hbUrl = "http://${room.ip}:${room.port}/api/room/heartbeat"
-                    try {
-                        HttpHelper.postJson(hbUrl, JSONObject())
-                    } catch (_: Exception) {}
+                    val ctx = context
+                    val sp = ctx?.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
+                    val myNick = sp?.getString("user_nickname", null) ?: "${Build.BRAND}手机"
+                    val hbBody = JSONObject().apply {
+                        put("name", "📱 $myNick")
+                        put("platform", "Mobile")
+                        put("roomId", room.id)
+                    }
+                    val (hbCode, hbRes) = HttpHelper.postJson(hbUrl, hbBody)
+                    if (hbCode == 200) {
+                        cycleSuccess = true
+                        val hbJson = JSONObject(hbRes)
+                        val roomObj = hbJson.optJSONObject("room")
+                        if (roomObj != null) {
+                            val isActiveRoom = roomObj.optBoolean("isActive", true)
+                            if (!isActiveRoom) {
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(context, "房主已关闭房间", Toast.LENGTH_SHORT).show()
+                                    setRoomMode(RoomMode.CLIENT)
+                                }
+                                break
+                            }
+                            val newRoomId = roomObj.optString("roomId", "")
+                            val newRoomName = roomObj.optString("roomName", "")
+                            if (newRoomId.isNotBlank() && (newRoomId != joinedRoom?.id || (newRoomName.isNotBlank() && newRoomName != joinedRoom?.name))) {
+                                val updated = room.copy(id = newRoomId, name = newRoomName.ifBlank { room.name })
+                                joinedRoom = updated
+                                withContext(Dispatchers.Main) {
+                                    _binding?.tvRoomModeBadge?.text = "🔗 已连接房间: ${updated.name} (#$newRoomId)"
+                                    _binding?.tvRoomDetails?.text = "已自动同步并连入房主重开的房间「${updated.name}」(#$newRoomId)"
+                                }
+                            }
+                        }
+                    } else if (hbCode == 401) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "房间需要密码或凭证已失效，请重新加入", Toast.LENGTH_SHORT).show()
+                            setRoomMode(RoomMode.CLIENT)
+                        }
+                        break
+                    }
 
+                    // 2. 拉取成员列表
                     val memUrl = "http://${room.ip}:${room.port}/api/room/members"
                     val (mCode, mRes) = HttpHelper.getJson(memUrl)
                     if (mCode == 200) {
@@ -574,7 +745,7 @@ class TransferFragment : Fragment() {
                         joinedRoomMembers = list
                     }
 
-                    // 2. 拉取房间聊天消息
+                    // 3. 拉取房间聊天消息
                     val msgUrl = "http://${room.ip}:${room.port}/api/messages"
                     val headers = mutableMapOf<String, String>()
                     joinedToken?.let { headers["X-Room-Token"] = it }
@@ -630,6 +801,34 @@ class TransferFragment : Fragment() {
         }
     }
 
+    private fun sendChatContent(text: String) {
+        val ctx = context ?: return
+        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
+        val myNick = sp.getString("user_nickname", null) ?: "${Build.BRAND}手机"
+        val myIp = NetworkUtils.getAllLocalIpAddresses(ctx).firstOrNull()?.ip ?: ""
+        MessageManager.addPhoneMessage(text, "📱 $myNick", myIp)
+
+        // 如果处于 JOINED 模式，向房主服务端发送此条消息
+        if (currentRoomMode == RoomMode.JOINED) {
+            val r = joinedRoom
+            if (r != null) {
+                lifecycleScope.launch {
+                    try {
+                        val sendUrl = "http://${r.ip}:${r.port}/api/messages"
+                        val body = JSONObject().apply {
+                            put("content", text)
+                            put("senderName", "📱 $myNick")
+                            put("senderIp", myIp)
+                        }
+                        val headers = mutableMapOf<String, String>()
+                        joinedToken?.let { headers["X-Room-Token"] = it }
+                        HttpHelper.postJson(sendUrl, body, headers)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
     private fun initChatUi() {
         MessageManager.onMessageReceivedListener = { msg ->
             activity?.runOnUiThread {
@@ -642,33 +841,25 @@ class TransferFragment : Fragment() {
         binding.btnSendMessage.setOnClickListener {
             val text = binding.etChatMessage.text.toString().trim()
             if (text.isNotBlank()) {
-                val ctx = context ?: return@setOnClickListener
-                val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
-                val myNick = sp.getString("user_nickname", null) ?: "${Build.BRAND}手机"
-                val myIp = NetworkUtils.getAllLocalIpAddresses(ctx).firstOrNull()?.ip ?: ""
-                val msg = MessageManager.addPhoneMessage(text, "📱 $myNick", myIp)
                 binding.etChatMessage.setText("")
-
-                // 如果处于 JOINED 模式，向房主服务端发送此条消息
-                if (currentRoomMode == RoomMode.JOINED) {
-                    val r = joinedRoom
-                    if (r != null) {
-                        lifecycleScope.launch {
-                            try {
-                                val sendUrl = "http://${r.ip}:${r.port}/api/messages"
-                                val body = JSONObject().apply {
-                                    put("content", text)
-                                    put("senderName", "📱 $myNick")
-                                    put("senderIp", myIp)
-                                }
-                                val headers = mutableMapOf<String, String>()
-                                joinedToken?.let { headers["X-Room-Token"] = it }
-                                HttpHelper.postJson(sendUrl, body, headers)
-                            } catch (_: Exception) {}
-                        }
-                    }
-                }
+                sendChatContent(text)
             }
+        }
+
+        binding.btnChatSendImage.setOnClickListener {
+            if (currentRoomMode == RoomMode.CLIENT) {
+                Toast.makeText(context, "请先创建或加入房间后再发送图片", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            chatImagePickerLauncher.launch("image/*")
+        }
+
+        binding.btnChatSendFile.setOnClickListener {
+            if (currentRoomMode == RoomMode.CLIENT) {
+                Toast.makeText(context, "请先创建或加入房间后再发送文件", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            chatFilePickerLauncher.launch("*/*")
         }
 
         binding.btnClearChat.setOnClickListener {
@@ -713,10 +904,53 @@ class TransferFragment : Fragment() {
         val content = msg.content
         var textToCopy = content
 
-        if (content.startsWith("[image:") && content.endsWith("]")) {
-            itemBinding.tvMessageContent.text = "🖼️ [图片/截图消息]"
-            textToCopy = content.removePrefix("[image:").removeSuffix("]")
+        val isImageMessage = (content.startsWith("[image:") && content.endsWith("]")) ||
+                content.startsWith("data:image/") ||
+                ((content.startsWith("http://") || content.startsWith("https://")) &&
+                (content.endsWith(".png") || content.endsWith(".jpg") || content.endsWith(".jpeg") || content.endsWith(".webp") || content.endsWith(".gif")))
+
+        if (isImageMessage) {
+            val rawImgPayload = if (content.startsWith("[image:") && content.endsWith("]")) {
+                content.removePrefix("[image:").removeSuffix("]")
+            } else {
+                content
+            }
+            val resolvedUrl = if (rawImgPayload.startsWith("/api/")) {
+                val host = if (currentRoomMode == RoomMode.HOST) {
+                    "http://127.0.0.1:9527"
+                } else {
+                    joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
+                }
+                "$host$rawImgPayload"
+            } else {
+                rawImgPayload
+            }
+
+            textToCopy = resolvedUrl
+            itemBinding.tvMessageContent.visibility = View.GONE
+            itemBinding.cvMessageImage.visibility = View.VISIBLE
+
+            val cachedBmp = bitmapCache.get(resolvedUrl)
+            if (cachedBmp != null) {
+                itemBinding.ivMessageImage.setImageBitmap(cachedBmp)
+            } else {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val decodedBmp = decodeImagePayload(resolvedUrl)
+                    if (decodedBmp != null) {
+                        bitmapCache.put(resolvedUrl, decodedBmp)
+                        withContext(Dispatchers.Main) {
+                            itemBinding.ivMessageImage.setImageBitmap(decodedBmp)
+                        }
+                    }
+                }
+            }
+
+            itemBinding.cvMessageImage.setOnClickListener {
+                showImageLightboxDialog(resolvedUrl)
+            }
         } else if (content.startsWith("[file:") && content.endsWith("]")) {
+            itemBinding.tvMessageContent.visibility = View.VISIBLE
+            itemBinding.cvMessageImage.visibility = View.GONE
             val inner = content.removePrefix("[file:").removeSuffix("]")
             val parts = inner.split("|")
             val fileName = parts.getOrNull(0) ?: "文件"
@@ -724,7 +958,12 @@ class TransferFragment : Fragment() {
             itemBinding.tvMessageContent.text = "📎 [文件快传] $fileName ($fileSize)\n点击打开下载"
             if (parts.size >= 3) {
                 val fileUrl = parts[2]
-                val host = joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
+                val host = if (currentRoomMode == RoomMode.HOST) {
+                    val myIp = NetworkUtils.getAllLocalIpAddresses(ctx).firstOrNull()?.ip ?: "127.0.0.1"
+                    "http://$myIp:9527"
+                } else {
+                    joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
+                }
                 val finalUrl = if (fileUrl.startsWith("http")) fileUrl else "$host$fileUrl"
                 textToCopy = "$fileName - $finalUrl"
                 itemBinding.tvMessageContent.setOnClickListener {
@@ -737,6 +976,8 @@ class TransferFragment : Fragment() {
                 }
             }
         } else {
+            itemBinding.tvMessageContent.visibility = View.VISIBLE
+            itemBinding.cvMessageImage.visibility = View.GONE
             itemBinding.tvMessageContent.text = content
             itemBinding.tvMessageContent.autoLinkMask = android.text.util.Linkify.WEB_URLS
             itemBinding.tvMessageContent.movementMethod = android.text.method.LinkMovementMethod.getInstance()
@@ -749,6 +990,190 @@ class TransferFragment : Fragment() {
         binding.llChatMessages.addView(itemBinding.root)
         binding.nestedScrollView.post {
             binding.nestedScrollView.fullScroll(View.FOCUS_DOWN)
+        }
+    }
+
+    private fun decodeImagePayload(payload: String): Bitmap? {
+        return try {
+            if (payload.startsWith("data:image/")) {
+                val base64Data = payload.substringAfter("base64,")
+                val bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                opts.inSampleSize = calculateInSampleSize(opts, 600, 600)
+                opts.inJustDecodeBounds = false
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            } else if (payload.startsWith("http://") || payload.startsWith("https://")) {
+                val url = URL(payload)
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 15000
+                val bytes = conn.inputStream.use { it.readBytes() }
+                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                opts.inSampleSize = calculateInSampleSize(opts, 600, 600)
+                opts.inJustDecodeBounds = false
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+        val (height: Int, width: Int) = options.outHeight to options.outWidth
+        var inSampleSize = 1
+        if (height > reqHeight || width > reqWidth) {
+            val halfHeight: Int = height / 2
+            val halfWidth: Int = width / 2
+            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
+    }
+
+    private fun showImageLightboxDialog(payload: String) {
+        val ctx = context ?: return
+        val dialog = Dialog(ctx, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#E6000000"))
+            gravity = Gravity.CENTER
+            setPadding(16, 32, 16, 24)
+        }
+
+        val topBar = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = 16
+            }
+        }
+
+        val btnClose = Button(ctx).apply {
+            text = "✕ 关闭"
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.TRANSPARENT)
+            textSize = 14f
+            setOnClickListener { dialog.dismiss() }
+        }
+
+        val spacer = View(ctx).apply {
+            layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+        }
+
+        val btnSave = Button(ctx).apply {
+            text = "💾 保存到相册"
+            setTextColor(Color.parseColor("#38BDF8"))
+            setBackgroundColor(Color.TRANSPARENT)
+            textSize = 14f
+        }
+
+        topBar.addView(btnClose)
+        topBar.addView(spacer)
+        topBar.addView(btnSave)
+        root.addView(topBar)
+
+        val imageView = ImageView(ctx).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+        root.addView(imageView)
+
+        var fullBmp: Bitmap? = null
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val bmp = if (payload.startsWith("data:image/")) {
+                    val base64Data = payload.substringAfter("base64,")
+                    val bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                } else if (payload.startsWith("http://") || payload.startsWith("https://")) {
+                    val url = URL(payload)
+                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 8000
+                    conn.readTimeout = 20000
+                    val bytes = conn.inputStream.use { it.readBytes() }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                } else null
+
+                fullBmp = bmp
+                withContext(Dispatchers.Main) {
+                    if (bmp != null) {
+                        imageView.setImageBitmap(bmp)
+                    } else {
+                        Toast.makeText(ctx, "图片加载失败", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        btnSave.setOnClickListener {
+            val bmp = fullBmp
+            if (bmp == null) {
+                Toast.makeText(ctx, "图片未加载完成，请稍候", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            saveBitmapToGallery(ctx, bmp)
+        }
+
+        dialog.setContentView(root)
+        dialog.show()
+    }
+
+    private fun saveBitmapToGallery(ctx: Context, bmp: Bitmap) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val fileName = "WenBox_IMG_${System.currentTimeMillis()}.jpg"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/WenBox")
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
+                    }
+                    val resolver = ctx.contentResolver
+                    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    if (uri != null) {
+                        resolver.openOutputStream(uri)?.use { out ->
+                            bmp.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                        }
+                        values.clear()
+                        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                        resolver.update(uri, values, null, null)
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(ctx, "图片已成功保存到系统相册", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "WenBox")
+                    if (!dir.exists()) dir.mkdirs()
+                    val f = File(dir, fileName)
+                    java.io.FileOutputStream(f).use { out ->
+                        bmp.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                    }
+                    ctx.sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(f)))
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(ctx, "图片已保存至: Pictures/WenBox", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(ctx, "保存图片失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 

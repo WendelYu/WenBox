@@ -37,17 +37,50 @@ body {
     min-height: 100vh;
     display: flex;
     justify-content: center;
-    padding: 24px 16px;
+    padding: 24px 20px;
     background-image: radial-gradient(circle at top right, rgba(59, 130, 246, 0.12), transparent 400px),
                       radial-gradient(circle at bottom left, rgba(16, 185, 129, 0.08), transparent 400px);
 }
 
 .app-container {
     width: 100%;
-    max-width: 920px;
+    max-width: 1160px;
     display: flex;
     flex-direction: column;
     gap: 20px;
+    transition: max-width 0.25s ease;
+}
+
+/* 宽屏与 1080P 全屏优化 (>= 1400px) */
+@media (min-width: 1400px) {
+    body {
+        padding: 24px 36px;
+    }
+    .app-container {
+        max-width: 1420px;
+        width: 94%;
+    }
+}
+
+/* 2K / 4K / 超宽带优化 (>= 1800px) */
+@media (min-width: 1800px) {
+    body {
+        padding: 28px 48px;
+    }
+    .app-container {
+        max-width: 1680px;
+        width: 92%;
+    }
+}
+
+/* 移动端 / 窄屏优化 (<= 640px) */
+@media (max-width: 640px) {
+    body {
+        padding: 12px 10px;
+    }
+    .app-container {
+        gap: 14px;
+    }
 }
 
 .header {
@@ -707,7 +740,8 @@ body {
 .chat-card {
     display: flex;
     flex-direction: column;
-    height: 660px;
+    height: clamp(580px, calc(100vh - 160px), 880px);
+    min-height: 520px;
     position: relative;
     background: #1e1e1e;
     border: 1px solid var(--ic-border);
@@ -1043,8 +1077,8 @@ body {
 
 .chat-img-thumb {
     display: block;
-    max-width: 320px;
-    max-height: 240px;
+    max-width: clamp(280px, 45vw, 560px);
+    max-height: 380px;
     border-radius: 6px;
     object-fit: contain;
     background: #181818;
@@ -1078,7 +1112,7 @@ body {
     padding: 10px 14px;
     margin: 4px 0;
     min-width: 240px;
-    max-width: 360px;
+    max-width: 440px;
 }
 
 .chat-file-icon {

@@ -27,7 +27,7 @@ object FileManager {
 
     fun getFileById(id: String): SharedFile? = files.firstOrNull { it.id == id }
 
-    fun addFile(context: Context, uri: Uri) {
+    fun addFile(context: Context, uri: Uri): SharedFile {
         val resolver = context.contentResolver
         var name = "unknown_${System.currentTimeMillis()}"
         var size: Long = 0
@@ -47,18 +47,21 @@ object FileManager {
             }
         }
 
-        // 避免重复添加完全相同 URI 的文件
-        if (files.none { it.uri == uri }) {
-            val file = SharedFile(
-                id = UUID.randomUUID().toString(),
-                name = name,
-                size = size,
-                mimeType = mimeType,
-                uri = uri
-            )
-            files.add(file)
-            onFilesChangedListener?.invoke()
+        val existing = files.firstOrNull { it.uri == uri }
+        if (existing != null) {
+            return existing
         }
+
+        val file = SharedFile(
+            id = UUID.randomUUID().toString(),
+            name = name,
+            size = size,
+            mimeType = mimeType,
+            uri = uri
+        )
+        files.add(file)
+        onFilesChangedListener?.invoke()
+        return file
     }
 
     fun removeFile(id: String) {
@@ -72,10 +75,11 @@ object FileManager {
     }
 
     /**
-     * 将从电脑端上传的文件保存到手机的系统「下载/LanDrop」目录
+     * 将从电脑端上传的文件保存到手机的系统「下载/LanDrop」目录并注册可供房间内其他成员下载
      */
-    fun saveIncomingFile(context: Context, fileName: String, inputStream: InputStream): Boolean {
+    fun saveIncomingFile(context: Context, fileName: String, inputStream: InputStream): SharedFile? {
         return try {
+            val id = UUID.randomUUID().toString()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 // Android 10+ 使用 MediaStore Downloads
                 val values = ContentValues().apply {
@@ -86,14 +90,25 @@ object FileManager {
                 val resolver = context.contentResolver
                 val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 if (uri != null) {
+                    var writtenBytes = 0L
                     resolver.openOutputStream(uri)?.use { out ->
-                        inputStream.copyTo(out)
+                        writtenBytes = inputStream.copyTo(out)
                     }
                     values.clear()
                     values.put(MediaStore.Downloads.IS_PENDING, 0)
                     resolver.update(uri, values, null, null)
-                    true
-                } else false
+
+                    val sharedFile = SharedFile(
+                        id = id,
+                        name = fileName,
+                        size = writtenBytes,
+                        mimeType = resolver.getType(uri) ?: "application/octet-stream",
+                        uri = uri
+                    )
+                    files.add(0, sharedFile)
+                    onFilesChangedListener?.invoke()
+                    sharedFile
+                } else null
             } else {
                 // Android 9 及以下使用公开外部存储
                 val dir = File(
@@ -102,14 +117,25 @@ object FileManager {
                 )
                 if (!dir.exists()) dir.mkdirs()
                 val targetFile = File(dir, fileName)
+                var writtenBytes = 0L
                 FileOutputStream(targetFile).use { out ->
-                    inputStream.copyTo(out)
+                    writtenBytes = inputStream.copyTo(out)
                 }
-                true
+                val fileUri = Uri.fromFile(targetFile)
+                val sharedFile = SharedFile(
+                    id = id,
+                    name = fileName,
+                    size = writtenBytes,
+                    mimeType = "application/octet-stream",
+                    uri = fileUri
+                )
+                files.add(0, sharedFile)
+                onFilesChangedListener?.invoke()
+                sharedFile
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            false
+            null
         }
     }
 }

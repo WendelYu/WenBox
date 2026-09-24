@@ -120,8 +120,19 @@ class LanServer(
 
                 // 1.43 解散房间
                 method == Method.POST && uri == "/api/room/close" -> {
-                    RoomManager.closeRoom()
-                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", "{\"success\":true}")
+                    val clientIp = session.headers["http-client-ip"]
+                        ?: session.headers["remote-addr"]
+                        ?: session.remoteIpAddress
+                        ?: "127.0.0.1"
+                    val isLocal = clientIp == "127.0.0.1" || clientIp == "::1"
+                    val token = session.headers["x-host-token"] ?: session.headers["x-room-token"]
+                    val hostToken = RoomManager.currentHostToken
+                    if (!isLocal && (token.isNullOrBlank() || token != hostToken)) {
+                        newFixedLengthResponse(Response.Status.FORBIDDEN, "application/json; charset=UTF-8", "{\"success\":false,\"message\":\"无权解散房间：只有房主设备可以解散房间\"}")
+                    } else {
+                        RoomManager.closeRoom()
+                        newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", "{\"success\":true}")
+                    }
                 }
 
                 // 1.44 加入房间
@@ -169,12 +180,37 @@ class LanServer(
 
                 // 1.45 房间心跳
                 method == Method.POST && uri == "/api/room/heartbeat" -> {
+                    val map = HashMap<String, String>()
+                    try { session.parseBody(map) } catch (_: Exception) {}
+                    val postData = getUtf8PostData(map)
+                    var clientName: String? = null
+                    var clientPlatform: String? = null
+                    if (!postData.isNullOrBlank()) {
+                        try {
+                            val json = JSONObject(postData)
+                            clientName = json.optString("name", null)
+                            clientPlatform = json.optString("platform", null)
+                        } catch (_: Exception) {}
+                    }
                     val clientIp = session.headers["http-client-ip"]
                         ?: session.headers["remote-addr"]
                         ?: session.remoteIpAddress
                         ?: "127.0.0.1"
-                    RoomManager.heartbeat(clientIp)
-                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", "{\"success\":true}")
+                    RoomManager.heartbeat(clientIp, clientName, clientPlatform)
+                    val room = RoomManager.currentRoom
+                    val result = JSONObject().apply {
+                        put("success", true)
+                        if (room != null) {
+                            put("room", JSONObject().apply {
+                                put("isActive", room.isActive)
+                                put("roomId", room.roomId)
+                                put("roomName", room.roomName)
+                                put("hostDevice", room.hostDevice)
+                                put("needPassword", room.needPassword)
+                            })
+                        }
+                    }
+                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", result.toString())
                 }
 
                 // 1.46 房间成员
@@ -388,14 +424,23 @@ class LanServer(
         if (tempFilePath != null) {
             val tempFile = File(tempFilePath)
             if (tempFile.exists()) {
-                FileInputStream(tempFile).use { inStream ->
+                val sharedFile = FileInputStream(tempFile).use { inStream ->
                     FileManager.saveIncomingFile(context, originalName, inStream)
                 }
                 tempFile.delete()
+                val resObj = JSONObject().apply {
+                    put("success", true)
+                    put("fileId", sharedFile?.id ?: "")
+                    put("name", originalName)
+                    put("size", sharedFile?.size ?: 0L)
+                    put("message", "File saved to Download/LanDrop")
+                }
+                val resBytes = resObj.toString().toByteArray(Charsets.UTF_8)
                 return newFixedLengthResponse(
                     Response.Status.OK,
-                    "application/json",
-                    "{\"success\": true, \"message\": \"File saved to Download/LanDrop\"}"
+                    "application/json; charset=utf-8",
+                    ByteArrayInputStream(resBytes),
+                    resBytes.size.toLong()
                 )
             }
         }

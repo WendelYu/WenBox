@@ -575,15 +575,17 @@
 
         if (mode === 'host') {
             const reachableUrl = getReachableHostAddress(data ? data.hostPort : null);
+            const rId = data ? (data.roomId || data.roomName || '') : '';
+            const fullJoinUrl = rId ? `${reachableUrl}/?room=${encodeURIComponent(rId)}` : reachableUrl;
             const memberCount = (latestRoomMembers && latestRoomMembers.length) || 1;
             if (onlineBadge) onlineBadge.textContent = `👥 在线: ${memberCount} 人 (点击查看)`;
             if (ipBadge) ipBadge.textContent = `🌐 访问地址: ${reachableUrl}`;
             if (copyBtn) {
                 copyBtn.onclick = () => {
                     if (navigator.clipboard) {
-                        navigator.clipboard.writeText(reachableUrl).then(() => showToast(`已复制房间网址: ${reachableUrl}`));
+                        navigator.clipboard.writeText(fullJoinUrl).then(() => showToast(`已复制入房直链: ${fullJoinUrl}`));
                     } else {
-                        showToast(`房间网址: ${reachableUrl}`);
+                        showToast(`入房直链: ${fullJoinUrl}`);
                     }
                 };
             }
@@ -708,6 +710,9 @@
                     });
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                     const cfg = await resp.json();
+                    if (cfg && cfg.hostToken) {
+                        sessionStorage.setItem('wenbox_host_token', cfg.hostToken);
+                    }
                     window.closeCreateRoomModal();
                     setRoomMode('host', cfg);
                     showToast(`房间「${rName}」已创建！`);
@@ -736,7 +741,20 @@
                 if (invoke) {
                     await invoke('close_room_cmd');
                 } else {
-                    await fetch(getApiOrigin() + '/api/room/close', { method: 'POST' });
+                    const savedToken = sessionStorage.getItem('wenbox_host_token') || '';
+                    const res = await fetch(getApiOrigin() + '/api/room/close', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Host-Token': savedToken
+                        },
+                        body: JSON.stringify({ hostToken: savedToken })
+                    });
+                    sessionStorage.removeItem('wenbox_host_token');
+                    if (!res.ok) {
+                        const errData = await res.json().catch(() => ({}));
+                        throw new Error(errData.message || `HTTP ${res.status}`);
+                    }
                 }
                 showToast('房间已解散，已切换回客户端发现大厅');
                 setRoomMode('client');
@@ -982,10 +1000,36 @@
         }
     }
 
-    // 访客端轮询房间成员与在线人数
+    // 访客端轮询房间成员、心跳与在线人数
     async function pollJoinedMembers() {
         if (roomState.mode !== 'joined' || !currentTargetBaseUrl) return;
         try {
+            // 1. 发送心跳保证在线登记，并反向同步主机最新房间名
+            try {
+                const hbRes = await fetch(currentTargetBaseUrl + '/api/room/heartbeat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: getClientSenderName(),
+                        platform: 'Web',
+                        roomId: roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : ''
+                    }),
+                    signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(2000) : undefined
+                });
+                if (hbRes.ok) {
+                    const hbData = await hbRes.json();
+                    if (hbData && hbData.room && hbData.room.roomName) {
+                        if (roomState.roomInfo && roomState.roomInfo.roomName !== hbData.room.roomName) {
+                            roomState.roomInfo.roomName = hbData.room.roomName;
+                            roomState.roomInfo.roomId = hbData.room.roomId;
+                            updateChatGatingUi('joined', roomState.roomInfo);
+                            updateChatStatusBar('joined', roomState.roomInfo);
+                        }
+                    }
+                }
+            } catch (_) {}
+
+            // 2. 拉取最新在线成员列表
             const api = currentTargetBaseUrl + '/api/room/members?t=' + Date.now();
             const res = await fetch(api, {
                 signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(2000) : undefined
@@ -1700,7 +1744,7 @@
         return false;
     }
 
-    // 初始检查当前房间状态 (如果是 Tauri 主机已开房，恢复 host 模式)
+    // 初始检查当前房间状态 (如果是 Tauri 主机已开房，恢复 host 模式；如果是外部浏览器，严禁被当成房主)
     async function initRoomState() {
         if (checkUrlAutoJoin()) return;
 
@@ -1716,13 +1760,26 @@
                 // ignore
             }
         } else {
+            const savedHostToken = sessionStorage.getItem('wenbox_host_token');
             try {
                 const res = await fetch(getApiOrigin() + '/api/room/status?t=' + Date.now());
                 if (res.ok) {
                     const st = await res.json();
                     if (st && st.isActive) {
-                        setRoomMode('host', st);
-                        return;
+                        // 只有此前在该浏览器会话中点击创建了房间并持有 hostToken 的，才恢复为 host
+                        if (savedHostToken) {
+                            setRoomMode('host', st);
+                            return;
+                        }
+                        // 否则当前浏览器为局域网外部访客！绝不能设为 host，而是作为访客引导入房
+                        if (st.needPassword) {
+                            openJoinRoomModal(getApiOrigin(), st.roomId, st.hostDevice || '主机', st.roomName);
+                            setRoomMode('client');
+                            return;
+                        } else {
+                            executeJoinRoom(getApiOrigin(), '', st.roomId, st.hostDevice || '主机', st.roomName);
+                            return;
+                        }
                     }
                 }
             } catch (e) {

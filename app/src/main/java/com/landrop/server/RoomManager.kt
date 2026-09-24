@@ -13,6 +13,8 @@ object RoomManager {
     private val members = ConcurrentHashMap<String, RoomMember>()
     private val authTokens = ConcurrentHashMap.newKeySet<String>()
 
+    var currentHostToken: String? = null
+
     var onRoomStateChangedListener: ((RoomConfig?) -> Unit)? = null
     var onMembersChangedListener: ((List<RoomMember>) -> Unit)? = null
 
@@ -49,6 +51,7 @@ object RoomManager {
 
         // 房主自己作为第一个成员加入
         val hostToken = UUID.randomUUID().toString()
+        currentHostToken = hostToken
         authTokens.add(hostToken)
         members["127.0.0.1"] = RoomMember(
             id = UUID.randomUUID().toString(),
@@ -67,6 +70,7 @@ object RoomManager {
     fun closeRoom() {
         val oldRoomId = currentRoom?.roomId
         currentRoom = null
+        currentHostToken = null
         members.clear()
         authTokens.clear()
         if (oldRoomId != null) {
@@ -113,9 +117,25 @@ object RoomManager {
         return Triple(true, "加入成功", token)
     }
 
-    fun heartbeat(clientIp: String) {
-        members[clientIp]?.let {
-            it.lastSeen = System.currentTimeMillis()
+    fun heartbeat(clientIp: String, name: String? = null, platform: String? = null) {
+        val existing = members[clientIp]
+        if (existing != null) {
+            existing.lastSeen = System.currentTimeMillis()
+            if (!name.isNullOrBlank() && (existing.name.startsWith("设备 (") || existing.name == "访客设备")) {
+                existing.name = name
+            }
+        } else if (clientIp != "127.0.0.1" && clientIp != "::1") {
+            val displayName = name?.ifBlank { null } ?: "设备 ($clientIp)"
+            val member = RoomMember(
+                id = UUID.randomUUID().toString(),
+                name = displayName,
+                ip = clientIp,
+                platform = platform ?: "Client",
+                joinedAt = System.currentTimeMillis(),
+                lastSeen = System.currentTimeMillis()
+            )
+            members[clientIp] = member
+            onMembersChangedListener?.invoke(getMembers())
         }
     }
 
