@@ -303,10 +303,15 @@
         return null;
     }
 
-    let initialIp = '127.0.0.1';
-    if (window.location.hostname && !isTauriDesktop() && window.location.hostname !== 'localhost') {
-        initialIp = window.location.hostname;
+    function detectClientPlatform() {
+        if (isTauriDesktop()) return 'Windows';
+        if (/Android/i.test(navigator.userAgent)) return 'Android';
+        if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) return 'iOS';
+        if (/Mobile/i.test(navigator.userAgent)) return 'Mobile';
+        return 'Browser';
     }
+
+    let initialIp = isTauriDesktop() ? '127.0.0.1' : '';
 
     let userSelectedIp = null;
     try {
@@ -317,7 +322,7 @@
         device: '本机',
         ip: userSelectedIp || initialIp,
         port: 9527,
-        platform: 'Windows'
+        platform: detectClientPlatform()
     };
     let selfLanIps = [];
     let latestRoomMembers = [];
@@ -374,12 +379,18 @@
         }
         const invoke = getTauriInvoke();
         if (invoke) {
-            invoke('set_room_host_ip_cmd', { ip }).catch(() => {});
+            invoke('set_room_host_ip_cmd', { ip }).then(() => {
+                pollRoomMembers();
+                pollChatMessages();
+            }).catch(() => {});
         } else {
             fetch(getApiOrigin() + '/api/room/set_ip', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ip })
+            }).then(() => {
+                pollRoomMembers();
+                pollChatMessages();
             }).catch(() => {});
         }
         updateHostBannerDisplay();
@@ -447,27 +458,28 @@
         try {
             const res = await fetch(getApiOrigin() + '/api/status?t=' + Date.now());
             if (res.ok) {
-                const data = await res.json();
-                selfLanIps = data.all_ips || [data.ip];
-
-                const hasSelected = userSelectedIp && selfLanIps.some(item => {
-                    const s = typeof item === 'string' ? item : (item && item.ip);
-                    return s === userSelectedIp;
-                });
-
-                if (hasSelected) {
-                    selfDeviceInfo.ip = userSelectedIp;
-                } else {
-                    selfDeviceInfo.ip = data.ip;
-                }
-                selfDeviceInfo.device = data.device;
-                selfDeviceInfo.port = data.port;
-                selfDeviceInfo.platform = data.platform;
-
-                renderMultiIpPills(selfLanIps, selfDeviceInfo.ip);
                 if (roomState.mode === 'host') {
+                    selfLanIps = data.all_ips || [data.ip];
+
+                    const hasSelected = userSelectedIp && selfLanIps.some(item => {
+                        const s = typeof item === 'string' ? item : (item && item.ip);
+                        return s === userSelectedIp;
+                    });
+
+                    if (hasSelected) {
+                        selfDeviceInfo.ip = userSelectedIp;
+                    } else {
+                        selfDeviceInfo.ip = data.ip;
+                    }
+                    selfDeviceInfo.device = data.device || selfDeviceInfo.device;
+                    selfDeviceInfo.port = data.port || selfDeviceInfo.port;
+                    selfDeviceInfo.platform = data.platform || selfDeviceInfo.platform;
+
+                    renderMultiIpPills(selfLanIps, selfDeviceInfo.ip);
                     updateHostBannerDisplay();
                     updateChatStatusBar('host', roomState.roomInfo);
+                } else {
+                    if (multiIpSelectorContainer) multiIpSelectorContainer.style.display = 'none';
                 }
             }
         } catch (e) {
@@ -507,8 +519,34 @@
         });
     }
 
+    // ---------------- 离开房间主动通知 ----------------
+    function notifyLeaveRoom() {
+        if (roomState.mode === 'joined' && currentTargetBaseUrl && roomState.token) {
+            const url = `${currentTargetBaseUrl}/api/room/leave`;
+            const payload = JSON.stringify({ token: roomState.token });
+            try {
+                if (navigator.sendBeacon) {
+                    const blob = new Blob([payload], { type: 'application/json' });
+                    navigator.sendBeacon(url, blob);
+                } else {
+                    fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-Room-Token': roomState.token },
+                        body: payload,
+                        keepalive: true
+                    }).catch(() => {});
+                }
+            } catch (_) {}
+        }
+    }
+    window.addEventListener('beforeunload', notifyLeaveRoom);
+    window.addEventListener('pagehide', notifyLeaveRoom);
+
     // ---------------- 房间系统核心：模式渲染与切换 ----------------
     function setRoomMode(mode, data) {
+        if (roomState.mode === 'joined' && mode !== 'joined') {
+            notifyLeaveRoom();
+        }
         if (roomState.mode !== mode || (data && roomState.roomInfo && data.roomId !== roomState.roomInfo.roomId)) {
             if (typeof resetChatRoomHistory === 'function') {
                 resetChatRoomHistory();
@@ -793,6 +831,7 @@
                 '#F59E0B'
             );
             if (!ok) return;
+            notifyLeaveRoom();
             roomState.token = '';
             localStorage.removeItem('wenbox_room_token');
             showToast('已退出房间');
@@ -986,7 +1025,7 @@
                     body: JSON.stringify({
                         pin: pin,
                         name: myNick,
-                        platform: 'Browser'
+                        platform: detectClientPlatform()
                     })
                 });
                 if (!resp.ok) {
@@ -1072,10 +1111,14 @@
                 try {
                     await fetch(currentTargetBaseUrl + '/api/room/heartbeat', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Room-Token': roomState.token || ''
+                        },
                         body: JSON.stringify({
                             name: getClientSenderName(),
-                            platform: 'Web',
+                            platform: detectClientPlatform(),
+                            token: roomState.token || '',
                             roomId: roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : ''
                         })
                     });
@@ -1105,8 +1148,8 @@
             if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length || 1} 人 (点击查看)`;
             if (hostMembersContainer) {
                 hostMembersContainer.innerHTML = members.map(m => {
-                    const isHost = m.name.includes('房主');
-                    let cleanName = m.name.replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim();
+                    const isHost = (m.name || '').includes('房主') || m.id === 'host';
+                    let cleanName = (m.name || '').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim();
                     if (!cleanName) cleanName = m.name;
                     return `
                         <span class="member-pill ${isHost ? 'is-host' : ''}" style="cursor: pointer;" onclick="window.openOnlineMembersModal()">
@@ -1134,7 +1177,7 @@
                     },
                     body: JSON.stringify({
                         name: getClientSenderName(),
-                        platform: 'Web',
+                        platform: detectClientPlatform(),
                         token: roomState.token || '',
                         roomId: roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : ''
                     }),
@@ -1180,17 +1223,51 @@
         }
 
         listEl.innerHTML = members.map(m => {
-            const isHost = (m.name || '').includes('房主');
+            const isHost = (m.name || '').includes('房主') || m.id === 'host';
             let cleanName = (m.name || '局域网成员').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim();
             if (!cleanName) cleanName = m.name || '局域网成员';
             const ip = m.ip || (selfDeviceInfo.ip || '127.0.0.1');
+            const accessIp = m.accessIp || '';
+            const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
+
+            let tagHtml = '';
+            let detailsHtml = '';
+
+            if (isHost) {
+                tagHtml = `<span style="font-size: 11px; padding: 1px 6px; background: rgba(16, 185, 129, 0.15); color: #10B981; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.3);">本机服务</span>`;
+                detailsHtml = `
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">
+                        <span style="color: var(--ic-text-sub);">🌐 服务网卡: <b style="color: var(--ic-accent-blue);">${escapeHtml(ip)}</b></span>
+                    </div>
+                `;
+            } else if (isLoopback) {
+                tagHtml = `<span style="font-size: 11px; padding: 1px 6px; background: rgba(59, 130, 246, 0.15); color: #38BDF8; border-radius: 4px; border: 1px solid rgba(59, 130, 246, 0.3);">本机浏览器</span>`;
+                detailsHtml = `
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">
+                        <span style="color: var(--ic-text-sub);">📍 设备来源: <b style="color: var(--ic-text-main);">本机 (127.0.0.1)</b></span>
+                        ${accessIp ? `<span style="color: var(--ic-text-sub);">🚪 访问入口: <b style="color: var(--ic-accent-blue);">${escapeHtml(accessIp)}</b></span>` : ''}
+                    </div>
+                `;
+            } else {
+                tagHtml = `<span style="font-size: 11px; padding: 1px 6px; background: rgba(245, 158, 11, 0.15); color: #F59E0B; border-radius: 4px; border: 1px solid rgba(245, 158, 11, 0.3);">${escapeHtml(m.platform || '访客设备')}</span>`;
+                detailsHtml = `
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">
+                        <span style="color: var(--ic-text-sub);">📍 访问设备 IP: <b style="color: #F59E0B;">${escapeHtml(ip)}</b></span>
+                        ${accessIp ? `<span style="color: var(--ic-text-sub);">🚪 访问房主网卡: <b style="color: var(--ic-accent-blue);">${escapeHtml(accessIp)}</b></span>` : ''}
+                    </div>
+                `;
+            }
+
             return `
-                <div style="display: flex; align-items: center; justify-content: space-between; background: var(--ic-bg-card); border: 1px solid var(--ic-border); border-radius: 6px; padding: 10px 12px;">
-                    <div style="display: flex; flex-direction: column; gap: 2px; overflow: hidden; margin-right: 8px;">
-                        <span style="font-size: 13px; font-weight: 600; color: var(--ic-text-main); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
-                            ${isHost ? '👑 ' : ''}${escapeHtml(cleanName)}${isHost ? ' (房主)' : ''}
-                        </span>
-                        <span style="font-size: 12px; color: var(--ic-accent-blue); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">IP: ${escapeHtml(ip)}</span>
+                <div style="display: flex; align-items: center; justify-content: space-between; background: var(--ic-bg-card); border: 1px solid var(--ic-border); border-radius: 6px; padding: 10px 12px; gap: 10px; margin-bottom: 8px;">
+                    <div style="display: flex; flex-direction: column; gap: 4px; overflow: hidden; flex: 1;">
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span style="font-size: 13px; font-weight: 600; color: ${isHost ? '#10B981' : 'var(--ic-text-main)'}; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+                                ${isHost ? '👑 ' : ''}${escapeHtml(cleanName)}${isHost ? ' (房主)' : ''}
+                            </span>
+                            ${tagHtml}
+                        </div>
+                        ${detailsHtml}
                     </div>
                     <button class="btn-copy-mini" style="font-size: 11px; padding: 4px 10px; background: #333333; color: var(--ic-accent-blue); border: 1px solid var(--ic-border); border-radius: 4px; cursor: pointer; flex-shrink: 0; transition: all 0.15s;" onclick="window.copyMemberIp('${escapeHtml(ip)}')">复制 IP</button>
                 </div>
@@ -2448,7 +2525,8 @@
         if (!text || !text.trim()) return;
         const content = text.trim();
         const myName = getClientSenderName();
-        const myIp = selfDeviceInfo.ip || null;
+        const isHost = roomState.mode === 'host';
+        const myIp = isHost ? (selfDeviceInfo.ip || null) : null;
 
         try {
             const invoke = getTauriInvoke();

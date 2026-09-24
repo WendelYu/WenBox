@@ -28,6 +28,7 @@ data class RoomMember(
     var name: String,
     var ip: String,
     val platform: String,
+    var accessIp: String = "",
     val joinedAt: Long,
     var lastSeen: Long
 )

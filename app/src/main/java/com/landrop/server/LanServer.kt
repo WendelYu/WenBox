@@ -183,8 +183,9 @@ class LanServer(
                         ?: session.headers["remote-addr"]
                         ?: session.remoteIpAddress
                         ?: "127.0.0.1"
+                    val accessIp = session.headers["host"] ?: ""
 
-                    val (ok, msg, token) = RoomManager.verifyAndJoin(pin, clientName, clientIp, clientPlatform)
+                    val (ok, msg, token) = RoomManager.verifyAndJoin(pin, clientName, clientIp, clientPlatform, accessIp)
                     val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
                     val room = RoomManager.currentRoom
                     val roomObj = if (ok && room != null) {
@@ -228,7 +229,8 @@ class LanServer(
                         ?: session.headers["remote-addr"]
                         ?: session.remoteIpAddress
                         ?: "127.0.0.1"
-                    RoomManager.heartbeat(clientIp, clientName, clientPlatform, token)
+                    val accessIp = session.headers["host"] ?: ""
+                    RoomManager.heartbeat(clientIp, clientName, clientPlatform, token, accessIp)
                     val room = RoomManager.currentRoom
                     val result = JSONObject().apply {
                         put("success", true)
@@ -245,6 +247,26 @@ class LanServer(
                     newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", result.toString())
                 }
 
+                // 1.455 离开房间
+                method == Method.POST && uri == "/api/room/leave" -> {
+                    val map = HashMap<String, String>()
+                    try { session.parseBody(map) } catch (_: Exception) {}
+                    val postData = getUtf8PostData(map)
+                    var token: String? = session.headers["x-room-token"]
+                    if (!postData.isNullOrBlank()) {
+                        try {
+                            val json = JSONObject(postData)
+                            if (token.isNullOrBlank()) {
+                                token = json.optString("token", null)
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    if (!token.isNullOrBlank()) {
+                        RoomManager.leaveRoom(token)
+                    }
+                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", "{\"success\":true}")
+                }
+
                 // 1.46 房间成员
                 method == Method.GET && uri == "/api/room/members" -> {
                     val members = RoomManager.getMembers()
@@ -255,6 +277,7 @@ class LanServer(
                             put("name", m.name)
                             put("ip", m.ip)
                             put("platform", m.platform)
+                            put("accessIp", m.accessIp)
                             put("joinedAt", m.joinedAt)
                             put("lastSeen", m.lastSeen)
                         }

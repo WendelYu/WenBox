@@ -103,6 +103,8 @@ pub struct RoomMember {
     pub name: String,
     pub ip: String,
     pub platform: String,
+    #[serde(rename = "accessIp", default)]
+    pub access_ip: String,
     #[serde(rename = "joinedAt")]
     pub joined_at: u64,
     #[serde(rename = "lastSeen")]
@@ -212,7 +214,8 @@ fn set_room_host_ip_cmd(ip: String, state: tauri::State<Arc<AppState>>) -> Resul
     let mut room = state.room.lock().map_err(|e| e.to_string())?;
     room.host_ip = clean.clone();
     if let Some(host_member) = state.members.lock().unwrap().get_mut("host") {
-        host_member.ip = clean;
+        host_member.ip = clean.clone();
+        host_member.access_ip = format!("{}:9527", clean);
     }
     Ok(())
 }
@@ -342,8 +345,9 @@ fn create_room_cmd(room_name: String, pin: String, state: tauri::State<Arc<AppSt
     let host_member = RoomMember {
         id: uuid::Uuid::new_v4().to_string(),
         name: format!("{} (房主)", dev_name),
-        ip: primary_ip,
+        ip: primary_ip.clone(),
         platform: "Windows".into(),
+        access_ip: format!("{}:9527", primary_ip),
         joined_at: now,
         last_seen: now,
     };
@@ -453,7 +457,7 @@ fn get_discovered_rooms_cmd(state: tauri::State<Arc<AppState>>) -> Vec<Discovere
 fn get_room_members_cmd(state: tauri::State<Arc<AppState>>) -> Vec<RoomMember> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     let mut mem = state.members.lock().unwrap();
-    mem.retain(|k, m| k == "host" || k == "127.0.0.1" || now.saturating_sub(m.last_seen) < 30);
+    mem.retain(|k, m| k == "host" || now.saturating_sub(m.last_seen) < 8);
     mem.values().cloned().collect()
 }
 
@@ -992,8 +996,9 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 let host_member = RoomMember {
                     id: uuid::Uuid::new_v4().to_string(),
                     name: format!("{} (房主)", dev_name),
-                    ip: primary_ip,
+                    ip: primary_ip.clone(),
                     platform: "Windows".into(),
+                    access_ip: format!("{}:{}", primary_ip, port),
                     joined_at: now,
                     last_seen: now,
                 };
@@ -1077,7 +1082,8 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         let mut room = state.room.lock().unwrap();
                         room.host_ip = clean.clone();
                         if let Some(host_member) = state.members.lock().unwrap().get_mut("host") {
-                            host_member.ip = clean;
+                            host_member.ip = clean.clone();
+                            host_member.access_ip = format!("{}:9527", clean);
                         }
                     }
                 }
@@ -1120,21 +1126,28 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                             clean_name.to_string()
                         };
 
+                        let access_host = req.headers().iter()
+                            .find(|h| h.field.equiv("Host"))
+                            .map(|h| h.value.as_str().to_string())
+                            .unwrap_or_else(|| format!("{}:9527", client_ip));
+
                         let member = RoomMember {
                             id: uuid::Uuid::new_v4().to_string(),
                             name: display_name,
                             ip: client_ip.clone(),
                             platform: plat,
+                            access_ip: access_host,
                             joined_at: now,
                             last_seen: now,
                         };
                         state.members.lock().unwrap().insert(token, member);
 
+                        let host_ip_to_show = state.selected_ip.lock().unwrap().clone().unwrap_or_else(get_primary_ip);
                         room_info = serde_json::json!({
                             "roomId": room.room_id,
                             "roomName": room.room_name,
                             "hostDevice": room.host_device,
-                            "hostIp": get_primary_ip(),
+                            "hostIp": host_ip_to_show,
                             "hostPort": port,
                         });
                     }
@@ -1160,6 +1173,11 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     .find(|h| h.field.equiv("X-Room-Token"))
                     .map(|h| h.value.as_str().to_string());
 
+                let access_host = req.headers().iter()
+                    .find(|h| h.field.equiv("Host"))
+                    .map(|h| h.value.as_str().to_string())
+                    .unwrap_or_default();
+
                 let mut body = String::new();
                 let _ = req.as_reader().read_to_string(&mut body);
                 let (client_name, client_plat, client_token) = if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
@@ -1178,6 +1196,9 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 if let Some(ref t) = client_token {
                     if let Some(m) = members.get_mut(t) {
                         m.last_seen = now;
+                        if !access_host.is_empty() {
+                            m.access_ip = access_host.clone();
+                        }
                         if let Some(ref n) = client_name {
                             let clean_n = n.trim();
                             if !clean_n.is_empty() {
@@ -1190,6 +1211,9 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 if !matched {
                     if let Some(m) = members.values_mut().find(|m| m.ip == client_ip) {
                         m.last_seen = now;
+                        if !access_host.is_empty() {
+                            m.access_ip = access_host.clone();
+                        }
                         if let Some(ref n) = client_name {
                             let clean_n = n.trim();
                             if !clean_n.is_empty() {
@@ -1199,19 +1223,24 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         matched = true;
                     }
                 }
-                if !matched && client_ip != "127.0.0.1" && client_ip != "::1" {
-                    let display_name = client_name.unwrap_or_else(|| "访客设备".into());
-                    let platform = client_plat.unwrap_or_else(|| "Client".into());
-                    let key = client_token.unwrap_or_else(|| client_ip.clone());
-                    let member = RoomMember {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        name: display_name,
-                        ip: client_ip.clone(),
-                        platform,
-                        joined_at: now,
-                        last_seen: now,
-                    };
-                    members.insert(key, member);
+                if !matched {
+                    // 仅当携带了已授权有效 token 时才允许作为恢复成员登记，杜绝伪成员注入
+                    if let Some(ref t) = client_token {
+                        if state.auth_tokens.lock().unwrap().contains(t) {
+                            let display_name = client_name.unwrap_or_else(|| "访客设备".into());
+                            let platform = client_plat.unwrap_or_else(|| "Client".into());
+                            let member = RoomMember {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                name: display_name,
+                                ip: client_ip.clone(),
+                                platform,
+                                access_ip: access_host,
+                                joined_at: now,
+                                last_seen: now,
+                            };
+                            members.insert(t.clone(), member);
+                        }
+                    }
                 }
 
                 let json = serde_json::json!({
@@ -1231,10 +1260,30 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 return;
             }
 
+            if url == "/api/room/leave" && method == Method::Post {
+                let mut body = String::new();
+                let _ = req.as_reader().read_to_string(&mut body);
+                let token_header = req.headers().iter()
+                    .find(|h| h.field.equiv("X-Room-Token"))
+                    .map(|h| h.value.as_str().to_string());
+                let token = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|v| v["token"].as_str().map(|s| s.to_string()))
+                    .or(token_header);
+                if let Some(t) = token {
+                    let mut members = state.members.lock().unwrap();
+                    members.remove(&t);
+                }
+                let mut resp = Response::from_string("{\"success\":true}");
+                resp.add_header(cors_origin);
+                let _ = req.respond(resp);
+                return;
+            }
+
             if url == "/api/room/members" && method == Method::Get {
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                 let mut members_map = state.members.lock().unwrap();
-                members_map.retain(|k, m| k == "host" || k == "127.0.0.1" || now.saturating_sub(m.last_seen) < 30);
+                members_map.retain(|k, m| k == "host" || now.saturating_sub(m.last_seen) < 8);
                 let list: Vec<RoomMember> = members_map.values().cloned().collect();
                 let json = serde_json::json!({ "members": list }).to_string();
                 let mut resp = Response::from_string(json);
@@ -1564,21 +1613,13 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         };
                         state.messages.lock().unwrap_or_else(|e| e.into_inner()).push(msg);
 
-                        let now_secs = now_ms / 1000;
-                        if sender_ip != "127.0.0.1" && sender_ip != "::1" {
+                        let token_header = req.headers().iter()
+                            .find(|h| h.field.equiv("X-Room-Token"))
+                            .map(|h| h.value.as_str().to_string());
+                        if let Some(t) = token_header {
                             let mut members = state.members.lock().unwrap();
-                            if let Some(m) = members.get_mut(&sender_ip) {
-                                m.last_seen = now_secs;
-                            } else {
-                                let member = RoomMember {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    name: sender_name,
-                                    ip: sender_ip,
-                                    platform: if is_from_phone { "Mobile".into() } else { "Client".into() },
-                                    joined_at: now_secs,
-                                    last_seen: now_secs,
-                                };
-                                members.insert(member.ip.clone(), member);
+                            if let Some(m) = members.get_mut(&t) {
+                                m.last_seen = now_ms / 1000;
                             }
                         }
                     }
