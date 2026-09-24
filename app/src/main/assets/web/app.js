@@ -889,7 +889,7 @@
         if (pinContainer) {
             pinContainer.style.display = pendingJoinRoomData.needPassword ? 'block' : 'none';
         }
-        if (pinInput) pinInput.value = '';
+        if (pinInput) pinInput.value = data.pin || '';
 
         if (joinRoomPinModal) joinRoomPinModal.style.display = 'flex';
         if (nickInput) setTimeout(() => { nickInput.focus(); nickInput.select(); }, 150);
@@ -916,6 +916,24 @@
             localStorage.setItem('wenbox_nickname', nick);
             const pin = (pendingJoinRoomData.needPassword && pinInput) ? pinInput.value.trim() : '';
             executeJoinRoom(pendingJoinRoomData.hostUrl, pin, pendingJoinRoomData.roomName, pendingJoinRoomData.hostDevice, pendingJoinRoomData.roomId, nick);
+        });
+    }
+
+    const modalNickInput = document.getElementById('modalInputJoinNickname');
+    if (modalNickInput) {
+        modalNickInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (modalBtnConfirmJoinPin) modalBtnConfirmJoinPin.click();
+            }
+        });
+    }
+    if (modalInputJoinPin) {
+        modalInputJoinPin.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (modalBtnConfirmJoinPin) modalBtnConfirmJoinPin.click();
+            }
         });
     }
 
@@ -1824,13 +1842,38 @@
     checkSelfServerStatus();
 
     // 检查 URL 是否带参扫码秒进 (如 ?room=xxx&pin=yyy)
-    function checkUrlAutoJoin() {
+    async function checkUrlAutoJoin() {
         const urlParams = new URLSearchParams(window.location.search);
         const qRoom = urlParams.get('room');
         const qPin = urlParams.get('pin') || '';
         if (qRoom) {
-            const hostOrigin = window.location.origin;
-            executeJoinRoom(hostOrigin, qPin, qRoom, '主机', qRoom);
+            // 通过直链进入的必定是访客身份，绝不能当作房主
+            sessionStorage.removeItem('wenbox_host_token');
+            setRoomMode('client');
+
+            let needPassword = !!qPin;
+            let hostDevice = '主机';
+            let roomName = qRoom;
+            try {
+                const res = await fetch(getApiOrigin() + '/api/room/status?t=' + Date.now());
+                if (res.ok) {
+                    const st = await res.json();
+                    if (st && st.isActive) {
+                        needPassword = !!st.needPassword;
+                        if (st.hostDevice) hostDevice = st.hostDevice;
+                        if (st.roomName) roomName = st.roomName;
+                    }
+                }
+            } catch (_) {}
+
+            window.openJoinRoomDialog({
+                hostUrl: window.location.origin,
+                roomName: roomName,
+                roomId: qRoom,
+                hostDevice: hostDevice,
+                needPassword: needPassword,
+                pin: qPin
+            });
             return true;
         }
         return false;
@@ -1838,7 +1881,7 @@
 
     // 初始检查当前房间状态 (如果是 Tauri 主机已开房，恢复 host 模式；如果是外部浏览器，严禁被当成房主)
     async function initRoomState() {
-        if (checkUrlAutoJoin()) return;
+        if (await checkUrlAutoJoin()) return;
 
         const invoke = getTauriInvoke();
         if (invoke) {
@@ -1854,25 +1897,31 @@
         } else {
             const savedHostToken = sessionStorage.getItem('wenbox_host_token');
             try {
-                const res = await fetch(getApiOrigin() + '/api/room/status?t=' + Date.now());
+                const res = await fetch(getApiOrigin() + '/api/room/status?t=' + Date.now(), {
+                    headers: savedHostToken ? { 'X-Host-Token': savedHostToken } : {}
+                });
                 if (res.ok) {
                     const st = await res.json();
                     if (st && st.isActive) {
-                        // 只有此前在该浏览器会话中点击创建了房间并持有 hostToken 的，才恢复为 host
-                        if (savedHostToken) {
+                        // 严格校验：只有服务端确认 X-Host-Token 属于当前活跃房间 (st.isHost === true)，才允许恢复为 host
+                        if (savedHostToken && st.isHost === true) {
                             setRoomMode('host', st);
                             return;
                         }
-                        // 否则当前浏览器为局域网外部访客！绝不能设为 host，而是作为访客引导入房
+                        // 否则当前浏览器为局域网外部访客！严禁赋予 host 权限，立即清除无效的 hostToken，并引导输入昵称入房
+                        sessionStorage.removeItem('wenbox_host_token');
                         setRoomMode('client');
                         window.openJoinRoomDialog({
                             hostUrl: getApiOrigin(),
                             roomName: st.roomName || st.roomId,
                             roomId: st.roomId,
                             hostDevice: st.hostDevice || '主机',
-                            needPassword: st.needPassword
+                            needPassword: !!st.needPassword
                         });
                         return;
+                    } else {
+                        // 房间未激活，清除无效的 hostToken
+                        sessionStorage.removeItem('wenbox_host_token');
                     }
                 }
             } catch (e) {

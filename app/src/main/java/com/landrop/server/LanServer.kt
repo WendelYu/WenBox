@@ -80,6 +80,9 @@ class LanServer(
                 method == Method.GET && uri == "/api/room/status" -> {
                     val room = RoomManager.currentRoom
                     val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
+                    val token = session.headers["x-host-token"] ?: session.headers["x-room-token"]
+                    val hostToken = RoomManager.currentHostToken
+                    val isHost = room != null && room.isActive && !hostToken.isNullOrBlank() && token == hostToken
                     val json = if (room != null && room.isActive) {
                         JSONObject().apply {
                             put("isActive", true)
@@ -90,10 +93,12 @@ class LanServer(
                             put("hostIp", primaryIp)
                             put("hostPort", serverPort)
                             put("memberCount", RoomManager.getMembers().size)
+                            put("isHost", isHost)
                         }
                     } else {
                         JSONObject().apply {
                             put("isActive", false)
+                            put("isHost", false)
                         }
                     }
                     newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", json.toString())
@@ -130,20 +135,27 @@ class LanServer(
                         put("hostDevice", cfg.hostDevice)
                         put("hostIp", cfg.hostIp)
                         put("hostPort", cfg.hostPort)
+                        put("hostToken", RoomManager.currentHostToken)
                     }
                     newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", result.toString())
                 }
 
                 // 1.43 解散房间
                 method == Method.POST && uri == "/api/room/close" -> {
-                    val clientIp = session.headers["http-client-ip"]
-                        ?: session.headers["remote-addr"]
-                        ?: session.remoteIpAddress
-                        ?: "127.0.0.1"
-                    val isLocal = clientIp == "127.0.0.1" || clientIp == "::1"
-                    val token = session.headers["x-host-token"] ?: session.headers["x-room-token"]
+                    val map = HashMap<String, String>()
+                    try { session.parseBody(map) } catch (_: Exception) {}
+                    val postData = getUtf8PostData(map)
+                    var bodyToken: String? = null
+                    if (!postData.isNullOrBlank()) {
+                        try {
+                            val json = JSONObject(postData)
+                            bodyToken = if (json.has("hostToken")) json.optString("hostToken") else json.optString("token", null)
+                        } catch (_: Exception) {}
+                    }
+                    val headerToken = session.headers["x-host-token"] ?: session.headers["x-room-token"]
+                    val providedToken = if (!headerToken.isNullOrBlank()) headerToken else bodyToken
                     val hostToken = RoomManager.currentHostToken
-                    if (!isLocal && (token.isNullOrBlank() || token != hostToken)) {
+                    if (hostToken.isNullOrBlank() || providedToken.isNullOrBlank() || providedToken != hostToken) {
                         newFixedLengthResponse(Response.Status.FORBIDDEN, "application/json; charset=UTF-8", "{\"success\":false,\"message\":\"无权解散房间：只有房主设备可以解散房间\"}")
                     } else {
                         RoomManager.closeRoom()

@@ -866,6 +866,10 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 let room = state.room.lock().unwrap().clone();
                 let members_count = state.members.lock().unwrap().len();
                 let primary_ip = get_primary_ip();
+                let current_host_token = state.host_token.lock().unwrap().clone();
+                let is_host = room.is_active && !current_host_token.is_empty() && req.headers().iter().any(|h| {
+                    (h.field.equiv("X-Host-Token") || h.field.equiv("X-Room-Token")) && h.value == current_host_token
+                });
                 let json = serde_json::json!({
                     "isActive": room.is_active,
                     "roomId": room.room_id,
@@ -874,7 +878,8 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     "hostDevice": room.host_device,
                     "hostIp": primary_ip,
                     "hostPort": port,
-                    "memberCount": members_count
+                    "memberCount": members_count,
+                    "isHost": is_host
                 }).to_string();
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
@@ -949,9 +954,6 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
             }
 
             if url == "/api/room/close" && method == Method::Post {
-                let client_ip = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_default();
-                let is_loopback = client_ip == "127.0.0.1" || client_ip == "::1";
-
                 let mut body = String::new();
                 let _ = req.as_reader().read_to_string(&mut body);
                 let provided_token = if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
@@ -966,7 +968,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     || req.headers().iter().any(|h| (h.field.equiv("X-Host-Token") || h.field.equiv("X-Room-Token")) && h.value == current_host_token)
                 );
 
-                if !is_loopback && !is_token_valid {
+                if !is_token_valid {
                     let mut resp = Response::from_string("{\"success\":false,\"message\":\"无权解散房间：只有房主设备可以解散房间\"}")
                         .with_status_code(403);
                     resp.add_header(cors_origin);
