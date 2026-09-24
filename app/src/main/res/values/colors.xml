@@ -10,4 +10,17 @@
     <color name="text_secondary">#94A3B8</color>
     <color name="border_color">#334155</color>
     <color name="danger">#EF4444</color>
+
+    <!-- internal-chat / fagedongxi.com 风格配色 -->
+    <color name="chat_bg">#242424</color>
+    <color name="chat_card_bg">#2A2A2A</color>
+    <color name="chat_card_hover">#323232</color>
+    <color name="chat_border">#363636</color>
+    <color name="chat_accent_blue">#64B5F6</color>
+    <color name="chat_accent_blue_hover">#42A5F5</color>
+    <color name="chat_accent_green">#81C784</color>
+    <color name="chat_text_main">#E0E0E0</color>
+    <color name="chat_text_muted">#8B949E</color>
+    <color name="chat_text_subtle">#757575</color>
+    <color name="chat_system_amber">#FFA726</color>
 </resources>

@@ -442,12 +442,13 @@
                             android:layout_width="0dp"
                             android:layout_height="44dp"
                             android:layout_weight="1"
-                            android:background="#162032"
-                            android:hint="输入文字/链接发送给电脑..."
-                            android:textColorHint="#475569"
+                            android:background="@drawable/bg_chat_input"
+                            android:hint="输入文字/代码/链接发送给对方..."
+                            android:textColorHint="@color/chat_text_subtle"
                             android:paddingHorizontal="12dp"
-                            android:textColor="@color/text_primary"
-                            android:textSize="14sp" />
+                            android:textColor="@color/chat_text_main"
+                            android:fontFamily="monospace"
+                            android:textSize="13.5sp" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnSendMessage"
@@ -455,8 +456,10 @@
                             android:layout_height="44dp"
                             android:layout_marginStart="8dp"
                             android:text="发送"
-                            app:cornerRadius="8dp"
-                            app:backgroundTint="@color/primary" />
+                            android:textColor="#121212"
+                            android:textStyle="bold"
+                            app:cornerRadius="6dp"
+                            app:backgroundTint="@color/chat_accent_blue" />
 
                     </LinearLayout>
 

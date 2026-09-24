@@ -329,15 +329,15 @@
                 </div>
 
                 <!-- 房间在线人数与访问 IP 状态栏 -->
-                <div class="chat-status-bar" style="display: flex; align-items: center; justify-content: space-between; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 6px 12px; margin-bottom: 12px; font-size: 12px;">
-                    <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
-                        <span id="chatOnlineMemberBadge" style="color: #34D399; font-weight: 600; white-space: nowrap; cursor: pointer;" title="点击查看所有在线成员与 IP">👥 在线: 1 人 (点击查看)</span>
-                        <span style="color: var(--text-muted);">|</span>
-                        <span id="chatRoomIpBadge" style="color: #60A5FA; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">🌐 访问地址: http://127.0.0.1:9527</span>
+                <div class="chat-status-bar">
+                    <div class="chat-status-left">
+                        <span id="chatOnlineMemberBadge" class="chat-online-badge" title="点击查看所有在线成员与 IP">👥 在线: 1 人 (点击查看)</span>
+                        <span style="color: var(--ic-text-subtle);">|</span>
+                        <span id="chatRoomIpBadge" class="chat-room-ip">🌐 访问地址: http://127.0.0.1:9527</span>
                     </div>
                     <div style="display: flex; gap: 6px; flex-shrink: 0;">
-                        <button id="btnShowChatMembersModal" style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); color: #34D399; border-radius: 6px; padding: 2px 8px; font-size: 11px; cursor: pointer; white-space: nowrap;">👥 查看在线 IP</button>
-                        <button id="btnCopyChatRoomUrl" style="background: transparent; border: 1px solid var(--border-color); color: #94A3B8; border-radius: 6px; padding: 2px 8px; font-size: 11px; cursor: pointer; white-space: nowrap;">复制链接</button>
+                        <button id="btnShowChatMembersModal" class="chat-status-btn btn-member-list">👥 在线 IP</button>
+                        <button id="btnCopyChatRoomUrl" class="chat-status-btn">复制链接</button>
                     </div>
                 </div>
 
@@ -350,42 +350,39 @@
                     </div>
                 </div>
 
-                <!-- 快捷工具栏 (参考 internal-chat 常用交互) -->
-                <div class="chat-toolbar">
-                    <div class="chat-toolbar-left">
-                        <button id="chatBtnSendImage" class="chat-tool-btn" title="发送图片或本地截图">
-                            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                                <polyline points="21 15 16 10 5 21"></polyline>
-                            </svg>
-                            发送图片
-                        </button>
-                        <input type="file" id="chatImageFileInput" accept="image/*" style="display: none;">
+                <!-- 连体式输入工作台 (参考 internal-chat 风格) -->
+                <div class="chat-composer">
+                    <div class="chat-toolbar">
+                        <div class="chat-toolbar-left">
+                            <button id="chatBtnSendImage" class="chat-tool-btn" title="发送图片或本地截图">
+                                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                    <polyline points="21 15 16 10 5 21"></polyline>
+                                </svg>
+                                <span>图片</span>
+                            </button>
+                            <input type="file" id="chatImageFileInput" accept="image/*" style="display: none;">
 
-                        <button id="chatBtnSendFile" class="chat-tool-btn" title="发送任意文档或压缩包">
-                            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
-                            </svg>
-                            发送文件
-                        </button>
-                        <input type="file" id="chatFileInput" style="display: none;">
+                            <button id="chatBtnSendFile" class="chat-tool-btn" title="发送任意文档或压缩包">
+                                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                                </svg>
+                                <span>文件</span>
+                            </button>
+                            <input type="file" id="chatFileInput" style="display: none;">
+                        </div>
+                        <div class="chat-toolbar-right">
+                            <span class="chat-input-shortcut-hint">Enter 发送 / Shift+Enter 换行</span>
+                            <button id="webBtnSendMessage" class="btn-send-message" title="发送消息 (Enter)">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                                </svg>
+                                <span>发送</span>
+                            </button>
+                        </div>
                     </div>
-                    <div class="chat-toolbar-right">
-                        <span class="chat-input-shortcut-hint">💡 Enter 发送 / Shift+Enter 换行 / 支持 Ctrl+V 粘贴截图 / 拖入文件</span>
-                    </div>
-                </div>
-
-                <!-- 输入栏 -->
-                <div class="chat-input-bar">
-                    <textarea id="webChatMessageInput" class="chat-textarea" placeholder="输入要发送的消息内容（支持 Markdown 代码块 ```、链接自动识别、Ctrl+V 粘贴截图、拖拽文件）..." rows="2"></textarea>
-                    <button id="webBtnSendMessage" class="btn-send-message" title="快捷键: Enter 直接发送，Shift+Enter 换行">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="22" y1="2" x2="11" y2="13"></line>
-                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                        </svg>
-                        发送 (Enter)
-                    </button>
+                    <textarea id="webChatMessageInput" class="chat-textarea" placeholder="输入要发送的消息或代码，支持拖入文件或直接粘贴截图 (Ctrl+V)..." rows="3"></textarea>
                 </div>
             </section>
         </main>

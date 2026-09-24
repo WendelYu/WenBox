@@ -699,12 +699,16 @@ class TransferFragment : Fragment() {
         val itemBinding = ItemChatMessageBinding.inflate(LayoutInflater.from(ctx), binding.llChatMessages, false)
         val timeStr = timeFormat.format(Date(msg.timestamp))
         val ipTag = if (msg.senderIp.isNotBlank()) " (${msg.senderIp})" else ""
-        val senderLabel = if (msg.isFromPhone) {
-            "${msg.senderName.ifBlank { "📱 本机" }}$ipTag • $timeStr"
+
+        if (msg.isFromPhone) {
+            val name = msg.senderName.ifBlank { "📱 本机" }
+            itemBinding.tvSenderInfo.text = "（我）$name$ipTag"
+            itemBinding.tvSenderInfo.setTextColor(ContextCompat.getColor(ctx, R.color.chat_accent_blue))
         } else {
-            "${msg.senderName}$ipTag • $timeStr"
+            itemBinding.tvSenderInfo.text = "${msg.senderName}$ipTag"
+            itemBinding.tvSenderInfo.setTextColor(ContextCompat.getColor(ctx, R.color.chat_accent_green))
         }
-        itemBinding.tvSenderInfo.text = senderLabel
+        itemBinding.tvMessageTime.text = timeStr
 
         val content = msg.content
         var textToCopy = content
@@ -740,20 +744,6 @@ class TransferFragment : Fragment() {
 
         itemBinding.btnCopyMessage.setOnClickListener {
             copyToClipboard(textToCopy)
-        }
-
-        if (msg.isFromPhone) {
-            itemBinding.llMessageContainer.gravity = Gravity.END
-            itemBinding.tvSenderInfo.gravity = Gravity.END
-            itemBinding.llBubbleRow.layoutDirection = View.LAYOUT_DIRECTION_RTL
-            itemBinding.tvMessageContent.setBackgroundResource(R.drawable.bg_chat_bubble_me)
-            itemBinding.tvMessageContent.setTextColor(Color.WHITE)
-        } else {
-            itemBinding.llMessageContainer.gravity = Gravity.START
-            itemBinding.tvSenderInfo.gravity = Gravity.START
-            itemBinding.llBubbleRow.layoutDirection = View.LAYOUT_DIRECTION_LTR
-            itemBinding.tvMessageContent.setBackgroundResource(R.drawable.bg_chat_bubble_other)
-            itemBinding.tvMessageContent.setTextColor(ContextCompat.getColor(ctx, R.color.text_primary))
         }
 
         binding.llChatMessages.addView(itemBinding.root)

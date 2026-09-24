@@ -2,53 +2,66 @@
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/llMessageContainer"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginBottom="12dp"
+    android:layout_marginBottom="8dp"
+    android:background="@drawable/bg_chat_item"
+    android:padding="10dp"
     android:orientation="vertical">
 
-    <TextView
-        android:id="@+id/tvSenderInfo"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="3dp"
-        android:textColor="@color/text_secondary"
-        android:textSize="11sp"
-        tools:text="💻 电脑端 (192.168.1.100) • 14:32:05" />
-
+    <!-- 顶部消息头：发送者、IP、时间戳与复制按钮 -->
     <LinearLayout
-        android:id="@+id/llBubbleRow"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="bottom">
+        android:gravity="center_vertical"
+        android:layout_marginBottom="6dp">
 
         <TextView
-            android:id="@+id/tvMessageContent"
+            android:id="@+id/tvSenderInfo"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="@color/chat_accent_blue"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            tools:text="（我）📱 本机 (192.168.1.100)" />
+
+        <TextView
+            android:id="@+id/tvMessageTime"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:maxWidth="280dp"
-            android:background="@drawable/bg_chat_bubble_other"
-            android:paddingHorizontal="14dp"
-            android:paddingVertical="9dp"
-            android:textColor="@color/text_primary"
-            android:textSize="14sp"
-            android:lineSpacingExtra="2dp"
-            android:textIsSelectable="true"
-            tools:text="这是来自电脑端发过来的文本或链接" />
+            android:textColor="@color/chat_text_subtle"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:layout_marginEnd="8dp"
+            tools:text="14:32:05" />
 
         <ImageView
             android:id="@+id/btnCopyMessage"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
-            android:layout_marginStart="6dp"
-            android:layout_marginEnd="6dp"
-            android:padding="5dp"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:padding="3dp"
             android:src="@drawable/ic_copy"
+            app:tint="@color/chat_text_muted"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="复制内容" />
 
     </LinearLayout>
+
+    <!-- 消息主体文本 (等宽字体，支持保留缩进和排版) -->
+    <TextView
+        android:id="@+id/tvMessageContent"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@color/chat_text_main"
+        android:textColorLink="@color/chat_accent_blue"
+        android:textSize="13.5sp"
+        android:lineSpacingExtra="3dp"
+        android:typeface="monospace"
+        android:textIsSelectable="true"
+        tools:text="这是来自设备发送的文本或代码" />
 
 </LinearLayout>

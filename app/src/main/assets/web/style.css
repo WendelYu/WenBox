@@ -9,6 +9,19 @@
     --accent: #10B981;
     --accent-hover: #059669;
     --danger: #EF4444;
+
+    /* fagedongxi.com / internal-chat 风格专属调色板 */
+    --ic-bg-main: #242424;
+    --ic-bg-card: #2a2a2a;
+    --ic-bg-hover: #323232;
+    --ic-border: #363636;
+    --ic-accent-blue: #64B5F6;
+    --ic-accent-blue-hover: #42A5F5;
+    --ic-text-main: #e0e0e0;
+    --ic-text-muted: #8B949E;
+    --ic-text-subtle: #757575;
+    --ic-accent-green: #81C784;
+    --ic-system-amber: #FFA726;
 }
 
 * {
@@ -688,245 +701,353 @@ body {
     border-radius: 99px;
 }
 
+/* ================= 局域网互通聊天模块 (融合 fagedongxi.com / internal-chat 极简优雅风格) ================= */
+
+/* 聊天卡片与整体容器 */
+.chat-card {
+    display: flex;
+    flex-direction: column;
+    height: 660px;
+    position: relative;
+    background: #1e1e1e;
+    border: 1px solid var(--ic-border);
+}
+
+.chat-header-bar {
+    border-bottom: 1px solid var(--ic-border);
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+}
+
+.chat-room-badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: #4CAF50;
+    background: rgba(76, 175, 80, 0.12);
+    border: 1px solid rgba(76, 175, 80, 0.3);
+    padding: 2px 8px;
+    border-radius: 99px;
+}
+
+.chat-pin-badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ic-system-amber);
+    background: rgba(255, 167, 38, 0.12);
+    border: 1px solid rgba(255, 167, 38, 0.3);
+    padding: 2px 8px;
+    border-radius: 99px;
+}
+
+/* 顶部状态栏：在线人数与访问 IP */
+.chat-status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--ic-bg-card);
+    border: 1px solid var(--ic-border);
+    border-radius: 6px;
+    padding: 7px 12px;
+    margin-bottom: 12px;
+    font-size: 12px;
+}
+
+.chat-status-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+}
+
+.chat-online-badge {
+    color: #4CAF50;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color 0.15s;
+}
+
+.chat-online-badge:hover {
+    color: #81C784;
+}
+
+.chat-room-ip {
+    color: var(--ic-accent-blue);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.chat-status-btn {
+    background: transparent;
+    border: 1px solid var(--ic-border);
+    color: var(--ic-text-muted);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+}
+
+.chat-status-btn:hover {
+    background: var(--ic-bg-hover);
+    color: var(--ic-accent-blue);
+    border-color: var(--ic-accent-blue);
+}
+
+.chat-status-btn.btn-member-list {
+    background: rgba(76, 175, 80, 0.1);
+    border-color: rgba(76, 175, 80, 0.3);
+    color: #4CAF50;
+}
+
+.chat-status-btn.btn-member-list:hover {
+    background: rgba(76, 175, 80, 0.2);
+    color: #81C784;
+}
+
 /* 消息流容器 */
 .chat-message-list {
     flex: 1;
     overflow-y: auto;
-    background: rgba(11, 15, 25, 0.65);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
-    padding: 16px 20px;
+    background: var(--ic-bg-main);
+    border: 1px solid var(--ic-border);
+    border-radius: 8px;
+    padding: 12px 14px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 6px;
     margin-bottom: 10px;
     scroll-behavior: smooth;
 }
 
-.chat-msg-row {
+/* 单条消息流项 (参考 internal-chat 结构) */
+.chat-item {
     display: flex;
     flex-direction: column;
-    max-width: 85%;
-    animation: fadeInMsg 0.2s ease-out;
+    gap: 4px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    transition: background-color 0.15s ease;
     position: relative;
+    animation: fadeInChatItem 0.18s ease-out;
 }
 
-@keyframes fadeInMsg {
-    from { opacity: 0; transform: translateY(6px); }
+@keyframes fadeInChatItem {
+    from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
-.chat-msg-row.from-me {
-    align-self: flex-end;
-    align-items: flex-end;
+.chat-item:hover {
+    background-color: var(--ic-bg-card);
 }
 
-.chat-msg-row.from-other {
-    align-self: flex-start;
-    align-items: flex-start;
-}
-
-.chat-msg-meta {
-    font-size: 11px;
-    color: var(--text-muted);
-    margin-bottom: 5px;
+/* 消息头：发送者、IP、时间戳 */
+.chat-item_user {
     display: flex;
     align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-}
-
-.chat-sender-name {
-    font-weight: 600;
-    color: #CBD5E1;
-}
-
-.chat-ip-pill {
-    display: inline-block;
-    padding: 1px 6px;
-    font-size: 10px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    background: rgba(56, 189, 248, 0.12);
-    color: #38BDF8;
-    border: 1px solid rgba(56, 189, 248, 0.25);
-    border-radius: 4px;
-}
-
-.chat-time-pill {
-    font-size: 10px;
-    color: #64748B;
-    font-family: monospace;
-}
-
-.chat-msg-bubble-container {
-    display: flex;
-    align-items: flex-end;
     gap: 8px;
-    max-width: 100%;
-    position: relative;
+    font-size: 13px;
+    line-height: 1.4;
+    user-select: none;
 }
 
-.chat-msg-row.from-me .chat-msg-bubble-container {
-    flex-direction: row-reverse;
-}
-
-.chat-msg-row.from-other .chat-msg-bubble-container {
-    flex-direction: row;
-}
-
-.chat-msg-bubble {
-    padding: 10px 16px;
-    border-radius: 16px;
-    font-size: 14px;
-    line-height: 1.6;
-    word-break: break-word;
-    position: relative;
-    user-select: text;
-    cursor: text;
-    max-width: 100%;
-}
-
-.chat-msg-row.from-me .chat-msg-bubble {
-    background: linear-gradient(135deg, #2563EB, #1D4ED8);
-    color: #FFFFFF;
-    border: 1px solid rgba(147, 197, 253, 0.25);
-    border-radius: 16px 16px 4px 16px;
-    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
-}
-
-.chat-msg-row.from-other .chat-msg-bubble {
-    background: #1E293B;
-    color: #F8FAFC;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px 16px 16px 4px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
-}
-
-.chat-msg-copy-btn {
+.chat-item_user .user-name {
+    font-weight: 600;
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    padding: 4px 8px;
+}
+
+/* 我发送的消息：高亮色 #64B5F6，显示（我）前缀 */
+.chat-item_user.from-me .user-name {
+    color: var(--ic-accent-blue);
+}
+
+/* 他人发送的消息：温和翠绿 #81C784 */
+.chat-item_user.from-other .user-name {
+    color: var(--ic-accent-green);
+}
+
+.chat-item_ip {
+    display: inline-block;
+    padding: 1px 6px;
     font-size: 11px;
-    color: #94A3B8;
-    background: rgba(30, 41, 59, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    color: var(--ic-text-muted);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+}
+
+.chat-item_time {
+    font-size: 11px;
+    color: var(--ic-text-subtle);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    margin-left: auto;
+}
+
+/* 消息内容与复制按钮容器 */
+.chat-item_content {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    position: relative;
+}
+
+/* 核心文本展示：使用 pre 保留排版、缩进和换行 */
+.chat-item_content pre.chat-text {
+    flex: 1;
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--ic-text-main);
+    white-space: pre-wrap;
+    word-break: break-word;
+    user-select: text;
+}
+
+/* 极简 SVG 悬停复制按钮 (完美复刻 internal-chat 体验并提升) */
+.copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    color: var(--ic-text-subtle);
+    background: transparent;
+    border: none;
     cursor: pointer;
-    transition: all 0.2s ease;
-    opacity: 0.45;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background-color 0.15s, transform 0.1s;
     flex-shrink: 0;
     user-select: none;
-    backdrop-filter: blur(4px);
-    margin-bottom: 2px;
+    margin-top: -2px;
 }
 
-.chat-msg-row:hover .chat-msg-copy-btn {
+.copy-btn:hover {
+    color: var(--ic-accent-blue);
+    background-color: rgba(100, 181, 246, 0.12);
+}
+
+.copy-btn:active {
+    transform: scale(0.92);
+}
+
+.chat-item:hover .copy-btn {
     opacity: 1;
 }
 
-.chat-msg-copy-btn:hover {
-    color: #38BDF8;
-    background: rgba(56, 189, 248, 0.15);
-    border-color: rgba(56, 189, 248, 0.4);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+.copy-btn.copied {
+    color: #4CAF50 !important;
+    background-color: rgba(76, 175, 80, 0.12) !important;
+    opacity: 1 !important;
 }
 
-.chat-msg-copy-btn.copied {
-    color: #34D399;
-    background: rgba(52, 211, 153, 0.15);
-    border-color: rgba(52, 211, 153, 0.4);
-    opacity: 1;
+/* 在移动端或触屏上常态半透明显示复制按钮 */
+@media (hover: none) or (max-width: 640px) {
+    .copy-btn {
+        opacity: 0.6;
+    }
 }
 
-/* 消息内的超链接 */
+/* 消息超链接 */
 .chat-link {
-    color: #60A5FA;
-    text-decoration: underline;
-    text-underline-offset: 3px;
-    font-weight: 500;
-    transition: color 0.15s;
+    color: var(--ic-accent-blue);
+    text-decoration: none;
+    border-bottom: 1px dashed var(--ic-accent-blue);
+    transition: color 0.15s, border-color 0.15s;
     word-break: break-all;
 }
+
 .chat-link:hover {
-    color: #93C5FD;
+    color: var(--ic-accent-blue-hover);
+    border-bottom-style: solid;
 }
 
-/* 消息内的代码块 (Markdown ```) */
+/* Markdown 代码块 ``` */
 .chat-code-block {
     margin: 8px 0;
-    background: #0D1117;
-    border: 1px solid #30363D;
-    border-radius: 8px;
+    background: #181818;
+    border: 1px solid var(--ic-border);
+    border-radius: 6px;
     overflow: hidden;
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-    font-size: 13px;
+    width: 100%;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .chat-code-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: #161B22;
+    background: #252526;
     padding: 4px 10px;
-    border-bottom: 1px solid #30363D;
+    border-bottom: 1px solid var(--ic-border);
     font-size: 11px;
-    color: #8B949E;
+    color: var(--ic-text-muted);
 }
 
 .chat-code-copy-btn {
     background: transparent;
-    border: 1px solid #30363D;
-    color: #C9D1D9;
+    border: 1px solid var(--ic-border);
+    color: var(--ic-text-main);
     border-radius: 4px;
     padding: 2px 8px;
     font-size: 11px;
     cursor: pointer;
     transition: all 0.15s;
 }
+
 .chat-code-copy-btn:hover {
-    background: #21262D;
-    color: #58A6FF;
-    border-color: #58A6FF;
+    background: var(--ic-bg-hover);
+    color: var(--ic-accent-blue);
+    border-color: var(--ic-accent-blue);
 }
 
 .chat-code-content {
     margin: 0;
     padding: 10px 12px;
     overflow-x: auto;
-    color: #E6EDF3;
-    line-height: 1.45;
+    color: var(--ic-text-main);
+    line-height: 1.5;
+    font-size: 13px;
     white-space: pre;
 }
 
-/* 行内代码标签 */
+/* 行内代码识别 `code` */
 .chat-inline-code {
-    background: rgba(0, 0, 0, 0.35);
-    color: #38BDF8;
-    padding: 2px 6px;
+    background: #181818;
+    color: var(--ic-accent-blue);
+    border: 1px solid var(--ic-border);
+    padding: 1px 6px;
     border-radius: 4px;
-    font-family: monospace;
-    font-size: 13px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12.5px;
 }
 
-/* 聊天室内图片缩略图 */
+/* 图片缩略图预览 */
 .chat-img-thumb-wrapper {
     margin: 4px 0;
     position: relative;
     display: inline-block;
     cursor: pointer;
-    border-radius: 8px;
+    border-radius: 6px;
     overflow: hidden;
+    border: 1px solid var(--ic-border);
 }
 
 .chat-img-thumb {
     display: block;
-    max-width: 280px;
-    max-height: 200px;
-    border-radius: 8px;
+    max-width: 320px;
+    max-height: 240px;
+    border-radius: 6px;
     object-fit: contain;
-    background: #000;
+    background: #181818;
     transition: transform 0.2s;
 }
 
@@ -938,30 +1059,30 @@ body {
     position: absolute;
     bottom: 6px;
     right: 6px;
-    background: rgba(0, 0, 0, 0.65);
-    color: #fff;
+    background: rgba(0, 0, 0, 0.75);
+    color: var(--ic-text-main);
     font-size: 11px;
     padding: 2px 6px;
     border-radius: 4px;
     pointer-events: none;
 }
 
-/* 聊天室内文件卡片 */
+/* 文件传输卡片 */
 .chat-file-card {
     display: flex;
     align-items: center;
     gap: 12px;
-    background: rgba(15, 23, 42, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 10px;
+    background: var(--ic-bg-card);
+    border: 1px solid var(--ic-border);
+    border-radius: 6px;
     padding: 10px 14px;
     margin: 4px 0;
-    min-width: 220px;
-    max-width: 320px;
+    min-width: 240px;
+    max-width: 360px;
 }
 
 .chat-file-icon {
-    font-size: 28px;
+    font-size: 26px;
     flex-shrink: 0;
 }
 
@@ -972,8 +1093,8 @@ body {
 
 .chat-file-name {
     font-size: 13px;
-    font-weight: 600;
-    color: #F8FAFC;
+    font-weight: 500;
+    color: var(--ic-text-main);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -981,16 +1102,16 @@ body {
 
 .chat-file-size {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--ic-text-muted);
     margin-top: 2px;
 }
 
 .chat-file-download-btn {
-    background: #2563EB;
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-    padding: 5px 10px;
+    background: #333333;
+    color: var(--ic-accent-blue);
+    border: 1px solid var(--ic-border);
+    border-radius: 4px;
+    padding: 5px 12px;
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
@@ -999,34 +1120,52 @@ body {
     align-items: center;
     gap: 4px;
     white-space: nowrap;
-    transition: background 0.15s;
-}
-.chat-file-download-btn:hover {
-    background: #1D4ED8;
+    transition: all 0.15s;
 }
 
-/* 工具栏与快捷按钮 */
+.chat-file-download-btn:hover {
+    background: var(--ic-accent-blue);
+    color: #181818;
+    border-color: var(--ic-accent-blue);
+}
+
+/* 连体式输入工作台 (参考 internal-chat 风格) */
+.chat-composer {
+    background: var(--ic-bg-card);
+    border: 1px solid var(--ic-border);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    margin-top: 10px;
+}
+
+.chat-composer:focus-within {
+    border-color: var(--ic-accent-blue);
+    box-shadow: 0 0 0 1px rgba(100, 181, 246, 0.3);
+}
+
 .chat-toolbar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 10px;
-    padding: 6px 4px;
-    flex-wrap: wrap;
+    background: var(--ic-bg-main);
+    border-bottom: 1px solid var(--ic-border);
+    padding: 6px 10px;
+    gap: 8px;
 }
 
 .chat-toolbar-left {
     display: flex;
-    gap: 8px;
     align-items: center;
+    gap: 6px;
 }
 
 .chat-tool-btn {
-    background: rgba(30, 41, 59, 0.7);
-    border: 1px solid var(--border-color);
-    color: #CBD5E1;
-    padding: 5px 10px;
-    border-radius: 6px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--ic-text-muted);
+    padding: 4px 8px;
+    border-radius: 4px;
     font-size: 12px;
     cursor: pointer;
     display: inline-flex;
@@ -1034,24 +1173,71 @@ body {
     gap: 5px;
     transition: all 0.15s;
 }
+
 .chat-tool-btn:hover {
-    background: rgba(59, 130, 246, 0.2);
-    border-color: #3B82F6;
-    color: #60A5FA;
+    background: var(--ic-bg-hover);
+    border-color: var(--ic-border);
+    color: var(--ic-text-main);
+}
+
+.chat-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
 .chat-input-shortcut-hint {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--ic-text-subtle);
+    user-select: none;
+}
+
+.btn-send-message {
+    background: var(--ic-accent-blue);
+    color: #121212;
+    border: none;
+    padding: 5px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s;
+}
+
+.btn-send-message:hover {
+    background: var(--ic-accent-blue-hover);
+}
+
+.chat-textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    padding: 10px 12px;
+    color: var(--ic-text-main);
+    font-size: 13.5px;
+    line-height: 1.5;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    outline: none;
+    resize: none;
+    box-sizing: border-box;
+    display: block;
+}
+
+.chat-textarea::placeholder {
+    color: #616161;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 /* 拖拽覆盖遮罩 */
 .chat-drop-overlay {
     position: absolute;
     inset: 0;
-    background: rgba(15, 23, 42, 0.92);
-    border: 2px dashed #3B82F6;
-    border-radius: 12px;
+    background: rgba(36, 36, 36, 0.94);
+    border: 2px dashed var(--ic-accent-blue);
+    border-radius: 8px;
     z-index: 50;
     display: flex;
     align-items: center;
@@ -1061,7 +1247,7 @@ body {
 
 .chat-drop-content {
     text-align: center;
-    color: #F8FAFC;
+    color: var(--ic-text-main);
 }
 
 .chat-drop-icon {
@@ -1084,49 +1270,7 @@ body {
 
 .chat-drop-content span {
     font-size: 12px;
-    color: #94A3B8;
-}
-
-.chat-input-bar {
-    display: flex;
-    gap: 10px;
-    align-items: flex-end;
-}
-
-.chat-textarea {
-    flex: 1;
-    background: #111827;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-    padding: 10px 14px;
-    color: var(--text-main);
-    font-size: 14px;
-    outline: none;
-    resize: none;
-}
-
-.chat-textarea:focus {
-    border-color: var(--primary);
-}
-
-.btn-send-message {
-    background: var(--primary);
-    color: #fff;
-    border: none;
-    padding: 12px 20px;
-    border-radius: 10px;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 44px;
-    transition: all 0.2s;
-}
-
-.btn-send-message:hover {
-    background: var(--primary-hover);
+    color: var(--ic-text-muted);
 }
 
 /* ================= JSON 工具箱样式 ================= */

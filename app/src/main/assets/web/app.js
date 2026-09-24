@@ -1015,12 +1015,12 @@
             const ip = m.ip || '127.0.0.1';
             const name = m.name || '局域网成员';
             return `
-                <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(30, 41, 59, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; background: var(--ic-bg-card); border: 1px solid var(--ic-border); border-radius: 6px; padding: 10px 12px;">
                     <div style="display: flex; flex-direction: column; gap: 2px; overflow: hidden; margin-right: 8px;">
-                        <span style="font-size: 13px; font-weight: 600; color: #F8FAFC; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${escapeHtml(name)}</span>
-                        <span style="font-size: 12px; color: #38BDF8; font-family: monospace;">IP: ${escapeHtml(ip)}</span>
+                        <span style="font-size: 13px; font-weight: 600; color: var(--ic-text-main); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${escapeHtml(name)}</span>
+                        <span style="font-size: 12px; color: var(--ic-accent-blue); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">IP: ${escapeHtml(ip)}</span>
                     </div>
-                    <button class="btn-copy-mini" style="font-size: 11px; padding: 4px 10px; background: #2563EB; color: #fff; border: none; border-radius: 6px; cursor: pointer; flex-shrink: 0;" onclick="window.copyMemberIp('${escapeHtml(ip)}')">复制 IP</button>
+                    <button class="btn-copy-mini" style="font-size: 11px; padding: 4px 10px; background: #333333; color: var(--ic-accent-blue); border: 1px solid var(--ic-border); border-radius: 4px; cursor: pointer; flex-shrink: 0; transition: all 0.15s;" onclick="window.copyMemberIp('${escapeHtml(ip)}')">复制 IP</button>
                 </div>
             `;
         }).join('');
@@ -1989,46 +1989,50 @@
         return '📁';
     }
 
-    // 格式化渲染富文本消息气泡 (支持 Markdown 代码块、链接识别、图片预览、文件卡片)
+    // 格式化渲染富文本消息流 (融合 fagedongxi.com / internal-chat 极简流式排版与 WenBox 富媒体)
     function renderChatMessage(msg) {
         if (!webChatMessages) return;
         if (webEmptyChat) webEmptyChat.style.display = 'none';
 
         const myName = getClientSenderName();
         const isMe = (!msg.isFromPhone && (msg.senderName === myName || msg.senderName.includes(osPlatform)));
-        const row = document.createElement('div');
-        row.className = `chat-msg-row ${isMe ? 'from-me' : 'from-other'}`;
 
+        // 整体条目: .chat-item (带悬停变色)
+        const item = document.createElement('div');
+        item.className = 'chat-item';
+
+        // 消息头: .chat-item_user
         let senderTitle = msg.senderName;
         if (!senderTitle) {
             senderTitle = msg.isFromPhone ? '📱 手机端' : '💻 成员';
         }
+        if (isMe) {
+            senderTitle = `（我）${senderTitle}`;
+        }
 
-        const meta = document.createElement('div');
-        meta.className = 'chat-msg-meta';
+        const userHeader = document.createElement('div');
+        userHeader.className = `chat-item_user ${isMe ? 'from-me' : 'from-other'}`;
 
         const senderSpan = document.createElement('span');
-        senderSpan.className = 'chat-sender-name';
+        senderSpan.className = 'user-name';
         senderSpan.textContent = senderTitle;
-        meta.appendChild(senderSpan);
+        userHeader.appendChild(senderSpan);
 
         if (msg.senderIp) {
             const ipSpan = document.createElement('span');
-            ipSpan.className = 'chat-ip-pill';
+            ipSpan.className = 'chat-item_ip';
             ipSpan.textContent = msg.senderIp;
-            meta.appendChild(ipSpan);
+            userHeader.appendChild(ipSpan);
         }
 
         const timeSpan = document.createElement('span');
-        timeSpan.className = 'chat-time-pill';
+        timeSpan.className = 'chat-item_time';
         timeSpan.textContent = formatTime(msg.timestamp);
-        meta.appendChild(timeSpan);
+        userHeader.appendChild(timeSpan);
 
-        const bubbleContainer = document.createElement('div');
-        bubbleContainer.className = 'chat-msg-bubble-container';
-
-        const bubble = document.createElement('div');
-        bubble.className = 'chat-msg-bubble';
+        // 消息内容与复制按钮容器: .chat-item_content
+        const contentWrap = document.createElement('div');
+        contentWrap.className = 'chat-item_content';
 
         const content = msg.content || '';
 
@@ -2065,7 +2069,7 @@
                 openChatImageModal(imgSrc);
             });
 
-            bubble.appendChild(thumbWrap);
+            contentWrap.appendChild(thumbWrap);
         }
         // 2. 判断是否为文件卡片消息 [file:name|size|url]
         else if (content.startsWith('[file:') && content.endsWith(']')) {
@@ -2110,10 +2114,13 @@
             fileCard.appendChild(fileDetails);
             fileCard.appendChild(downloadLink);
 
-            bubble.appendChild(fileCard);
+            contentWrap.appendChild(fileCard);
         }
-        // 3. 普通文本消息：格式化 Markdown 代码块、行内代码与链接识别
+        // 3. 普通文本消息：格式化 Markdown 代码块、行内代码与链接识别，并置于 pre 中
         else {
+            const preEl = document.createElement('pre');
+            preEl.className = 'chat-text';
+
             // 代码块占位替换，防止与普通标签冲突
             const codeBlocks = [];
             let processed = content.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (match, lang, code) => {
@@ -2126,13 +2133,13 @@
             processed = escapeHtml(processed);
 
             // 还原并渲染代码块
-            codeBlocks.forEach((item, idx) => {
+            codeBlocks.forEach((itemBlock, idx) => {
                 const placeholder = `__CODE_BLOCK_${idx}__`;
-                const escapedCode = escapeHtml(item.code);
+                const escapedCode = escapeHtml(itemBlock.code);
                 const blockHtml = `
                     <div class="chat-code-block">
                         <div class="chat-code-header">
-                            <span>${escapeHtml(item.lang.toUpperCase())}</span>
+                            <span>${escapeHtml(itemBlock.lang.toUpperCase())}</span>
                             <button class="chat-code-copy-btn" onclick="window.copyChatCode(this)">📋 复制代码</button>
                         </div>
                         <pre class="chat-code-content"><code>${escapedCode}</code></pre>
@@ -2146,35 +2153,29 @@
             // URL 超链接自动识别
             processed = processed.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" class="chat-link">$1 ↗</a>');
 
-            // 换行转换
-            processed = processed.replace(/\n/g, '<br>');
-
-            bubble.innerHTML = processed;
+            preEl.innerHTML = processed;
+            contentWrap.appendChild(preEl);
         }
 
-        // 独立复制按钮
+        // 右侧极简 SVG 悬停复制按钮 (fagedongxi.com 标志性设计)
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
-        copyBtn.className = 'chat-msg-copy-btn';
+        copyBtn.className = 'copy-btn';
         copyBtn.title = '复制消息内容';
         copyBtn.innerHTML = `
-            <svg class="chat-copy-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            <svg viewBox="0 0 24 24" width="17" height="17">
+                <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" fill="currentColor"></path>
             </svg>
-            <span class="copy-text">复制</span>
         `;
         copyBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             window.copyChatMessage(content, copyBtn);
         });
+        contentWrap.appendChild(copyBtn);
 
-        bubbleContainer.appendChild(bubble);
-        bubbleContainer.appendChild(copyBtn);
-
-        row.appendChild(meta);
-        row.appendChild(bubbleContainer);
-        webChatMessages.appendChild(row);
+        item.appendChild(userHeader);
+        item.appendChild(contentWrap);
+        webChatMessages.appendChild(item);
     }
 
     // 全局复制消息辅助函数
@@ -2196,12 +2197,11 @@
             showToast('已复制该条消息');
             if (btn) {
                 btn.classList.add('copied');
-                const textEl = btn.querySelector('.copy-text');
-                const orig = textEl ? textEl.textContent : '复制';
-                if (textEl) textEl.textContent = '已复制';
+                const origHtml = btn.innerHTML;
+                btn.innerHTML = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
                 setTimeout(() => {
                     btn.classList.remove('copied');
-                    if (textEl) textEl.textContent = orig;
+                    btn.innerHTML = origHtml;
                 }, 1500);
             }
         }).catch(() => {
