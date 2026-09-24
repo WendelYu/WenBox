@@ -689,7 +689,7 @@ class TransferFragment : Fragment() {
                     val hbBody = JSONObject().apply {
                         put("name", "📱 $myNick")
                         put("platform", "Mobile")
-                        put("roomId", room.id)
+                        put("roomId", room.roomId)
                     }
                     val (hbCode, hbRes) = HttpHelper.postJson(hbUrl, hbBody)
                     if (hbCode == 200) {
@@ -707,12 +707,12 @@ class TransferFragment : Fragment() {
                             }
                             val newRoomId = roomObj.optString("roomId", "")
                             val newRoomName = roomObj.optString("roomName", "")
-                            if (newRoomId.isNotBlank() && (newRoomId != joinedRoom?.id || (newRoomName.isNotBlank() && newRoomName != joinedRoom?.name))) {
-                                val updated = room.copy(id = newRoomId, name = newRoomName.ifBlank { room.name })
+                            if (newRoomId.isNotBlank() && (newRoomId != joinedRoom?.roomId || (newRoomName.isNotBlank() && newRoomName != joinedRoom?.roomName))) {
+                                val updated = room.copy(roomId = newRoomId, roomName = newRoomName.ifBlank { room.roomName })
                                 joinedRoom = updated
                                 withContext(Dispatchers.Main) {
-                                    _binding?.tvRoomModeBadge?.text = "🔗 已连接房间: ${updated.name} (#$newRoomId)"
-                                    _binding?.tvRoomDetails?.text = "已自动同步并连入房主重开的房间「${updated.name}」(#$newRoomId)"
+                                    _binding?.tvRoomModeBadge?.text = "🔗 已连接房间: ${updated.roomName} (#$newRoomId)"
+                                    _binding?.tvRoomDetails?.text = "已自动同步并连入房主重开的房间「${updated.roomName}」(#$newRoomId)"
                                 }
                             }
                         }
