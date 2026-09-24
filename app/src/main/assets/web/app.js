@@ -462,6 +462,7 @@
         try {
             const res = await fetch(getApiOrigin() + '/api/status?t=' + Date.now());
             if (res.ok) {
+                const data = await res.json();
                 if (roomState.mode === 'host') {
                     selfLanIps = data.all_ips || [data.ip];
 
@@ -767,15 +768,24 @@
                     setRoomMode('host', cfg);
                     showToast(`房间「${rName}」已创建！本机已变身服务端`);
                 } else {
+                    const myNick = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
+                    const myPlatform = detectClientPlatform();
                     const resp = await fetch(getApiOrigin() + '/api/room/create', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ roomName: rName, pin: rPin, hostIp: selfDeviceInfo.ip || undefined })
+                        body: JSON.stringify({
+                            roomName: rName,
+                            pin: rPin,
+                            hostIp: selfDeviceInfo.ip || undefined,
+                            creatorName: myNick,
+                            creatorPlatform: myPlatform
+                        })
                     });
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                     const cfg = await resp.json();
                     if (cfg && cfg.hostToken) {
                         sessionStorage.setItem('wenbox_host_token', cfg.hostToken);
+                        roomState.token = cfg.hostToken;
                     }
                     window.closeCreateRoomModal();
                     setRoomMode('host', cfg);
@@ -1145,10 +1155,63 @@
             if (invoke) {
                 members = await invoke('get_room_members_cmd');
             } else {
-                const res = await fetch(getApiOrigin() + '/api/room/members?t=' + Date.now());
+                const savedHostToken = sessionStorage.getItem('wenbox_host_token') || roomState.token || '';
+                const myNick = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
+                const myPlatform = detectClientPlatform();
+
+                // 浏览器作为房主时，检查房间活跃状态与房主凭据，防止服务端房间已被其他人解散或重建
+                try {
+                    const stRes = await fetch(getApiOrigin() + '/api/room/status?t=' + Date.now(), {
+                        headers: savedHostToken ? { 'X-Host-Token': savedHostToken } : {}
+                    });
+                    if (stRes.ok) {
+                        const st = await stRes.json();
+                        const currentRoomId = roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : '';
+                        if (!st.isActive || !st.isHost || (st.roomId && currentRoomId && st.roomId !== currentRoomId)) {
+                            sessionStorage.removeItem('wenbox_host_token');
+                            roomState.token = null;
+                            showToast('房间已解散或服务端已创建新房间，已自动返回发现大厅');
+                            setRoomMode('client');
+                            return;
+                        }
+                    } else if (stRes.status === 401 || stRes.status === 403 || stRes.status === 404) {
+                        sessionStorage.removeItem('wenbox_host_token');
+                        roomState.token = null;
+                        showToast('房间已解散，已自动返回发现大厅');
+                        setRoomMode('client');
+                        return;
+                    }
+                } catch (_) {}
+
+                // 发送心跳以维持在线及房主身份
+                try {
+                    await fetch(getApiOrigin() + '/api/room/heartbeat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Host-Token': savedHostToken
+                        },
+                        body: JSON.stringify({
+                            token: savedHostToken,
+                            roomId: roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : '',
+                            nickname: myNick,
+                            platform: myPlatform
+                        })
+                    });
+                } catch (_) {}
+
+                const res = await fetch(getApiOrigin() + '/api/room/members?t=' + Date.now(), {
+                    headers: savedHostToken ? { 'X-Host-Token': savedHostToken } : {}
+                });
                 if (res.ok) {
                     const data = await res.json();
                     members = data.members || [];
+                } else if (res.status === 401 || res.status === 403 || res.status === 404) {
+                    sessionStorage.removeItem('wenbox_host_token');
+                    roomState.token = null;
+                    showToast('房间已解散，已自动返回发现大厅');
+                    setRoomMode('client');
+                    return;
                 }
             }
             latestRoomMembers = members;
@@ -1196,10 +1259,17 @@
                 });
                 if (hbRes.ok) {
                     const hbData = await hbRes.json();
-                    if (hbData && hbData.room && hbData.room.roomName) {
-                        if (roomState.roomInfo && roomState.roomInfo.roomName !== hbData.room.roomName) {
-                            roomState.roomInfo.roomName = hbData.room.roomName;
-                            roomState.roomInfo.roomId = hbData.room.roomId;
+                    if (hbData && hbData.room) {
+                        const r = hbData.room;
+                        const currentRoomId = roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : '';
+                        if (!r.isActive || (r.roomId && currentRoomId && r.roomId !== currentRoomId)) {
+                            showToast('房间已解散或服务端已创建新房间，已自动返回客户端大厅');
+                            setRoomMode('client');
+                            return;
+                        }
+                        if (roomState.roomInfo && roomState.roomInfo.roomName !== r.roomName) {
+                            roomState.roomInfo.roomName = r.roomName;
+                            roomState.roomInfo.roomId = r.roomId;
                             updateChatGatingUi('joined', roomState.roomInfo);
                             updateChatStatusBar('joined', roomState.roomInfo);
                         }
@@ -2025,6 +2095,7 @@
                     if (st && st.isActive) {
                         // 严格校验：只有服务端确认 X-Host-Token 属于当前活跃房间 (st.isHost === true)，才允许恢复为 host
                         if (savedHostToken && st.isHost === true) {
+                            roomState.token = savedHostToken;
                             setRoomMode('host', st);
                             return;
                         }
@@ -2214,20 +2285,26 @@
                     token: roomState.token || null
                 });
             } else {
-                const tokenParam = roomState.token ? `&token=${encodeURIComponent(roomState.token)}` : '';
+                const effectiveToken = roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
+                const tokenParam = effectiveToken ? `&token=${encodeURIComponent(effectiveToken)}` : '';
                 const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/messages?t=' + Date.now() + tokenParam;
                 const headers = { 'Accept': 'application/json' };
-                if (roomState.token) headers['X-Room-Token'] = roomState.token;
+                if (effectiveToken) {
+                    headers['X-Room-Token'] = effectiveToken;
+                    headers['X-Host-Token'] = effectiveToken;
+                }
                 const res = await fetch(api, {
                     headers,
                     signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(2000) : undefined
                 });
                 if (!res.ok) {
-                    if (roomState.mode === 'joined' && (res.status === 404 || res.status === 502)) {
+                    if (res.status === 401 || res.status === 403 || (roomState.mode === 'joined' && (res.status === 404 || res.status === 502))) {
                         joinedDisconnectCount++;
-                        if (joinedDisconnectCount >= 3) {
+                        if (joinedDisconnectCount >= 2) {
                             joinedDisconnectCount = 0;
-                            showToast('房主已解散房间或网络中断，已自动返回客户端大厅');
+                            sessionStorage.removeItem('wenbox_host_token');
+                            roomState.token = null;
+                            showToast('房间已解散或权限已失效，已自动返回客户端大厅');
                             setRoomMode('client');
                             return;
                         }
@@ -2235,6 +2312,15 @@
                     return;
                 }
                 const data = await res.json();
+                // 房间一致性校验：若服务端活跃房间 ID 与当前界面所处的房间 ID 不一致，说明服务端已重置或新建房间！
+                const currentRoomId = roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : '';
+                if (data.roomId && currentRoomId && data.roomId !== currentRoomId) {
+                    sessionStorage.removeItem('wenbox_host_token');
+                    roomState.token = null;
+                    showToast('原房间已结束，服务端已创建新房间，已自动返回发现大厅');
+                    setRoomMode('client');
+                    return;
+                }
                 messages = data.messages || [];
             }
 
@@ -2565,10 +2651,14 @@
                 return;
             }
 
-            const tokenParam = roomState.token ? `?token=${encodeURIComponent(roomState.token)}` : '';
+            const effectiveToken = roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
+            const tokenParam = effectiveToken ? `?token=${encodeURIComponent(effectiveToken)}` : '';
             const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + `/api/messages${tokenParam}`;
             const headers = { 'Content-Type': 'application/json; charset=utf-8' };
-            if (roomState.token) headers['X-Room-Token'] = roomState.token;
+            if (effectiveToken) {
+                headers['X-Room-Token'] = effectiveToken;
+                headers['X-Host-Token'] = effectiveToken;
+            }
 
             const resp = await fetch(api, {
                 method: 'POST',
@@ -2584,7 +2674,11 @@
             if (resp.ok) {
                 pollChatMessages();
             } else {
-                showToast('发送失败');
+                if (resp.status === 401 || resp.status === 403) {
+                    showToast('发送失败：房间未授权或已重置');
+                } else {
+                    showToast('发送失败');
+                }
             }
         } catch (e) {
             showToast('网络连接失败');

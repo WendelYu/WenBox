@@ -111,19 +111,26 @@ class LanServer(
                     val postData = getUtf8PostData(map)
                     var rName = ""
                     var pin = ""
+                    var creatorName = ""
+                    var creatorPlatform = ""
                     if (!postData.isNullOrBlank()) {
                         try {
                             val json = JSONObject(postData)
                             rName = json.optString("roomName", "")
                             pin = json.optString("pin", "")
+                            creatorName = json.optString("creatorName", "")
+                            creatorPlatform = json.optString("creatorPlatform", "")
                         } catch (_: Exception) {}
                     }
                     val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
+                    val clientIp = session.remoteIpAddress ?: "127.0.0.1"
+                    val hostDev = if (creatorName.isNotBlank()) creatorName else "${Build.BRAND} ${Build.MODEL}"
+                    val hostDisplayIp = if (clientIp != "127.0.0.1" && clientIp != "::1") clientIp else primaryIp
                     val cfg = RoomManager.createRoom(
                         roomName = rName,
                         pin = pin,
-                        hostDevice = "${Build.BRAND} ${Build.MODEL}",
-                        hostIp = primaryIp,
+                        hostDevice = hostDev,
+                        hostIp = hostDisplayIp,
                         hostPort = serverPort
                     )
                     val result = JSONObject().apply {
@@ -450,6 +457,8 @@ class LanServer(
                     }
                     val result = JSONObject().apply {
                         put("messages", jsonArray)
+                        put("roomId", RoomManager.currentRoom?.roomId ?: "")
+                        put("isActive", RoomManager.currentRoom != null)
                     }
                     val jsonBytes = result.toString().toByteArray(Charsets.UTF_8)
                     newFixedLengthResponse(
@@ -645,6 +654,6 @@ class LanServer(
     private fun addCorsHeaders(response: Response) {
         response.addHeader("Access-Control-Allow-Origin", "*")
         response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
-        response.addHeader("Access-Control-Allow-Headers", "Content-Type, Range, Authorization, X-Room-Token")
+        response.addHeader("Access-Control-Allow-Headers", "Content-Type, Range, Authorization, X-Room-Token, X-Host-Token")
     }
 }

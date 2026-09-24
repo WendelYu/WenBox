@@ -521,8 +521,19 @@ fn is_authorized(req: &tiny_http::Request, state: &AppState) -> bool {
             return true;
         }
     }
-    // 检查请求头 X-Room-Token
     let headers = req.headers();
+    // 检查请求头 X-Host-Token (网页端房主身份凭证)
+    if let Some(h) = headers.iter().find(|h| h.field.equiv("X-Host-Token")) {
+        let token_val = h.value.as_str().trim();
+        let cur_host = state.host_token.lock().unwrap().clone();
+        if !cur_host.is_empty() && token_val == cur_host {
+            return true;
+        }
+        if state.auth_tokens.lock().unwrap().contains(token_val) {
+            return true;
+        }
+    }
+    // 检查请求头 X-Room-Token
     if let Some(h) = headers.iter().find(|h| h.field.equiv("X-Room-Token")) {
         let token_val = h.value.as_str().trim();
         if state.auth_tokens.lock().unwrap().contains(token_val) {
@@ -534,6 +545,10 @@ fn is_authorized(req: &tiny_http::Request, state: &AppState) -> bool {
     if let Some(q_pos) = raw_url.find("token=") {
         let after = &raw_url[q_pos + 6..];
         let token_val = after.split('&').next().unwrap_or("").trim();
+        let cur_host = state.host_token.lock().unwrap().clone();
+        if !cur_host.is_empty() && token_val == cur_host {
+            return true;
+        }
         if state.auth_tokens.lock().unwrap().contains(token_val) {
             return true;
         }
@@ -913,7 +928,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
 
     let cors_origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
     let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS, PUT, DELETE"[..]).unwrap();
-    let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization, X-Room-Token"[..]).unwrap();
+    let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization, X-Room-Token, X-Host-Token"[..]).unwrap();
 
     if method == Method::Options {
         let mut resp = Response::empty(200);
@@ -956,6 +971,8 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 let mut room_name = String::new();
                 let mut pin = String::new();
                 let mut host_ip_opt = None;
+                let mut creator_name_opt = None;
+                let mut creator_platform_opt = None;
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
                     if let Some(rn) = val["roomName"].as_str() {
                         room_name = rn.trim().to_string();
@@ -968,9 +985,28 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                             host_ip_opt = Some(hip.trim().to_string());
                         }
                     }
+                    if let Some(cn) = val["creatorName"].as_str() {
+                        if !cn.trim().is_empty() {
+                            creator_name_opt = Some(cn.trim().to_string());
+                        }
+                    }
+                    if let Some(cp) = val["creatorPlatform"].as_str() {
+                        if !cp.trim().is_empty() {
+                            creator_platform_opt = Some(cp.trim().to_string());
+                        }
+                    }
                 }
 
-                let dev_name = whoami_device_name();
+                let client_ip = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_else(|| "127.0.0.1".into());
+                let dev_name = creator_name_opt
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| whoami_device_name());
+                let platform_str = creator_platform_opt
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        if client_ip == "127.0.0.1" || client_ip == "::1" { "Windows".into() } else { "Web".into() }
+                    });
+
                 let primary_ip = host_ip_opt
                     .or_else(|| state.selected_ip.lock().unwrap().clone())
                     .unwrap_or_else(get_primary_ip);
@@ -1000,16 +1036,24 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 *state.room.lock().unwrap() = cfg.clone();
                 state.members.lock().unwrap().clear();
                 state.auth_tokens.lock().unwrap().clear();
+                state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
 
                 let host_token = uuid::Uuid::new_v4().to_string();
                 *state.host_token.lock().unwrap() = host_token.clone();
                 *state.is_tauri_host.lock().unwrap() = false;
                 state.auth_tokens.lock().unwrap().insert(host_token.clone());
+
+                let host_display_ip = if client_ip != "127.0.0.1" && client_ip != "::1" {
+                    client_ip.clone()
+                } else {
+                    primary_ip.clone()
+                };
+
                 let host_member = RoomMember {
-                    id: uuid::Uuid::new_v4().to_string(),
+                    id: host_token.clone(),
                     name: format!("{} (房主)", dev_name),
-                    ip: primary_ip.clone(),
-                    platform: "Windows".into(),
+                    ip: host_display_ip,
+                    platform: platform_str,
                     access_ip: format!("{}:{}", primary_ip, port),
                     joined_at: now,
                     last_seen: now,
@@ -1023,6 +1067,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 let json = cfg_val.to_string();
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);
+                resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap());
                 let _ = req.respond(resp);
                 return;
             }
@@ -1208,7 +1253,22 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 let mut members = state.members.lock().unwrap();
 
                 if let Some(ref t) = client_token {
-                    if let Some(m) = members.get_mut(t) {
+                    let cur_host = state.host_token.lock().unwrap().clone();
+                    let is_host_token = !cur_host.is_empty() && t == &cur_host;
+                    if is_host_token {
+                        if let Some(m) = members.get_mut("host") {
+                            m.last_seen = now;
+                            if client_ip != "127.0.0.1" && client_ip != "::1" {
+                                m.ip = client_ip.clone();
+                            }
+                            if let Some(ref n) = client_name {
+                                let clean_n = n.trim();
+                                if !clean_n.is_empty() {
+                                    m.name = if clean_n.contains("房主") { clean_n.to_string() } else { format!("{} (房主)", clean_n) };
+                                }
+                            }
+                        }
+                    } else if let Some(m) = members.get_mut(t) {
                         m.last_seen = now;
                         if !access_host.is_empty() {
                             m.access_ip = access_host.clone();
@@ -1563,8 +1623,16 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
             // 5. 局域网消息获取与发送
             if url.starts_with("/api/messages") {
                 if method == Method::Get {
+                    let room = state.room.lock().unwrap();
+                    let room_id = room.room_id.clone();
+                    let is_active = room.is_active;
+                    drop(room);
                     let msgs = state.messages.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                    let json = serde_json::json!({ "messages": msgs }).to_string();
+                    let json = serde_json::json!({
+                        "messages": msgs,
+                        "roomId": room_id,
+                        "isActive": is_active
+                    }).to_string();
                     let mut resp = Response::from_string(json);
                     resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap());
                     resp.add_header(cors_origin);

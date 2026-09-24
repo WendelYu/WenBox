@@ -48,6 +48,7 @@ object RoomManager {
         currentRoom = config
         members.clear()
         authTokens.clear()
+        MessageManager.clearAll()
 
         // 房主自己作为第一个成员加入
         val hostToken = UUID.randomUUID().toString()
@@ -90,6 +91,7 @@ object RoomManager {
         currentHostToken = null
         members.clear()
         authTokens.clear()
+        MessageManager.clearAll()
         if (oldRoomId != null) {
             com.landrop.utils.UdpDiscoveryManager.broadcastRoomClosed(oldRoomId)
         }
