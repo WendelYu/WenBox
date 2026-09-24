@@ -25,7 +25,7 @@ data class DiscoveredRoom(
 
 data class RoomMember(
     val id: String,
-    val name: String,
+    var name: String,
     val ip: String,
     val platform: String,
     val joinedAt: Long,
