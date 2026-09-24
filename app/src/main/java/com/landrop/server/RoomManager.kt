@@ -121,8 +121,9 @@ object RoomManager {
         val existing = members[clientIp]
         if (existing != null) {
             existing.lastSeen = System.currentTimeMillis()
-            if (!name.isNullOrBlank() && (existing.name.startsWith("设备 (") || existing.name == "访客设备")) {
+            if (!name.isNullOrBlank() && existing.name != name) {
                 existing.name = name
+                onMembersChangedListener?.invoke(getMembers())
             }
         } else if (clientIp != "127.0.0.1" && clientIp != "::1") {
             val displayName = name?.ifBlank { null } ?: "设备 ($clientIp)"

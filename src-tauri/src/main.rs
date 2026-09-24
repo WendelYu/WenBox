@@ -1109,8 +1109,9 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 if let Some(m) = members.get_mut(&client_ip) {
                     m.last_seen = now;
                     if let Some(n) = client_name {
-                        if !n.trim().is_empty() && (m.name.starts_with("设备 (") || m.name == "访客设备") {
-                            m.name = n;
+                        let clean_n = n.trim();
+                        if !clean_n.is_empty() {
+                            m.name = clean_n.to_string();
                         }
                     }
                 } else if client_ip != "127.0.0.1" && client_ip != "::1" {
@@ -1162,7 +1163,26 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                 let mut rooms_map = state.discovered_rooms.lock().unwrap();
                 rooms_map.retain(|_, r| now.saturating_sub(r.last_seen) < 15);
-                let list: Vec<DiscoveredRoom> = rooms_map.values().cloned().collect();
+                let mut list: Vec<DiscoveredRoom> = rooms_map.values().cloned().collect();
+
+                let my_room = state.room.lock().unwrap().clone();
+                if my_room.is_active {
+                    let primary_ip = get_primary_ip();
+                    let dev_name = whoami_device_name();
+                    if !list.iter().any(|r| r.room_id == my_room.room_id || r.ip == primary_ip) {
+                        list.insert(0, DiscoveredRoom {
+                            room_id: my_room.room_id,
+                            room_name: my_room.room_name,
+                            host_device: dev_name,
+                            host_platform: "Windows".to_string(),
+                            ip: primary_ip,
+                            port,
+                            need_password: my_room.need_password,
+                            last_seen: now,
+                        });
+                    }
+                }
+
                 let json = serde_json::json!({ "rooms": list }).to_string();
                 let mut resp = Response::from_string(json);
                 resp.add_header(cors_origin);

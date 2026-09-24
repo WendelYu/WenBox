@@ -29,6 +29,7 @@ import com.landrop.MainActivity
 import com.landrop.R
 import com.landrop.databinding.DialogCreateRoomBinding
 import com.landrop.databinding.DialogJoinPinBinding
+import com.landrop.databinding.DialogEditNicknameBinding
 import com.landrop.databinding.DialogCustomAlertBinding
 import com.landrop.databinding.DialogCustomConfirmBinding
 import com.landrop.databinding.FragmentTransferBinding
@@ -285,6 +286,16 @@ class TransferFragment : Fragment() {
             confirmLeaveRoom()
         }
 
+        binding.btnChangeNicknameJoined.setOnClickListener {
+            showEditNicknameDialog()
+        }
+
+        binding.btnChangeNicknameChat.setOnClickListener {
+            showEditNicknameDialog()
+        }
+
+        updateNicknameButtonDisplay()
+
         binding.btnRefreshRooms.setOnClickListener {
             UdpDiscoveryManager.sendSearchProbe()
             renderDiscoveredRooms(UdpDiscoveryManager.getRooms())
@@ -366,6 +377,7 @@ class TransferFragment : Fragment() {
                 binding.btnCreateRoom.visibility = View.VISIBLE
                 binding.btnCloseRoom.visibility = View.GONE
                 binding.btnLeaveRoom.visibility = View.GONE
+                binding.btnChangeNicknameJoined.visibility = View.GONE
                 binding.cardDiscoveredRooms.visibility = View.VISIBLE
                 binding.llHostDetails.visibility = View.GONE
                 binding.cardChatSection.visibility = View.GONE
@@ -386,6 +398,7 @@ class TransferFragment : Fragment() {
                 binding.btnCreateRoom.visibility = View.GONE
                 binding.btnCloseRoom.visibility = View.VISIBLE
                 binding.btnLeaveRoom.visibility = View.GONE
+                binding.btnChangeNicknameJoined.visibility = View.GONE
                 binding.cardDiscoveredRooms.visibility = View.GONE
                 binding.llHostDetails.visibility = View.VISIBLE
                 binding.cardChatSection.visibility = View.VISIBLE
@@ -408,6 +421,7 @@ class TransferFragment : Fragment() {
                 binding.btnCreateRoom.visibility = View.GONE
                 binding.btnCloseRoom.visibility = View.GONE
                 binding.btnLeaveRoom.visibility = View.VISIBLE
+                binding.btnChangeNicknameJoined.visibility = View.VISIBLE
                 binding.cardDiscoveredRooms.visibility = View.GONE
                 binding.llHostDetails.visibility = View.GONE
                 binding.cardChatSection.visibility = View.VISIBLE
@@ -418,6 +432,7 @@ class TransferFragment : Fragment() {
                 startJoinedRoomPolling(r)
             }
         }
+        updateNicknameButtonDisplay()
     }
 
     private fun showCustomConfirmDialog(
@@ -600,6 +615,68 @@ class TransferFragment : Fragment() {
         }
     }
 
+    private fun updateNicknameButtonDisplay() {
+        val ctx = context ?: return
+        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
+        val myNick = sp.getString("user_nickname", null) ?: "${Build.BRAND}手机"
+        _binding?.btnChangeNicknameJoined?.text = "✏️ 昵称: $myNick"
+        _binding?.btnChangeNicknameChat?.text = "✏️ 昵称: $myNick"
+    }
+
+    private fun showEditNicknameDialog() {
+        val ctx = context ?: return
+        val dialogBinding = DialogEditNicknameBinding.inflate(LayoutInflater.from(ctx))
+        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
+        val currentNick = sp.getString("user_nickname", null) ?: "${Build.BRAND}手机"
+        dialogBinding.etEditNickname.setText(currentNick)
+        dialogBinding.etEditNickname.selectAll()
+
+        val dialog = Dialog(ctx).apply {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            setContentView(dialogBinding.root)
+            window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            window?.setLayout(
+                (resources.displayMetrics.widthPixels * 0.9).toInt(),
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        dialogBinding.btnCancelEditNickname.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dialogBinding.btnConfirmEditNickname.setOnClickListener {
+            val newNick = dialogBinding.etEditNickname.text.toString().trim()
+            if (newNick.isBlank()) {
+                Toast.makeText(ctx, "请输入有效的昵称", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            sp.edit().putString("user_nickname", newNick).apply()
+            updateNicknameButtonDisplay()
+            dialog.dismiss()
+            Toast.makeText(ctx, "昵称已修改为「$newNick」", Toast.LENGTH_SHORT).show()
+
+            if (currentRoomMode == RoomMode.JOINED) {
+                val r = joinedRoom
+                if (r != null) {
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        try {
+                            val hbUrl = "http://${r.ip}:${r.port}/api/room/heartbeat"
+                            val hbBody = JSONObject().apply {
+                                put("name", "📱 $newNick")
+                                put("platform", "Mobile")
+                                put("roomId", r.roomId)
+                            }
+                            HttpHelper.postJson(hbUrl, hbBody)
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+        }
+
+        dialog.show()
+    }
+
     private fun showJoinRoomDialog(room: DiscoveredRoom) {
         val ctx = context ?: return
         val dialogBinding = DialogJoinPinBinding.inflate(LayoutInflater.from(ctx))
@@ -632,6 +709,7 @@ class TransferFragment : Fragment() {
         dialogBinding.btnConfirmJoinRoom.setOnClickListener {
             val nick = dialogBinding.etJoinNickname.text.toString().trim().ifBlank { "${Build.BRAND}手机" }
             sp.edit().putString("user_nickname", nick).apply()
+            updateNicknameButtonDisplay()
             val pin = if (room.needPassword) dialogBinding.etJoinPin.text.toString().trim() else ""
             dialog.dismiss()
             joinRemoteRoom(room, pin, nick)

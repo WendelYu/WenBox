@@ -127,6 +127,7 @@
                         <span class="room-status-title">🔗 已加入房间: <span id="joinedRoomNameDisplay" style="color: #38BDF8; font-weight: bold;">--</span> (房主: <span id="joinedHostDeviceDisplay">--</span>)</span>
                     </div>
                     <div class="room-header-actions">
+                        <button id="btnChangeNicknameBanner" class="btn-secondary" title="点击修改我的房间昵称">✏️ 我的昵称: <span id="bannerMyNicknameDisplay">--</span></button>
                         <button id="btnLeaveRoom" class="btn-secondary" title="退出当前房间">🚪 退出房间</button>
                     </div>
                 </div>
@@ -336,6 +337,7 @@
                         <span id="chatRoomIpBadge" class="chat-room-ip">🌐 访问地址: http://127.0.0.1:9527</span>
                     </div>
                     <div style="display: flex; gap: 6px; flex-shrink: 0;">
+                        <button id="btnChangeNicknameChat" class="chat-status-btn" title="点击修改我的房间昵称">✏️ 昵称: <span id="chatMyNicknameDisplay">--</span></button>
                         <button id="btnShowChatMembersModal" class="chat-status-btn btn-member-list">👥 在线 IP</button>
                         <button id="btnCopyChatRoomUrl" class="chat-status-btn">复制链接</button>
                     </div>
@@ -691,6 +693,27 @@
                     ⬇️ 下载原图
                 </a>
                 <button id="chatModalCopyBtn" class="btn-secondary-mini">📋 复制图片</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗 8：修改房间昵称 Modal -->
+    <div id="editNicknameModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3>✏️ 修改我的房间昵称</h3>
+                <button class="modal-close" onclick="window.closeEditNicknameModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-tip">修改后将实时同步给房间内其他所有设备，显示为「昵称 (IP)」：</p>
+                <div class="form-group" style="margin-top: 14px;">
+                    <label>我的昵称：</label>
+                    <input type="text" id="modalInputEditNickname" class="modal-input" placeholder="输入新的昵称（如：小明、办公电脑）" maxlength="20">
+                </div>
+            </div>
+            <div class="modal-footer" style="margin-top: 18px;">
+                <button class="btn-secondary" onclick="window.closeEditNicknameModal()">取消</button>
+                <button id="btnSaveNicknameModal" class="btn-primary-action">保存修改</button>
             </div>
         </div>
     </div>

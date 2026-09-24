@@ -39,7 +39,23 @@ class LanServer(
 
                 // 1.4 已发现房间列表
                 method == Method.GET && uri == "/api/discovered_rooms" -> {
-                    val rooms = UdpDiscoveryManager.getRooms()
+                    val rooms = UdpDiscoveryManager.getRooms().toMutableList()
+                    val curRoom = RoomManager.currentRoom
+                    if (curRoom != null && curRoom.isActive) {
+                        val selfIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
+                        if (rooms.none { it.roomId == curRoom.roomId || it.ip == selfIp }) {
+                            rooms.add(0, com.landrop.model.DiscoveredRoom(
+                                roomId = curRoom.roomId,
+                                roomName = curRoom.roomName,
+                                hostDevice = curRoom.hostDevice,
+                                ip = selfIp,
+                                port = curRoom.hostPort,
+                                needPassword = curRoom.needPassword,
+                                memberCount = RoomManager.getMembers().size,
+                                lastSeen = System.currentTimeMillis()
+                            ))
+                        }
+                    }
                     val jsonArray = JSONArray()
                     for (r in rooms) {
                         val item = JSONObject().apply {

@@ -401,6 +401,14 @@
         const invoke = getTauriInvoke();
         if (invoke) {
             try {
+                // 与本地后台实时同步房间模式 (例如外部或本地浏览器创建/解散了房间，Tauri 端自动响应状态)
+                const rStatus = await invoke('get_room_status_cmd');
+                if (rStatus && rStatus.isActive && roomState.mode !== 'host') {
+                    setRoomMode('host', rStatus);
+                } else if (rStatus && !rStatus.isActive && roomState.mode === 'host') {
+                    setRoomMode('client');
+                }
+
                 const ips = await invoke('get_all_lan_ips_cmd');
                 selfLanIps = ips || [];
                 const primary = await invoke('get_local_ip');
@@ -566,6 +574,9 @@
             updateChatGatingUi(mode, data);
         }
         updateChatStatusBar(mode, data);
+        if (typeof updateMyNicknameDisplay === 'function') {
+            updateMyNicknameDisplay();
+        }
     }
 
     function updateChatStatusBar(mode, data) {
@@ -790,6 +801,15 @@
         try {
             const invoke = getTauriInvoke();
             if (invoke) {
+                // 如果本地 Tauri 后端服务已经被浏览器激活为房主，桌面端直接同步切为 host 模式
+                try {
+                    const rStatus = await invoke('get_room_status_cmd');
+                    if (rStatus && rStatus.isActive) {
+                        setRoomMode('host', rStatus);
+                        return;
+                    }
+                } catch (_) {}
+
                 try {
                     await invoke('send_room_probe_cmd');
                 } catch (_) {}
@@ -843,17 +863,14 @@
         }).join('');
     }
 
-    window.onDiscoveredRoomClicked = function (roomId) {
-        const r = roomState.discoveredRooms.find(x => x.roomId === roomId);
-        if (!r) return;
-        const hostUrl = `http://${r.ip}:${r.port}`;
-
+    window.openJoinRoomDialog = function (data) {
+        if (!data) return;
         pendingJoinRoomData = {
-            hostUrl,
-            roomName: r.roomName,
-            roomId: r.roomId,
-            hostDevice: r.hostDevice,
-            needPassword: r.needPassword
+            hostUrl: data.hostUrl,
+            roomName: data.roomName || data.roomId || '房间',
+            roomId: data.roomId || '',
+            hostDevice: data.hostDevice || '主机',
+            needPassword: !!data.needPassword
         };
 
         const titleEl = document.getElementById('joinPinModalTitle');
@@ -862,20 +879,32 @@
         const pinContainer = document.getElementById('joinPinContainer');
         const pinInput = document.getElementById('modalInputJoinPin');
 
-        if (titleEl) titleEl.textContent = `📱 加入「${r.roomName}」`;
+        if (titleEl) titleEl.textContent = `📱 加入「${pendingJoinRoomData.roomName}」`;
         if (descEl) {
-            descEl.textContent = r.needPassword ? '该房间设置了安全密码，请输入昵称与 PIN 码加入：' : '设置进入房间展示的昵称，加入后将显示为「昵称 (IP)」：';
+            descEl.textContent = pendingJoinRoomData.needPassword ? '该房间设置了安全密码，请输入昵称与 PIN 码加入：' : '设置进入房间展示的昵称，加入后将显示为「昵称 (IP)」：';
         }
         if (nickInput) {
             nickInput.value = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
         }
         if (pinContainer) {
-            pinContainer.style.display = r.needPassword ? 'block' : 'none';
+            pinContainer.style.display = pendingJoinRoomData.needPassword ? 'block' : 'none';
         }
         if (pinInput) pinInput.value = '';
 
         if (joinRoomPinModal) joinRoomPinModal.style.display = 'flex';
-        if (nickInput) setTimeout(() => nickInput.focus(), 150);
+        if (nickInput) setTimeout(() => { nickInput.focus(); nickInput.select(); }, 150);
+    };
+
+    window.onDiscoveredRoomClicked = function (roomId) {
+        const r = roomState.discoveredRooms.find(x => x.roomId === roomId);
+        if (!r) return;
+        window.openJoinRoomDialog({
+            hostUrl: `http://${r.ip}:${r.port}`,
+            roomName: r.roomName,
+            roomId: r.roomId,
+            hostDevice: r.hostDevice,
+            needPassword: r.needPassword
+        });
     };
 
     if (modalBtnConfirmJoinPin) {
@@ -952,6 +981,7 @@
                     hostDevice: joinRes.room ? joinRes.room.hostDevice : hostDevice
                 });
                 showToast(`🎉 成功加入房间！已与「${hostDevice || '房主'}」建立直连`);
+                updateMyNicknameDisplay(myNick);
             } else {
                 throw new Error(joinRes.message || '入房密码不正确');
             }
@@ -967,6 +997,68 @@
                      (navigator.userAgent.indexOf('Win') !== -1) ? 'Windows' :
                      (navigator.userAgent.indexOf('Android') !== -1) ? 'Android' : 'Web';
         return `${plat}用户-${Math.floor(100 + Math.random() * 900)}`;
+    }
+
+    function updateMyNicknameDisplay(nick) {
+        const myNick = nick || localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
+        const bannerEl = document.getElementById('bannerMyNicknameDisplay');
+        const chatEl = document.getElementById('chatMyNicknameDisplay');
+        if (bannerEl) bannerEl.textContent = myNick;
+        if (chatEl) chatEl.textContent = myNick;
+    }
+
+    window.openEditNicknameModal = function () {
+        const modal = document.getElementById('editNicknameModal');
+        const input = document.getElementById('modalInputEditNickname');
+        const currentNick = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
+        if (input) input.value = currentNick;
+        if (modal) modal.style.display = 'flex';
+        if (input) setTimeout(() => { input.focus(); input.select(); }, 120);
+    };
+
+    window.closeEditNicknameModal = function () {
+        const modal = document.getElementById('editNicknameModal');
+        if (modal) modal.style.display = 'none';
+    };
+
+    const btnChangeNicknameBanner = document.getElementById('btnChangeNicknameBanner');
+    if (btnChangeNicknameBanner) {
+        btnChangeNicknameBanner.addEventListener('click', window.openEditNicknameModal);
+    }
+    const btnChangeNicknameChat = document.getElementById('btnChangeNicknameChat');
+    if (btnChangeNicknameChat) {
+        btnChangeNicknameChat.addEventListener('click', window.openEditNicknameModal);
+    }
+
+    const btnSaveNicknameModal = document.getElementById('btnSaveNicknameModal');
+    if (btnSaveNicknameModal) {
+        btnSaveNicknameModal.addEventListener('click', async () => {
+            const input = document.getElementById('modalInputEditNickname');
+            const newNick = (input && input.value.trim()) || '';
+            if (!newNick) {
+                showToast('请输入有效的昵称');
+                return;
+            }
+            localStorage.setItem('wenbox_nickname', newNick);
+            updateMyNicknameDisplay(newNick);
+            window.closeEditNicknameModal();
+            showToast(`昵称已更新为「${newNick}」`);
+
+            // 如果当前在已加入的房间中，立即向房主发送心跳同步新昵称
+            if (roomState.mode === 'joined' && currentTargetBaseUrl) {
+                try {
+                    await fetch(currentTargetBaseUrl + '/api/room/heartbeat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            name: getClientSenderName(),
+                            platform: 'Web',
+                            roomId: roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : ''
+                        })
+                    });
+                } catch (_) {}
+            }
+        });
     }
 
     // 房主轮询房间成员
@@ -1772,14 +1864,15 @@
                             return;
                         }
                         // 否则当前浏览器为局域网外部访客！绝不能设为 host，而是作为访客引导入房
-                        if (st.needPassword) {
-                            openJoinRoomModal(getApiOrigin(), st.roomId, st.hostDevice || '主机', st.roomName);
-                            setRoomMode('client');
-                            return;
-                        } else {
-                            executeJoinRoom(getApiOrigin(), '', st.roomId, st.hostDevice || '主机', st.roomName);
-                            return;
-                        }
+                        setRoomMode('client');
+                        window.openJoinRoomDialog({
+                            hostUrl: getApiOrigin(),
+                            roomName: st.roomName || st.roomId,
+                            roomId: st.roomId,
+                            hostDevice: st.hostDevice || '主机',
+                            needPassword: st.needPassword
+                        });
+                        return;
                     }
                 }
             } catch (e) {
@@ -1792,6 +1885,7 @@
     }
 
     initRoomState();
+    updateMyNicknameDisplay();
 
     setInterval(() => {
         if (roomState.mode === 'host') {
