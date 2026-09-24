@@ -352,7 +352,7 @@
                     </div>
                 </div>
 
-                <!-- 连体式输入工作台 (参考 internal-chat 风格) -->
+                <!-- 连体式即时通讯输入工作台 -->
                 <div class="chat-composer">
                     <div class="chat-toolbar">
                         <div class="chat-toolbar-left">
@@ -488,18 +488,47 @@
                     <div class="cron-field-group">
                         <label>常用调度模板快捷套用：</label>
                         <select id="webCronPresetSelect" class="cron-select">
-                            <option value="* * * * * ?">每秒执行一次 (* * * * * ?)</option>
-                            <option value="*/5 * * * * ?">每 5 秒执行一次 (*/5 * * * * ?)</option>
-                            <option value="0 * * * * ?">每分钟执行一次 (0 * * * * ?)</option>
-                            <option value="0 */5 * * * ?">每 5 分钟执行一次 (0 */5 * * * ?)</option>
-                            <option value="0 */15 * * * ?">每 15 分钟执行一次 (0 */15 * * * ?)</option>
-                            <option value="0 */30 * * * ?">每 30 分钟执行一次 (0 */30 * * * ?)</option>
-                            <option value="0 0 * * * ?">每整点执行一次 (0 0 * * * ?)</option>
-                            <option value="0 0 0 * * ?">每天凌晨 00:00:00 (0 0 0 * * ?)</option>
-                            <option value="0 30 8 * * ?">每天早上 08:30:00 (0 30 8 * * ?)</option>
-                            <option value="0 0 9 ? * MON-FRI">工作日早上 09:00 (0 0 9 ? * MON-FRI)</option>
-                            <option value="0 0 10 ? * MON">每周一上午 10:00 (0 0 10 ? * MON)</option>
-                            <option value="0 0 1 1 * ?">每月 1 日凌晨 01:00 (0 0 1 1 * ?)</option>
+                            <optgroup label="⏱️ 秒级与分钟级高频任务">
+                                <option value="* * * * * ?">每秒执行任务 (* * * * * ?)</option>
+                                <option value="0/2 * * * * ?">每 2 秒执行任务 (0/2 * * * * ?)</option>
+                                <option value="*/5 * * * * ?">每 5 秒执行任务 (*/5 * * * * ?)</option>
+                                <option value="0 * * * * ?">每分钟执行任务 (0 * * * * ?)</option>
+                                <option value="0 0/2 * * * ?">每 2 分钟执行任务 (0 0/2 * * * ?)</option>
+                                <option value="0 */5 * * * ?">每 5 分钟执行任务 (0 */5 * * * ?)</option>
+                                <option value="0 */15 * * * ?">每 15 分钟执行任务 (0 */15 * * * ?)</option>
+                                <option value="0 */30 * * * ?">每 30 分钟执行任务 (0 */30 * * * ?)</option>
+                            </optgroup>
+                            <optgroup label="⏰ 每天与特定时间段">
+                                <option value="0 0 * * * ?">每整点执行任务 (0 0 * * * ?)</option>
+                                <option value="0 0 0 * * ?">每天凌晨 00:00:00 (0 0 0 * * ?)</option>
+                                <option value="0 30 8 * * ?">每天早上 08:30:00 (0 30 8 * * ?)</option>
+                                <option value="0 15 10 ? * *">每天上午 10:15 执行任务 (0 15 10 ? * *)</option>
+                                <option value="0 15 10 * * ?">每天上午 10:15 执行任务 (0 15 10 * * ?)</option>
+                                <option value="0 0 12 * * ?">每天中午 12:00 执行任务 (0 0 12 * * ?)</option>
+                                <option value="0 0 10,14,16 * * ?">每天上午 10 点、下午 2 点、4 点执行任务 (0 0 10,14,16 * * ?)</option>
+                                <option value="0 * 14 * * ?">每天下午 14:00~14:59 期间每分钟执行任务 (0 * 14 * * ?)</option>
+                                <option value="0 0-5 14 * * ?">每天下午 14:00~14:05 期间每分钟执行任务 (0 0-5 14 * * ?)</option>
+                                <option value="0 0/5 14 * * ?">每天下午 14:00~14:55 期间每 5 分钟执行任务 (0 0/5 14 * * ?)</option>
+                                <option value="0 0/5 14,18 * * ?">每天下午 14:00~14:55 和 18:00~18:55 每 5 分钟执行任务 (0 0/5 14,18 * * ?)</option>
+                            </optgroup>
+                            <optgroup label="💼 工作日与周周期调度">
+                                <option value="0 0 9 ? * MON-FRI">工作日早上 09:00 (周一至周五) (0 0 9 ? * MON-FRI)</option>
+                                <option value="0 15 10 ? * MON-FRI">周一到周五每天上午 10:15 执行任务 (0 15 10 ? * MON-FRI)</option>
+                                <option value="0 0/30 9-17 * * ?">朝九晚五工作时间内每半小时执行任务 (0 0/30 9-17 * * ?)</option>
+                                <option value="0 0 18 ? * MON-FRI">工作日下午 18:00 执行任务 (0 0 18 ? * MON-FRI)</option>
+                                <option value="0 0 10 ? * MON">每周一上午 10:00 (0 0 10 ? * MON)</option>
+                                <option value="0 0 12 ? * WED">每个星期三中午 12:00 (0 0 12 ? * WED)</option>
+                            </optgroup>
+                            <optgroup label="📅 月度/季度/年度与高级规则">
+                                <option value="0 0 1 1 * ?">每月 1 日凌晨 01:00 (0 0 1 1 * ?)</option>
+                                <option value="0 0 2 1 * ?">每月 1 日凌晨 02:00 执行任务 (0 0 2 1 * ?)</option>
+                                <option value="0 15 10 15 * ?">每月 15 日上午 10:15 执行任务 (0 15 10 15 * ?)</option>
+                                <option value="0 0 0 L * ?">每月最后一天午夜 00:00:00 执行任务 (0 0 0 L * ?)</option>
+                                <option value="0 15 10 ? * 6#3">每月第三个星期五上午 10:15 执行任务 (0 15 10 ? * 6#3)</option>
+                                <option value="0 10,44 14 ? 3 WED">每年 3 月的星期三下午 14:10 和 14:44 执行任务 (0 10,44 14 ? 3 WED)</option>
+                                <option value="0 0 0 1 1,4,7,10 ?">每季度第一天凌晨 00:00:00 (0 0 0 1 1,4,7,10 ?)</option>
+                                <option value="0 15 10 * * ? 2005">2005 年每天上午 10:15 执行任务 (0 15 10 * * ? 2005)</option>
+                            </optgroup>
                         </select>
                     </div>
 
@@ -659,7 +688,7 @@
         </div>
     </div>
 
-    <!-- 弹窗 7：在线成员与访问 IP 列表 Modal (参考 internal-chat) -->
+    <!-- 弹窗 7：在线成员与访问 IP 列表 Modal -->
     <div id="onlineMembersModal" class="modal-overlay" style="display: none;">
         <div class="modal-card" style="max-width: 460px;">
             <div class="modal-header">

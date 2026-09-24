@@ -3085,6 +3085,7 @@
     const webBtnCopyCron = document.getElementById('webBtnCopyCron');
 
     function explainCronExpression(cron) {
+        if (!cron || !cron.trim()) return "请输入 Cron 表达式";
         const parts = cron.trim().split(/\s+/);
         if (parts.length < 5 || parts.length > 7) return "无效的 Cron 格式 (标准为 5 到 7 个字段)";
 
@@ -3093,30 +3094,186 @@
         const min = hasSec ? parts[1] : parts[0];
         const hour = hasSec ? parts[2] : parts[1];
         const day = hasSec ? parts[3] : parts[2];
+        const month = hasSec ? parts[4] : parts[3];
         const week = hasSec ? parts[5] : parts[4];
+        const year = parts.length === 7 ? parts[6] : null;
 
-        if (sec === "*" && min === "*" && hour === "*") return "每秒执行一次";
-        if (sec.startsWith("*/")) return `每隔 ${sec.replace('*/', '')} 秒执行`;
-        if (min.startsWith("*/")) return `每隔 ${min.replace('*/', '')} 分钟执行`;
-        if (min === "*" && hour === "*") return "每分钟执行";
+        if (sec === "*" && min === "*" && hour === "*") return "每秒执行任务";
+        if ((sec.includes("/") || sec.startsWith("*/")) && min === "*" && hour === "*") {
+            const step = sec.split("/")[1] || "1";
+            return `每 ${step} 秒执行任务`;
+        }
+        if (sec === "0" && min === "*" && hour === "*") return "每分钟执行任务";
+        if (sec === "0" && (min.includes("/") || min.startsWith("*/")) && hour === "*") {
+            const step = min.split("/")[1] || "1";
+            return `每 ${step} 分钟执行任务`;
+        }
 
         let desc = "";
+        if (year && year !== "*" && year !== "?") {
+            desc += `${year} 年 `;
+        }
+        if (month && month !== "*" && month !== "?") {
+            if (month.includes(",")) {
+                desc += `每年 ${month.split(",").join("、")} 月 `;
+            } else if (month.includes("-")) {
+                desc += `每年 ${month.split("-")[0]}月至${month.split("-")[1]}月 `;
+            } else {
+                desc += `每年 ${month} 月 `;
+            }
+        }
+
         if (week && week !== "*" && week !== "?") {
-            const weekMap = {
-                "MON-FRI": "工作日(周一至周五)", "2-6": "工作日(周一至周五)",
-                "MON": "每周一", "TUE": "每周二", "WED": "每周三", "THU": "每周四", "FRI": "每周五", "SAT": "每周六", "SUN": "每周日"
-            };
-            desc += (weekMap[week.toUpperCase()] || `星期(${week})`) + " ";
+            const weekUpper = week.toUpperCase();
+            if (weekUpper.includes("#")) {
+                const [w, n] = weekUpper.split("#");
+                const wMap = { "1":"星期日","2":"星期一","3":"星期二","4":"星期三","5":"星期四","6":"星期五","7":"星期六","SUN":"星期日","MON":"星期一","TUE":"星期二","WED":"星期三","THU":"星期四","FRI":"星期五","SAT":"星期六" };
+                desc += `每月第 ${n} 个${wMap[w] || "星期" + w} `;
+            } else if (weekUpper.endsWith("L")) {
+                const w = weekUpper.slice(0, -1);
+                const wMap = { "1":"星期日","2":"星期一","3":"星期二","4":"星期三","5":"星期四","6":"星期五","7":"星期六","SUN":"星期日","MON":"星期一","TUE":"星期二","WED":"星期三","THU":"星期四","FRI":"星期五","SAT":"星期六" };
+                desc += `每月最后一个${wMap[w] || "星期六"} `;
+            } else if (weekUpper === "MON-FRI" || weekUpper === "2-6") {
+                desc += "周一至周五(工作日) ";
+            } else if (weekUpper === "MON-SAT") {
+                desc += "周一至周六 ";
+            } else if (weekUpper.includes(",")) {
+                const wMap = { "1":"日","2":"一","3":"二","4":"三","5":"四","6":"五","7":"六","SUN":"日","MON":"一","TUE":"二","WED":"三","THU":"四","FRI":"五","SAT":"六" };
+                const days = weekUpper.split(",").map(w => "周" + (wMap[w] || w)).join("、");
+                desc += `每周(${days}) `;
+            } else {
+                const weekMap = {
+                    "MON": "每个星期一", "TUE": "每个星期二", "WED": "每个星期三", "THU": "每个星期四", "FRI": "每个星期五", "SAT": "每个星期六", "SUN": "每个星期日",
+                    "2": "每个星期一", "3": "每个星期二", "4": "每个星期三", "5": "每个星期四", "6": "每个星期五", "7": "每个星期六", "1": "每个星期日"
+                };
+                desc += (weekMap[weekUpper] || `星期(${week})`) + " ";
+            }
         } else if (day && day !== "*" && day !== "?") {
-            desc += `每月 ${day} 日 `;
+            if (day.toUpperCase() === "L") {
+                desc += "每月最后一天 ";
+            } else if (day.toUpperCase().endsWith("W")) {
+                desc += `每月离 ${day.slice(0, -1)} 日最近的工作日 `;
+            } else if (day.includes(",")) {
+                desc += `每月 ${day.split(",").join("、")} 日 `;
+            } else if (day.includes("-")) {
+                desc += `每月 ${day} 日 `;
+            } else {
+                desc += `每月 ${day} 日 `;
+            }
         } else {
             desc += "每天 ";
         }
 
-        const hStr = hour === "*" ? "每小时" : `${String(hour).padStart(2, '0')}点`;
-        const mStr = min === "*" ? "每分钟" : `${String(min).padStart(2, '0')}分`;
-        const sStr = (sec === "*" || sec === "0") ? "" : `${String(sec).padStart(2, '0')}秒`;
-        return desc + hStr + mStr + sStr + " 执行";
+        let hDesc = "";
+        if (hour === "*") {
+            hDesc = "每小时";
+        } else if (hour.includes("/")) {
+            const [s, step] = hour.split("/");
+            hDesc = `从 ${s} 点开始每隔 ${step} 小时`;
+        } else if (hour.includes("-")) {
+            const [s, e] = hour.split("-");
+            hDesc = `${s}点至${e}点 期间`;
+        } else if (hour.includes(",")) {
+            const hList = hour.split(",").map(h => `${h}点`).join("、");
+            hDesc = `${hList} `;
+        } else {
+            const hNum = parseInt(hour, 10);
+            if (hNum < 6) hDesc = `凌晨 ${hNum}点`;
+            else if (hNum < 12) hDesc = `上午 ${hNum}点`;
+            else if (hNum === 12) hDesc = `中午 12点`;
+            else if (hNum < 18) hDesc = `下午 ${hNum > 12 ? (hNum - 12) + "点(" + hNum + "点)" : hNum + "点"}`;
+            else hDesc = `晚上 ${hNum - 12}点(${hNum}点)`;
+        }
+
+        let mDesc = "";
+        if (min === "*") {
+            mDesc = "每分钟";
+        } else if (min.includes("/")) {
+            const step = min.split("/")[1];
+            mDesc = `每隔 ${step} 分钟`;
+        } else if (min.includes("-")) {
+            const [s, e] = min.split("-");
+            mDesc = `${String(s).padStart(2, "0")}分至${String(e).padStart(2, "0")}分 期间每分钟`;
+        } else if (min.includes(",")) {
+            const mList = min.split(",").map(m => `${String(m).padStart(2, "0")}分`).join("、");
+            mDesc = `${mList}`;
+        } else {
+            mDesc = `${String(min).padStart(2, "0")}分`;
+        }
+
+        let sDesc = "";
+        if (sec === "*" || sec === "0") {
+            sDesc = "";
+        } else if (sec.includes("/")) {
+            const step = sec.split("/")[1];
+            sDesc = ` 每隔 ${step} 秒`;
+        } else if (sec.includes("-")) {
+            const [s, e] = sec.split("-");
+            sDesc = ` ${String(s).padStart(2, "0")}秒至${String(e).padStart(2, "0")}秒`;
+        } else if (sec.includes(",")) {
+            const sList = sec.split(",").map(s => `${String(s).padStart(2, "0")}秒`).join("、");
+            sDesc = ` ${sList}`;
+        } else {
+            sDesc = `${String(sec).padStart(2, "0")}秒`;
+        }
+
+        let timeStr = "";
+        if (hour.includes(",") && min === "0" && (sec === "0" || !sec)) {
+            timeStr = `${hDesc} 整`;
+        } else if (hour.includes("-") || hour.includes("/") || hour === "*") {
+            timeStr = `${hDesc}${mDesc}${sDesc}`;
+        } else {
+            timeStr = `${hDesc} ${mDesc}${sDesc}`;
+        }
+
+        return `${desc}${timeStr} 执行任务`.replace(/\s+/g, " ").trim();
+    }
+
+    function matchCronField(field, val, minRange) {
+        if (!field || field === "*" || field === "?") return true;
+        for (const part of field.split(",")) {
+            if (part.includes("/")) {
+                let [startStr, stepStr] = part.split("/");
+                let start = startStr === "*" ? minRange : parseInt(startStr, 10);
+                let step = parseInt(stepStr, 10);
+                if (step > 0 && val >= start && (val - start) % step === 0) return true;
+            } else if (part.includes("-")) {
+                const [s, e] = part.split("-").map(n => parseInt(n, 10));
+                if (val >= s && val <= e) return true;
+            } else {
+                if (parseInt(part, 10) === val) return true;
+            }
+        }
+        return false;
+    }
+
+    function matchWeek(weekStr, d) {
+        if (!weekStr || weekStr === "*" || weekStr === "?") return true;
+        const jsDay = d.getDay(); // 0=Sun, 1=Mon ... 6=Sat
+        const qDay = jsDay === 0 ? 1 : jsDay + 1; // Quartz: 1=Sun, 2=Mon... 7=Sat
+        const upper = weekStr.toUpperCase();
+        if (upper.includes("#")) {
+            const [wStr, nStr] = upper.split("#");
+            const wMap = { "1":1,"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"SUN":1,"MON":2,"TUE":3,"WED":4,"THU":5,"FRI":6,"SAT":7 };
+            const targetQ = wMap[wStr];
+            const targetN = parseInt(nStr, 10);
+            if (qDay !== targetQ) return false;
+            const dom = d.getDate();
+            return dom > (targetN - 1) * 7 && dom <= targetN * 7;
+        }
+        const normalized = upper
+            .replace(/SUN/g, "1").replace(/MON/g, "2").replace(/TUE/g, "3")
+            .replace(/WED/g, "4").replace(/THU/g, "5").replace(/FRI/g, "6").replace(/SAT/g, "7");
+        return matchCronField(normalized, qDay, 1);
+    }
+
+    function matchDayOfMonth(dayStr, d) {
+        if (!dayStr || dayStr === "*" || dayStr === "?") return true;
+        if (dayStr.toUpperCase() === "L") {
+            const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+            return d.getDate() === lastDay;
+        }
+        return matchCronField(dayStr, d.getDate(), 1);
     }
 
     function predictNextTimes(cron, count = 5) {
@@ -3127,60 +3284,59 @@
         const sec = hasSec ? parts[0] : "0";
         const min = hasSec ? parts[1] : parts[0];
         const hour = hasSec ? parts[2] : parts[1];
+        const day = hasSec ? parts[3] : parts[2];
+        const month = hasSec ? parts[4] : parts[3];
+        const week = hasSec ? parts[5] : parts[4];
+        const year = parts.length === 7 ? parts[6] : null;
 
         const list = [];
-        let date = new Date();
+        const now = new Date();
+        let current = new Date(now.getTime());
+
+        let stepMs = 1000;
+        const isSingleNumber = s => /^\d+$/.test(s);
+
+        if (isSingleNumber(sec) && isSingleNumber(min) && isSingleNumber(hour)) {
+            current.setHours(parseInt(hour, 10), parseInt(min, 10), parseInt(sec, 10), 0);
+            stepMs = 24 * 3600 * 1000;
+        } else if (isSingleNumber(sec) && isSingleNumber(min)) {
+            current.setMinutes(parseInt(min, 10), parseInt(sec, 10), 0);
+            stepMs = 3600 * 1000;
+        } else if (isSingleNumber(sec)) {
+            current.setSeconds(parseInt(sec, 10), 0);
+            stepMs = 60 * 1000;
+        }
 
         function formatDate(d) {
             const Y = d.getFullYear();
-            const M = String(d.getMonth() + 1).padStart(2, '0');
-            const D = String(d.getDate()).padStart(2, '0');
-            const h = String(d.getHours()).padStart(2, '0');
-            const m = String(d.getMinutes()).padStart(2, '0');
-            const s = String(d.getSeconds()).padStart(2, '0');
+            const M = String(d.getMonth() + 1).padStart(2, "0");
+            const D = String(d.getDate()).padStart(2, "0");
+            const h = String(d.getHours()).padStart(2, "0");
+            const m = String(d.getMinutes()).padStart(2, "0");
+            const s = String(d.getSeconds()).padStart(2, "0");
             return `${Y}-${M}-${D} ${h}:${m}:${s}`;
         }
 
-        if (sec === "*" && min === "*" && hour === "*") {
-            for (let i = 0; i < count; i++) {
-                date = new Date(date.getTime() + 1000);
-                list.push(formatDate(date));
-            }
-            return list;
+        let iterations = 0;
+        const maxIterations = 50000;
+        while (list.length < count && iterations < maxIterations) {
+            iterations++;
+            current = new Date(current.getTime() + stepMs);
+
+            if (current.getTime() <= now.getTime()) continue;
+            if (year && !matchCronField(year, current.getFullYear(), 1970)) continue;
+            if (!matchCronField(month, current.getMonth() + 1, 1)) continue;
+            if (!matchDayOfMonth(day, current)) continue;
+            if (!matchWeek(week, current)) continue;
+            if (!matchCronField(hour, current.getHours(), 0)) continue;
+            if (!matchCronField(min, current.getMinutes(), 0)) continue;
+            if (!matchCronField(sec, current.getSeconds(), 0)) continue;
+
+            list.push(formatDate(current));
         }
 
-        let stepSec = 0;
-        let stepMin = 0;
-        if (sec.startsWith("*/")) stepSec = parseInt(sec.replace('*/', '')) || 5;
-        else if (min.startsWith("*/")) stepMin = parseInt(min.replace('*/', '')) || 5;
-
-        if (stepSec > 0) {
-            const curS = date.getSeconds();
-            date.setSeconds(curS + (stepSec - (curS % stepSec)));
-            for (let i = 0; i < count; i++) {
-                list.push(formatDate(date));
-                date = new Date(date.getTime() + stepSec * 1000);
-            }
-        } else if (stepMin > 0) {
-            date.setSeconds(0);
-            const curM = date.getMinutes();
-            date.setMinutes(curM + (stepMin - (curM % stepMin)));
-            for (let i = 0; i < count; i++) {
-                list.push(formatDate(date));
-                date = new Date(date.getTime() + stepMin * 60 * 1000);
-            }
-        } else {
-            const targetH = parseInt(hour) || 0;
-            const targetM = parseInt(min) || 0;
-            const targetS = parseInt(sec) || 0;
-            date.setHours(targetH, targetM, targetS, 0);
-            if (date.getTime() <= Date.now()) {
-                date.setDate(date.getDate() + 1);
-            }
-            for (let i = 0; i < count; i++) {
-                list.push(formatDate(date));
-                date.setDate(date.getDate() + 1);
-            }
+        if (list.length === 0) {
+            return ["在未来近期内未匹配到触发时间（如限定历史年份或极小概率时间点）"];
         }
         return list;
     }

@@ -857,7 +857,7 @@ body {
     scroll-behavior: smooth;
 }
 
-/* 单条消息流项 (参考 internal-chat 结构) */
+/* 单条消息流项结构 */
 .chat-item {
     display: flex;
     flex-direction: column;
@@ -1163,7 +1163,7 @@ body {
     border-color: var(--ic-accent-blue);
 }
 
-/* 连体式输入工作台 (参考 internal-chat 风格) */
+/* 连体式即时通讯输入工作台 */
 .chat-composer {
     background: var(--ic-bg-card);
     border: 1px solid var(--ic-border);

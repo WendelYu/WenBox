@@ -1862,7 +1862,7 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
         }
     });
 
-    // 2. 启动定时广播线程 (LocalSend 架构：遍历每个物理网卡独立绑定发包)
+    // 2. 启动定时广播线程 (遍历每个物理网卡独立绑定发包，保障多网卡环境稳定发现)
     let state_bcast = state.clone();
     thread::spawn(move || {
         loop {
