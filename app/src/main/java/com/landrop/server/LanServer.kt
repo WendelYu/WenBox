@@ -266,9 +266,27 @@ class LanServer(
                     newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", result.toString())
                 }
 
+                // 1.47 切换展示网卡 IP
+                method == Method.POST && uri.startsWith("/api/room/set_ip") -> {
+                    val map = HashMap<String, String>()
+                    try { session.parseBody(map) } catch (_: Exception) {}
+                    val postData = getUtf8PostData(map)
+                    if (!postData.isNullOrBlank()) {
+                        try {
+                            val json = JSONObject(postData)
+                            val ip = json.optString("ip", "")
+                            if (ip.isNotBlank()) {
+                                RoomManager.setHostIp(ip)
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", "{\"success\":true}")
+                }
+
                 // 1.5 服务状态信息 (供局域网其他设备/网页感知本端信息)
                 method == Method.GET && uri == "/api/status" -> {
-                    val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
+                    val primaryIp = RoomManager.currentRoom?.hostIp?.ifBlank { null }
+                        ?: NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
                     val allIps = NetworkUtils.getAllLocalIpAddresses(context).map {
                         JSONObject().apply {
                             put("ip", it.ip)
@@ -513,7 +531,11 @@ class LanServer(
             clientId = params["clientId"]?.firstOrNull() ?: ""
         }
         if (senderIp.isBlank()) {
-            senderIp = clientIp
+            senderIp = if (clientIp == "127.0.0.1" || clientIp == "::1") {
+                RoomManager.currentRoom?.hostIp?.ifBlank { null } ?: clientIp
+            } else {
+                clientIp
+            }
         }
 
         if (content.isNotBlank()) {

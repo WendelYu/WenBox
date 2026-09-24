@@ -323,7 +323,7 @@
     let latestRoomMembers = [];
 
     function getReachableHostAddress(port) {
-        let ip = selfDeviceInfo.ip;
+        let ip = userSelectedIp || selfDeviceInfo.ip;
         if (!ip || ip === '127.0.0.1' || ip === 'localhost' || ip === 'tauri.localhost') {
             if (Array.isArray(selfLanIps) && selfLanIps.length > 0) {
                 const found = selfLanIps.find(item => {
@@ -369,6 +369,9 @@
             localStorage.setItem('wenbox_selected_ip', ip);
         } catch (_) {}
         selfDeviceInfo.ip = ip;
+        if (roomState.roomInfo) {
+            roomState.roomInfo.hostIp = ip;
+        }
         const invoke = getTauriInvoke();
         if (invoke) {
             invoke('set_room_host_ip_cmd', { ip }).catch(() => {});
@@ -384,7 +387,10 @@
         if (roomState.mode) {
             updateChatStatusBar(roomState.mode, roomState.roomInfo);
         }
-        showToast(`已切换展示 IP 为: ${ip}`);
+        if (hostQrModal && hostQrModal.style.display !== 'none') {
+            showHostQrModal();
+        }
+        showToast(`已切换展示网卡 IP 为: ${ip}`);
     };
 
     function updateHostBannerDisplay() {
@@ -1177,13 +1183,16 @@
             const isHost = (m.name || '').includes('房主');
             let cleanName = (m.name || '局域网成员').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim();
             if (!cleanName) cleanName = m.name || '局域网成员';
+            const ip = m.ip || (selfDeviceInfo.ip || '127.0.0.1');
             return `
                 <div style="display: flex; align-items: center; justify-content: space-between; background: var(--ic-bg-card); border: 1px solid var(--ic-border); border-radius: 6px; padding: 10px 12px;">
-                    <div style="display: flex; align-items: center; gap: 6px; overflow: hidden;">
-                        <span style="font-size: 14px; font-weight: 600; color: var(--ic-text-main); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+                    <div style="display: flex; flex-direction: column; gap: 2px; overflow: hidden; margin-right: 8px;">
+                        <span style="font-size: 13px; font-weight: 600; color: var(--ic-text-main); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
                             ${isHost ? '👑 ' : ''}${escapeHtml(cleanName)}${isHost ? ' (房主)' : ''}
                         </span>
+                        <span style="font-size: 12px; color: var(--ic-accent-blue); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">IP: ${escapeHtml(ip)}</span>
                     </div>
+                    <button class="btn-copy-mini" style="font-size: 11px; padding: 4px 10px; background: #333333; color: var(--ic-accent-blue); border: 1px solid var(--ic-border); border-radius: 4px; cursor: pointer; flex-shrink: 0; transition: all 0.15s;" onclick="window.copyMemberIp('${escapeHtml(ip)}')">复制 IP</button>
                 </div>
             `;
         }).join('');
@@ -2229,6 +2238,13 @@
         senderSpan.textContent = senderTitle;
         userHeader.appendChild(senderSpan);
 
+        if (msg.senderIp) {
+            const ipSpan = document.createElement('span');
+            ipSpan.className = 'chat-item_ip';
+            ipSpan.textContent = msg.senderIp;
+            userHeader.appendChild(ipSpan);
+        }
+
         const timeSpan = document.createElement('span');
         timeSpan.className = 'chat-item_time';
         timeSpan.textContent = formatTime(msg.timestamp);
@@ -2432,6 +2448,7 @@
         if (!text || !text.trim()) return;
         const content = text.trim();
         const myName = getClientSenderName();
+        const myIp = selfDeviceInfo.ip || null;
 
         try {
             const invoke = getTauriInvoke();
@@ -2441,7 +2458,8 @@
                     senderName: myName,
                     content: content,
                     token: roomState.token || null,
-                    clientId: myClientId
+                    clientId: myClientId,
+                    senderIp: myIp
                 });
                 pollChatMessages();
                 return;
@@ -2459,7 +2477,8 @@
                 body: JSON.stringify({
                     content: content,
                     senderName: myName,
-                    clientId: myClientId
+                    clientId: myClientId,
+                    senderIp: myIp || undefined
                 })
             });
             if (resp.ok) {

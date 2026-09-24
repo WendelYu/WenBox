@@ -139,6 +139,7 @@ struct AppState {
     auth_tokens: Mutex<HashSet<String>>,
     host_token: Mutex<String>,
     is_tauri_host: Mutex<bool>,
+    selected_ip: Mutex<Option<String>>,
 }
 
 // ---------------- 智能获取本机所有可用局域网 IPv4 地址 ----------------
@@ -195,8 +196,8 @@ fn get_download_dir() -> PathBuf {
 
 // ---------------- Tauri 供前端调用的命令 ----------------
 #[tauri::command]
-fn get_local_ip() -> String {
-    get_primary_ip()
+fn get_local_ip(state: tauri::State<Arc<AppState>>) -> String {
+    state.selected_ip.lock().unwrap().clone().unwrap_or_else(get_primary_ip)
 }
 
 #[tauri::command]
@@ -206,8 +207,13 @@ fn get_all_lan_ips_cmd() -> Vec<LocalIpInfo> {
 
 #[tauri::command]
 fn set_room_host_ip_cmd(ip: String, state: tauri::State<Arc<AppState>>) -> Result<(), String> {
+    let clean = ip.trim().to_string();
+    *state.selected_ip.lock().unwrap() = Some(clean.clone());
     let mut room = state.room.lock().map_err(|e| e.to_string())?;
-    room.host_ip = ip.trim().to_string();
+    room.host_ip = clean.clone();
+    if let Some(host_member) = state.members.lock().unwrap().get_mut("host") {
+        host_member.ip = clean;
+    }
     Ok(())
 }
 
@@ -298,7 +304,7 @@ fn save_file_to_directory(dir_path: String, folder_name: String, file_name: Stri
 #[tauri::command]
 fn create_room_cmd(room_name: String, pin: String, state: tauri::State<Arc<AppState>>) -> Result<RoomConfig, String> {
     let dev_name = whoami_device_name();
-    let primary_ip = get_primary_ip();
+    let primary_ip = state.selected_ip.lock().unwrap().clone().unwrap_or_else(get_primary_ip);
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
 
     let clean_pin = pin.trim().to_string();
@@ -556,7 +562,7 @@ fn connect_device_node(target: String, state: tauri::State<Arc<AppState>>) -> Re
     let base_url = base_url.trim_end_matches('/').to_string();
 
     // 1. 发起 HTTP 主动握手 (优先尝试 /api/probe，退化尝试 /api/status)
-    let my_ip = get_local_ip();
+    let my_ip = state.selected_ip.lock().unwrap().clone().unwrap_or_else(get_primary_ip);
     let dev_name = whoami_device_name();
     let probe_body = serde_json::json!({
         "action": "wenbox_discovery",
@@ -718,13 +724,23 @@ fn fetch_node_messages(base_url: String, token: Option<String>, state: tauri::St
 }
 
 #[tauri::command]
-fn send_node_message(base_url: String, sender_name: String, content: String, token: Option<String>, client_id: Option<String>, state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
+fn send_node_message(base_url: String, sender_name: String, content: String, token: Option<String>, client_id: Option<String>, sender_ip: Option<String>, state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
     let clean = base_url.trim().trim_end_matches('/');
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let my_ip = get_primary_ip();
+    let my_ip = sender_ip
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| state.selected_ip.lock().unwrap().clone())
+        .unwrap_or_else(|| {
+            let r = state.room.lock().unwrap();
+            if !r.host_ip.is_empty() && r.host_ip != "127.0.0.1" {
+                r.host_ip.clone()
+            } else {
+                get_primary_ip()
+            }
+        });
 
     if clean.is_empty() || clean.contains("localhost") || clean.contains("127.0.0.1") {
         let msg = ChatMessage {
@@ -1056,8 +1072,13 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 let _ = req.as_reader().read_to_string(&mut body);
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
                     if let Some(ip) = val["ip"].as_str() {
+                        let clean = ip.trim().to_string();
+                        *state.selected_ip.lock().unwrap() = Some(clean.clone());
                         let mut room = state.room.lock().unwrap();
-                        room.host_ip = ip.trim().to_string();
+                        room.host_ip = clean.clone();
+                        if let Some(host_member) = state.members.lock().unwrap().get_mut("host") {
+                            host_member.ip = clean;
+                        }
                     }
                 }
                 let mut resp = Response::from_string("{\"success\":true}");
@@ -1255,7 +1276,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
 
             // 1. 获取本端信息 (供前端展示自身 IP 与服务状态)
             if url == "/api/status" && method == Method::Get {
-                let primary_ip = get_primary_ip();
+                let primary_ip = state.selected_ip.lock().unwrap().clone().unwrap_or_else(get_primary_ip);
                 let all_ips = get_all_lan_ips();
                 let dev_name = whoami_device_name();
                 let room = state.room.lock().unwrap().clone();
@@ -1515,7 +1536,16 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         let sender_name = val["senderName"].as_str().unwrap_or("未知用户").to_string();
                         let sender_ip_field = val["senderIp"].as_str().unwrap_or("").trim().to_string();
                         let remote_ip = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_else(|| "127.0.0.1".into());
-                        let sender_ip = if !sender_ip_field.is_empty() { sender_ip_field } else { remote_ip };
+                        let sender_ip = if !sender_ip_field.is_empty() {
+                            sender_ip_field
+                        } else if remote_ip == "127.0.0.1" || remote_ip == "::1" {
+                            state.selected_ip.lock().unwrap().clone().unwrap_or_else(|| {
+                                let r = state.room.lock().unwrap();
+                                if !r.host_ip.is_empty() && r.host_ip != "127.0.0.1" { r.host_ip.clone() } else { get_primary_ip() }
+                            })
+                        } else {
+                            remote_ip
+                        };
                         let client_id = val["clientId"].as_str().map(|s| s.to_string());
                         let is_from_phone = sender_name.contains("手机") || sender_name.contains("Android") || sender_name.contains("iPhone") || sender_name.contains("iPad");
                         let now_ms = SystemTime::now()
@@ -1894,6 +1924,7 @@ fn main() {
         auth_tokens: Mutex::new(HashSet::new()),
         host_token: Mutex::new(String::new()),
         is_tauri_host: Mutex::new(false),
+        selected_ip: Mutex::new(None),
     });
 
     // 启动 HTTP 服务端 (默认 9527)

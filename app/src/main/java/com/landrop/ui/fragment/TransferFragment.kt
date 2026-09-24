@@ -23,6 +23,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import android.app.Dialog
 import android.graphics.drawable.ColorDrawable
+import java.util.UUID
 import android.view.Gravity
 import android.view.Window
 import com.landrop.MainActivity
@@ -885,7 +886,8 @@ class TransferFragment : Fragment() {
         val ctx = context ?: return
         val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
         val myNick = sp.getString("user_nickname", null) ?: "${Build.BRAND}手机"
-        val myIp = NetworkUtils.getAllLocalIpAddresses(ctx).firstOrNull()?.ip ?: ""
+        val myIp = selectedIpUrl?.removePrefix("http://")?.substringBefore(":")?.ifBlank { null }
+            ?: NetworkUtils.getAllLocalIpAddresses(ctx).firstOrNull()?.ip ?: ""
         MessageManager.addPhoneMessage(text, myNick, myIp, phoneClientId)
 
         // 如果处于 JOINED 模式，向房主服务端发送此条消息
@@ -972,12 +974,13 @@ class TransferFragment : Fragment() {
         val timeStr = timeFormat.format(Date(msg.timestamp))
 
         val cleanName = msg.senderName.replace(Regex("^[📱💻👑\\s]+"), "").trim().ifBlank { "成员" }
+        val ipTag = if (msg.senderIp.isNotBlank()) " (${msg.senderIp})" else ""
         val isMe = (msg.clientId.isNotBlank() && msg.clientId == phoneClientId) || msg.isFromPhone
         if (isMe) {
-            itemBinding.tvSenderInfo.text = "（我）$cleanName"
+            itemBinding.tvSenderInfo.text = "（我）$cleanName$ipTag"
             itemBinding.tvSenderInfo.setTextColor(ContextCompat.getColor(ctx, R.color.chat_accent_blue))
         } else {
-            itemBinding.tvSenderInfo.text = cleanName
+            itemBinding.tvSenderInfo.text = "$cleanName$ipTag"
             itemBinding.tvSenderInfo.setTextColor(ContextCompat.getColor(ctx, R.color.chat_accent_green))
         }
         itemBinding.tvMessageTime.text = timeStr
@@ -1474,6 +1477,8 @@ class TransferFragment : Fragment() {
     ) {
         val ctx = context ?: return
         selectedIpUrl = url
+        val selectedIp = url.removePrefix("http://").substringBefore(":")
+        RoomManager.setHostIp(selectedIp)
         binding.tvChatRoomUrl.text = "🌐 访问: $url"
 
         allBindings.forEach { (b, itemUrl) ->

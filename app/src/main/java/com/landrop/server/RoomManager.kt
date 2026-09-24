@@ -67,6 +67,19 @@ object RoomManager {
         return config
     }
 
+    fun setHostIp(ip: String) {
+        val clean = ip.trim()
+        if (clean.isBlank()) return
+        val room = currentRoom ?: return
+        val updated = room.copy(hostIp = clean)
+        currentRoom = updated
+        members["host"]?.let {
+            it.ip = clean
+        }
+        onRoomStateChangedListener?.invoke(updated)
+        onMembersChangedListener?.invoke(getMembers())
+    }
+
     fun closeRoom() {
         val oldRoomId = currentRoom?.roomId
         currentRoom = null
