@@ -53,9 +53,9 @@ object RoomManager {
         val hostToken = UUID.randomUUID().toString()
         currentHostToken = hostToken
         authTokens.add(hostToken)
-        members["127.0.0.1"] = RoomMember(
+        members["host"] = RoomMember(
             id = UUID.randomUUID().toString(),
-            name = "$hostDevice ($hostIp) (房主)",
+            name = "$hostDevice (房主)",
             ip = hostIp,
             platform = "Android",
             joinedAt = System.currentTimeMillis(),
@@ -95,13 +95,7 @@ object RoomManager {
         authTokens.add(token)
 
         val cleanName = clientName.trim()
-        val displayName = if (cleanName.isBlank()) {
-            "访客设备 ($clientIp)"
-        } else if (cleanName.contains("($clientIp)")) {
-            cleanName
-        } else {
-            "$cleanName ($clientIp)"
-        }
+        val displayName = if (cleanName.isBlank()) "访客设备" else cleanName
 
         val member = RoomMember(
             id = UUID.randomUUID().toString(),
@@ -111,22 +105,23 @@ object RoomManager {
             joinedAt = System.currentTimeMillis(),
             lastSeen = System.currentTimeMillis()
         )
-        members[clientIp] = member
+        members[token] = member
         onMembersChangedListener?.invoke(getMembers())
 
         return Triple(true, "加入成功", token)
     }
 
-    fun heartbeat(clientIp: String, name: String? = null, platform: String? = null) {
-        val existing = members[clientIp]
+    fun heartbeat(clientIp: String, name: String? = null, platform: String? = null, token: String? = null) {
+        val existing = (if (!token.isNullOrBlank()) members[token] else null)
+            ?: members.values.find { it.ip == clientIp }
         if (existing != null) {
             existing.lastSeen = System.currentTimeMillis()
-            if (!name.isNullOrBlank() && existing.name != name) {
-                existing.name = name
+            if (!name.isNullOrBlank() && existing.name != name.trim()) {
+                existing.name = name.trim()
                 onMembersChangedListener?.invoke(getMembers())
             }
         } else if (clientIp != "127.0.0.1" && clientIp != "::1") {
-            val displayName = name?.ifBlank { null } ?: "设备 ($clientIp)"
+            val displayName = name?.trim()?.ifBlank { null } ?: "访客设备"
             val member = RoomMember(
                 id = UUID.randomUUID().toString(),
                 name = displayName,
@@ -135,7 +130,8 @@ object RoomManager {
                 joinedAt = System.currentTimeMillis(),
                 lastSeen = System.currentTimeMillis()
             )
-            members[clientIp] = member
+            val key = token ?: clientIp
+            members[key] = member
             onMembersChangedListener?.invoke(getMembers())
         }
     }
@@ -152,7 +148,7 @@ object RoomManager {
         val iterator = members.entries.iterator()
         while (iterator.hasNext()) {
             val item = iterator.next()
-            if (now - item.value.lastSeen > 30000 && item.key != "127.0.0.1") {
+            if (now - item.value.lastSeen > 30000 && item.key != "host" && item.key != "127.0.0.1") {
                 iterator.remove()
             }
         }

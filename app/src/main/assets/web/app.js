@@ -401,10 +401,12 @@
         const invoke = getTauriInvoke();
         if (invoke) {
             try {
-                // 与本地后台实时同步房间模式 (例如外部或本地浏览器创建/解散了房间，Tauri 端自动响应状态)
+                // 与本地后台实时同步房间模式 (只有本机 Tauri UI 亲自建房 rStatus.isTauriHost 时才响应为 host)
                 const rStatus = await invoke('get_room_status_cmd');
-                if (rStatus && rStatus.isActive && roomState.mode !== 'host') {
-                    setRoomMode('host', rStatus);
+                if (rStatus && rStatus.isActive && rStatus.isTauriHost) {
+                    if (roomState.mode !== 'host') {
+                        setRoomMode('host', rStatus);
+                    }
                 } else if (rStatus && !rStatus.isActive && roomState.mode === 'host') {
                     setRoomMode('client');
                 }
@@ -801,10 +803,10 @@
         try {
             const invoke = getTauriInvoke();
             if (invoke) {
-                // 如果本地 Tauri 后端服务已经被浏览器激活为房主，桌面端直接同步切为 host 模式
+                // 只有当本机 Tauri UI 是房主时才同步切为 host 模式
                 try {
                     const rStatus = await invoke('get_room_status_cmd');
-                    if (rStatus && rStatus.isActive) {
+                    if (rStatus && rStatus.isActive && rStatus.isTauriHost) {
                         setRoomMode('host', rStatus);
                         return;
                     }
@@ -881,7 +883,7 @@
 
         if (titleEl) titleEl.textContent = `📱 加入「${pendingJoinRoomData.roomName}」`;
         if (descEl) {
-            descEl.textContent = pendingJoinRoomData.needPassword ? '该房间设置了安全密码，请输入昵称与 PIN 码加入：' : '设置进入房间展示的昵称，加入后将显示为「昵称 (IP)」：';
+            descEl.textContent = pendingJoinRoomData.needPassword ? '该房间设置了安全密码，请输入昵称与 PIN 码加入：' : '设置进入房间展示的昵称：';
         }
         if (nickInput) {
             nickInput.value = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
@@ -1011,10 +1013,7 @@
     function whoami_device_name_client() {
         const storedNick = localStorage.getItem('wenbox_nickname');
         if (storedNick && storedNick.trim()) return storedNick.trim();
-        const plat = (navigator.userAgent.indexOf('Mac') !== -1) ? 'Mac' :
-                     (navigator.userAgent.indexOf('Win') !== -1) ? 'Windows' :
-                     (navigator.userAgent.indexOf('Android') !== -1) ? 'Android' : 'Web';
-        return `${plat}用户-${Math.floor(100 + Math.random() * 900)}`;
+        return `用户-${Math.floor(100 + Math.random() * 900)}`;
     }
 
     function updateMyNicknameDisplay(nick) {
@@ -1099,11 +1098,16 @@
             const onlineBadge = document.getElementById('chatOnlineMemberBadge');
             if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length || 1} 人 (点击查看)`;
             if (hostMembersContainer) {
-                hostMembersContainer.innerHTML = members.map(m => `
-                    <span class="member-pill ${m.name.includes('房主') ? 'is-host' : ''}" style="cursor: pointer;" onclick="window.openOnlineMembersModal()">
-                        ${m.name.includes('房主') ? '👑' : '📱'} ${escapeHtml(m.name)}
-                    </span>
-                `).join('');
+                hostMembersContainer.innerHTML = members.map(m => {
+                    const isHost = m.name.includes('房主');
+                    let cleanName = m.name.replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim();
+                    if (!cleanName) cleanName = m.name;
+                    return `
+                        <span class="member-pill ${isHost ? 'is-host' : ''}" style="cursor: pointer;" onclick="window.openOnlineMembersModal()">
+                            ${isHost ? '👑 ' : ''}${escapeHtml(cleanName)}${isHost ? ' (房主)' : ''}
+                        </span>
+                    `;
+                }).join('');
             }
         } catch (e) {
             // ignore
@@ -1118,10 +1122,14 @@
             try {
                 const hbRes = await fetch(currentTargetBaseUrl + '/api/room/heartbeat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Room-Token': roomState.token || ''
+                    },
                     body: JSON.stringify({
                         name: getClientSenderName(),
                         platform: 'Web',
+                        token: roomState.token || '',
                         roomId: roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : ''
                     }),
                     signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(2000) : undefined
@@ -1166,15 +1174,16 @@
         }
 
         listEl.innerHTML = members.map(m => {
-            const ip = m.ip || '127.0.0.1';
-            const name = m.name || '局域网成员';
+            const isHost = (m.name || '').includes('房主');
+            let cleanName = (m.name || '局域网成员').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim();
+            if (!cleanName) cleanName = m.name || '局域网成员';
             return `
                 <div style="display: flex; align-items: center; justify-content: space-between; background: var(--ic-bg-card); border: 1px solid var(--ic-border); border-radius: 6px; padding: 10px 12px;">
-                    <div style="display: flex; flex-direction: column; gap: 2px; overflow: hidden; margin-right: 8px;">
-                        <span style="font-size: 13px; font-weight: 600; color: var(--ic-text-main); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${escapeHtml(name)}</span>
-                        <span style="font-size: 12px; color: var(--ic-accent-blue); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">IP: ${escapeHtml(ip)}</span>
+                    <div style="display: flex; align-items: center; gap: 6px; overflow: hidden;">
+                        <span style="font-size: 14px; font-weight: 600; color: var(--ic-text-main); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+                            ${isHost ? '👑 ' : ''}${escapeHtml(cleanName)}${isHost ? ' (房主)' : ''}
+                        </span>
                     </div>
-                    <button class="btn-copy-mini" style="font-size: 11px; padding: 4px 10px; background: #333333; color: var(--ic-accent-blue); border: 1px solid var(--ic-border); border-radius: 4px; cursor: pointer; flex-shrink: 0; transition: all 0.15s;" onclick="window.copyMemberIp('${escapeHtml(ip)}')">复制 IP</button>
                 </div>
             `;
         }).join('');
@@ -1887,7 +1896,7 @@
         if (invoke) {
             try {
                 const st = await invoke('get_room_status_cmd');
-                if (st && st.isActive) {
+                if (st && st.isActive && st.isTauriHost) {
                     setRoomMode('host', st);
                     return;
                 }
@@ -2006,15 +2015,18 @@
         }
     }
 
-    const osPlatform = (navigator.userAgent.indexOf('Mac') !== -1) ? 'Mac' :
-                       (navigator.userAgent.indexOf('Win') !== -1) ? 'Windows' : '电脑端';
+    let myClientId = sessionStorage.getItem('wenbox_client_id');
+    if (!myClientId) {
+        myClientId = 'cid_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
+        sessionStorage.setItem('wenbox_client_id', myClientId);
+    }
 
     function getClientSenderName() {
         const storedNick = localStorage.getItem('wenbox_nickname');
         if (storedNick && storedNick.trim()) {
-            return `💻 ${storedNick.trim()}`;
+            return storedNick.trim();
         }
-        return `💻 ${osPlatform}端`;
+        return whoami_device_name_client();
     }
 
     // 房间模式与聊天室门禁联动
@@ -2195,17 +2207,16 @@
         if (webEmptyChat) webEmptyChat.style.display = 'none';
 
         const myName = getClientSenderName();
-        const isMe = (!msg.isFromPhone && (msg.senderName === myName || msg.senderName.includes(osPlatform)));
+        const cleanSender = (msg.senderName || '').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim() || (msg.isFromPhone ? '手机用户' : '成员');
+        const isMe = (msg.clientId && msg.clientId === myClientId)
+            || (!msg.clientId && !msg.isFromPhone && (msg.senderName === myName || cleanSender === myName));
 
         // 整体条目: .chat-item (带悬停变色)
         const item = document.createElement('div');
         item.className = 'chat-item';
 
-        // 消息头: .chat-item_user
-        let senderTitle = msg.senderName;
-        if (!senderTitle) {
-            senderTitle = msg.isFromPhone ? '📱 手机端' : '💻 成员';
-        }
+        // 消息头: .chat-item_user (仅展示纯昵称，不展示不准确的设备图标与IP)
+        let senderTitle = cleanSender;
         if (isMe) {
             senderTitle = `（我）${senderTitle}`;
         }
@@ -2217,13 +2228,6 @@
         senderSpan.className = 'user-name';
         senderSpan.textContent = senderTitle;
         userHeader.appendChild(senderSpan);
-
-        if (msg.senderIp) {
-            const ipSpan = document.createElement('span');
-            ipSpan.className = 'chat-item_ip';
-            ipSpan.textContent = msg.senderIp;
-            userHeader.appendChild(ipSpan);
-        }
 
         const timeSpan = document.createElement('span');
         timeSpan.className = 'chat-item_time';
@@ -2436,7 +2440,8 @@
                     baseUrl: currentTargetBaseUrl,
                     senderName: myName,
                     content: content,
-                    token: roomState.token || null
+                    token: roomState.token || null,
+                    clientId: myClientId
                 });
                 pollChatMessages();
                 return;
@@ -2453,7 +2458,8 @@
                 signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(3000) : undefined,
                 body: JSON.stringify({
                     content: content,
-                    senderName: myName
+                    senderName: myName,
+                    clientId: myClientId
                 })
             });
             if (resp.ok) {

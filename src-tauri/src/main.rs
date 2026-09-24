@@ -38,6 +38,8 @@ pub struct ChatMessage {
     pub is_from_phone: bool,
     #[serde(rename = "senderIp", default)]
     pub sender_ip: String,
+    #[serde(rename = "clientId", default)]
+    pub client_id: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -136,6 +138,7 @@ struct AppState {
     discovered_rooms: Mutex<HashMap<String, DiscoveredRoom>>,
     auth_tokens: Mutex<HashSet<String>>,
     host_token: Mutex<String>,
+    is_tauri_host: Mutex<bool>,
 }
 
 // ---------------- 智能获取本机所有可用局域网 IPv4 地址 ----------------
@@ -328,16 +331,17 @@ fn create_room_cmd(room_name: String, pin: String, state: tauri::State<Arc<AppSt
     // 房主自身加入 member
     let host_token = uuid::Uuid::new_v4().to_string();
     *state.host_token.lock().unwrap() = host_token.clone();
+    *state.is_tauri_host.lock().unwrap() = true;
     state.auth_tokens.lock().unwrap().insert(host_token);
     let host_member = RoomMember {
         id: uuid::Uuid::new_v4().to_string(),
-        name: format!("{} ({}) (房主)", dev_name, primary_ip),
+        name: format!("{} (房主)", dev_name),
         ip: primary_ip,
         platform: "Windows".into(),
         joined_at: now,
         last_seen: now,
     };
-    state.members.lock().unwrap().insert("127.0.0.1".into(), host_member);
+    state.members.lock().unwrap().insert("host".into(), host_member);
 
     Ok(cfg)
 }
@@ -352,6 +356,7 @@ fn close_room_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
         id
     };
     *state.host_token.lock().unwrap() = String::new();
+    *state.is_tauri_host.lock().unwrap() = false;
     state.members.lock().unwrap_or_else(|e| e.into_inner()).clear();
     state.auth_tokens.lock().unwrap_or_else(|e| e.into_inner()).clear();
     state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -390,8 +395,21 @@ fn close_room_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn get_room_status_cmd(state: tauri::State<Arc<AppState>>) -> RoomConfig {
-    state.room.lock().unwrap().clone()
+fn get_room_status_cmd(state: tauri::State<Arc<AppState>>) -> serde_json::Value {
+    let room = state.room.lock().unwrap().clone();
+    let is_tauri_host = *state.is_tauri_host.lock().unwrap();
+    serde_json::json!({
+        "isActive": room.is_active,
+        "roomId": room.room_id,
+        "roomName": room.room_name,
+        "pin": room.pin,
+        "needPassword": room.need_password,
+        "hostDevice": room.host_device,
+        "hostIp": room.host_ip,
+        "hostPort": room.host_port,
+        "createdAt": room.created_at,
+        "isTauriHost": is_tauri_host,
+    })
 }
 
 #[tauri::command]
@@ -405,14 +423,31 @@ fn get_discovered_rooms_cmd(state: tauri::State<Arc<AppState>>) -> Vec<Discovere
             && !self_ips.contains(&r.ip)
             && (cur_room_id.is_empty() || r.room_id != cur_room_id)
     });
-    disc.values().cloned().collect()
+    let mut list: Vec<DiscoveredRoom> = disc.values().cloned().collect();
+
+    let my_room = state.room.lock().unwrap().clone();
+    let is_tauri_host = *state.is_tauri_host.lock().unwrap();
+    if my_room.is_active && !is_tauri_host {
+        // 本地服务由浏览器/外部创建为房主，Win 客户端大厅展示该房间以供加入
+        list.insert(0, DiscoveredRoom {
+            room_id: my_room.room_id,
+            room_name: my_room.room_name,
+            host_device: "本机网页房主".into(),
+            host_platform: "Web".into(),
+            ip: "127.0.0.1".into(),
+            port: 9527,
+            need_password: my_room.need_password,
+            last_seen: now,
+        });
+    }
+    list
 }
 
 #[tauri::command]
 fn get_room_members_cmd(state: tauri::State<Arc<AppState>>) -> Vec<RoomMember> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     let mut mem = state.members.lock().unwrap();
-    mem.retain(|k, m| k == "127.0.0.1" || now.saturating_sub(m.last_seen) < 30);
+    mem.retain(|k, m| k == "host" || k == "127.0.0.1" || now.saturating_sub(m.last_seen) < 30);
     mem.values().cloned().collect()
 }
 
@@ -667,6 +702,7 @@ fn fetch_node_messages(base_url: String, token: Option<String>, state: tauri::St
             let timestamp = item["timestamp"].as_u64().unwrap_or(0);
             let is_from_phone = item["isFromPhone"].as_bool().unwrap_or(false);
             let sender_ip = item["senderIp"].as_str().unwrap_or("").to_string();
+            let client_id = item["clientId"].as_str().map(|s| s.to_string());
             list.push(ChatMessage {
                 id,
                 sender_name,
@@ -674,6 +710,7 @@ fn fetch_node_messages(base_url: String, token: Option<String>, state: tauri::St
                 timestamp,
                 is_from_phone,
                 sender_ip,
+                client_id,
             });
         }
     }
@@ -681,7 +718,7 @@ fn fetch_node_messages(base_url: String, token: Option<String>, state: tauri::St
 }
 
 #[tauri::command]
-fn send_node_message(base_url: String, sender_name: String, content: String, token: Option<String>, state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
+fn send_node_message(base_url: String, sender_name: String, content: String, token: Option<String>, client_id: Option<String>, state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
     let clean = base_url.trim().trim_end_matches('/');
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -697,6 +734,7 @@ fn send_node_message(base_url: String, sender_name: String, content: String, tok
             timestamp: now_ms,
             is_from_phone: false,
             sender_ip: my_ip,
+            client_id,
         };
         state.messages.lock().unwrap_or_else(|e| e.into_inner()).push(msg);
         return Ok(true);
@@ -706,7 +744,8 @@ fn send_node_message(base_url: String, sender_name: String, content: String, tok
     let body = serde_json::json!({
         "senderName": sender_name,
         "content": content,
-        "senderIp": my_ip
+        "senderIp": my_ip,
+        "clientId": client_id
     });
 
     let client = get_http_client();
@@ -728,6 +767,7 @@ fn send_node_message(base_url: String, sender_name: String, content: String, tok
                 timestamp: now_ms,
                 is_from_phone: false,
                 sender_ip: my_ip,
+                client_id,
             };
             state.messages.lock().unwrap_or_else(|e| e.into_inner()).push(msg);
             Ok(true)
@@ -931,16 +971,17 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
 
                 let host_token = uuid::Uuid::new_v4().to_string();
                 *state.host_token.lock().unwrap() = host_token.clone();
+                *state.is_tauri_host.lock().unwrap() = false;
                 state.auth_tokens.lock().unwrap().insert(host_token.clone());
                 let host_member = RoomMember {
                     id: uuid::Uuid::new_v4().to_string(),
-                    name: format!("{} ({}) (房主)", dev_name, primary_ip),
+                    name: format!("{} (房主)", dev_name),
                     ip: primary_ip,
                     platform: "Windows".into(),
                     joined_at: now,
                     last_seen: now,
                 };
-                state.members.lock().unwrap().insert("127.0.0.1".into(), host_member);
+                state.members.lock().unwrap().insert("host".into(), host_member);
 
                 let mut cfg_val = serde_json::to_value(&cfg).unwrap_or_default();
                 if let Some(obj) = cfg_val.as_object_mut() {
@@ -984,6 +1025,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     id
                 };
                 *state.host_token.lock().unwrap() = String::new();
+                *state.is_tauri_host.lock().unwrap() = false;
                 state.members.lock().unwrap().clear();
                 state.auth_tokens.lock().unwrap().clear();
                 state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -1047,16 +1089,14 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         success = true;
                         let token = uuid::Uuid::new_v4().to_string();
                         token_str = token.clone();
-                        state.auth_tokens.lock().unwrap().insert(token);
+                        state.auth_tokens.lock().unwrap().insert(token.clone());
 
                         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                         let clean_name = name.trim();
                         let display_name = if clean_name.is_empty() {
-                            format!("访客设备 ({})", client_ip)
-                        } else if clean_name.contains(&format!("({})", client_ip)) {
-                            clean_name.to_string()
+                            "访客设备".to_string()
                         } else {
-                            format!("{} ({})", clean_name, client_ip)
+                            clean_name.to_string()
                         };
 
                         let member = RoomMember {
@@ -1067,7 +1107,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                             joined_at: now,
                             last_seen: now,
                         };
-                        state.members.lock().unwrap().insert(client_ip, member);
+                        state.members.lock().unwrap().insert(token, member);
 
                         room_info = serde_json::json!({
                             "roomId": room.room_id,
@@ -1095,32 +1135,53 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 let client_ip = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_else(|| "127.0.0.1".into());
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
 
+                let token_header = req.headers().iter()
+                    .find(|h| h.field.equiv("X-Room-Token"))
+                    .map(|h| h.value.as_str().to_string());
+
                 let mut body = String::new();
                 let _ = req.as_reader().read_to_string(&mut body);
-                let (client_name, client_plat) = if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
+                let (client_name, client_plat, client_token) = if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
                     let n = val["name"].as_str().map(|s| s.to_string());
                     let p = val["platform"].as_str().map(|s| s.to_string());
-                    (n, p)
+                    let t = val["token"].as_str().map(|s| s.to_string()).or(token_header);
+                    (n, p, t)
                 } else {
-                    (None, None)
+                    (None, None, token_header)
                 };
 
                 let room = state.room.lock().unwrap().clone();
                 let mut members = state.members.lock().unwrap();
 
-                if let Some(m) = members.get_mut(&client_ip) {
-                    m.last_seen = now;
-                    if let Some(n) = client_name {
-                        let clean_n = n.trim();
-                        if !clean_n.is_empty() {
-                            m.name = clean_n.to_string();
+                let mut matched = false;
+                if let Some(ref t) = client_token {
+                    if let Some(m) = members.get_mut(t) {
+                        m.last_seen = now;
+                        if let Some(ref n) = client_name {
+                            let clean_n = n.trim();
+                            if !clean_n.is_empty() {
+                                m.name = clean_n.to_string();
+                            }
                         }
+                        matched = true;
                     }
-                } else if client_ip != "127.0.0.1" && client_ip != "::1" {
-                    let display_name = client_name.unwrap_or_else(|| {
-                        format!("设备 ({})", client_ip)
-                    });
+                }
+                if !matched {
+                    if let Some(m) = members.values_mut().find(|m| m.ip == client_ip) {
+                        m.last_seen = now;
+                        if let Some(ref n) = client_name {
+                            let clean_n = n.trim();
+                            if !clean_n.is_empty() {
+                                m.name = clean_n.to_string();
+                            }
+                        }
+                        matched = true;
+                    }
+                }
+                if !matched && client_ip != "127.0.0.1" && client_ip != "::1" {
+                    let display_name = client_name.unwrap_or_else(|| "访客设备".into());
                     let platform = client_plat.unwrap_or_else(|| "Client".into());
+                    let key = client_token.unwrap_or_else(|| client_ip.clone());
                     let member = RoomMember {
                         id: uuid::Uuid::new_v4().to_string(),
                         name: display_name,
@@ -1129,7 +1190,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         joined_at: now,
                         last_seen: now,
                     };
-                    members.insert(client_ip.clone(), member);
+                    members.insert(key, member);
                 }
 
                 let json = serde_json::json!({
@@ -1152,7 +1213,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
             if url == "/api/room/members" && method == Method::Get {
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                 let mut members_map = state.members.lock().unwrap();
-                members_map.retain(|k, m| k == "127.0.0.1" || now.saturating_sub(m.last_seen) < 30);
+                members_map.retain(|k, m| k == "host" || k == "127.0.0.1" || now.saturating_sub(m.last_seen) < 30);
                 let list: Vec<RoomMember> = members_map.values().cloned().collect();
                 let json = serde_json::json!({ "members": list }).to_string();
                 let mut resp = Response::from_string(json);
@@ -1455,6 +1516,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         let sender_ip_field = val["senderIp"].as_str().unwrap_or("").trim().to_string();
                         let remote_ip = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_else(|| "127.0.0.1".into());
                         let sender_ip = if !sender_ip_field.is_empty() { sender_ip_field } else { remote_ip };
+                        let client_id = val["clientId"].as_str().map(|s| s.to_string());
                         let is_from_phone = sender_name.contains("手机") || sender_name.contains("Android") || sender_name.contains("iPhone") || sender_name.contains("iPad");
                         let now_ms = SystemTime::now()
                             .duration_since(UNIX_EPOCH)
@@ -1468,6 +1530,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                             timestamp: now_ms,
                             is_from_phone,
                             sender_ip: sender_ip.clone(),
+                            client_id,
                         };
                         state.messages.lock().unwrap_or_else(|e| e.into_inner()).push(msg);
 
@@ -1830,6 +1893,7 @@ fn main() {
         discovered_rooms: Mutex::new(HashMap::new()),
         auth_tokens: Mutex::new(HashSet::new()),
         host_token: Mutex::new(String::new()),
+        is_tauri_host: Mutex::new(false),
     });
 
     // 启动 HTTP 服务端 (默认 9527)

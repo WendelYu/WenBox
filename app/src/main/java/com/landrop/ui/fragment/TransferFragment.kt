@@ -879,12 +879,14 @@ class TransferFragment : Fragment() {
         }
     }
 
+    private val phoneClientId: String by lazy { "android_" + UUID.randomUUID().toString().take(8) }
+
     private fun sendChatContent(text: String) {
         val ctx = context ?: return
         val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
         val myNick = sp.getString("user_nickname", null) ?: "${Build.BRAND}手机"
         val myIp = NetworkUtils.getAllLocalIpAddresses(ctx).firstOrNull()?.ip ?: ""
-        MessageManager.addPhoneMessage(text, "📱 $myNick", myIp)
+        MessageManager.addPhoneMessage(text, myNick, myIp, phoneClientId)
 
         // 如果处于 JOINED 模式，向房主服务端发送此条消息
         if (currentRoomMode == RoomMode.JOINED) {
@@ -895,8 +897,9 @@ class TransferFragment : Fragment() {
                         val sendUrl = "http://${r.ip}:${r.port}/api/messages"
                         val body = JSONObject().apply {
                             put("content", text)
-                            put("senderName", "📱 $myNick")
+                            put("senderName", myNick)
                             put("senderIp", myIp)
+                            put("clientId", phoneClientId)
                         }
                         val headers = mutableMapOf<String, String>()
                         joinedToken?.let { headers["X-Room-Token"] = it }
@@ -967,14 +970,14 @@ class TransferFragment : Fragment() {
 
         val itemBinding = ItemChatMessageBinding.inflate(LayoutInflater.from(ctx), binding.llChatMessages, false)
         val timeStr = timeFormat.format(Date(msg.timestamp))
-        val ipTag = if (msg.senderIp.isNotBlank()) " (${msg.senderIp})" else ""
 
-        if (msg.isFromPhone) {
-            val name = msg.senderName.ifBlank { "📱 本机" }
-            itemBinding.tvSenderInfo.text = "（我）$name$ipTag"
+        val cleanName = msg.senderName.replace(Regex("^[📱💻👑\\s]+"), "").trim().ifBlank { "成员" }
+        val isMe = (msg.clientId.isNotBlank() && msg.clientId == phoneClientId) || msg.isFromPhone
+        if (isMe) {
+            itemBinding.tvSenderInfo.text = "（我）$cleanName"
             itemBinding.tvSenderInfo.setTextColor(ContextCompat.getColor(ctx, R.color.chat_accent_blue))
         } else {
-            itemBinding.tvSenderInfo.text = "${msg.senderName}$ipTag"
+            itemBinding.tvSenderInfo.text = cleanName
             itemBinding.tvSenderInfo.setTextColor(ContextCompat.getColor(ctx, R.color.chat_accent_green))
         }
         itemBinding.tvMessageTime.text = timeStr

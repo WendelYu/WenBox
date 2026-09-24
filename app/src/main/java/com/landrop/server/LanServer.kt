@@ -213,18 +213,22 @@ class LanServer(
                     val postData = getUtf8PostData(map)
                     var clientName: String? = null
                     var clientPlatform: String? = null
+                    var token: String? = session.headers["x-room-token"]
                     if (!postData.isNullOrBlank()) {
                         try {
                             val json = JSONObject(postData)
                             clientName = json.optString("name", null)
                             clientPlatform = json.optString("platform", null)
+                            if (token.isNullOrBlank()) {
+                                token = json.optString("token", null)
+                            }
                         } catch (_: Exception) {}
                     }
                     val clientIp = session.headers["http-client-ip"]
                         ?: session.headers["remote-addr"]
                         ?: session.remoteIpAddress
                         ?: "127.0.0.1"
-                    RoomManager.heartbeat(clientIp, clientName, clientPlatform)
+                    RoomManager.heartbeat(clientIp, clientName, clientPlatform, token)
                     val room = RoomManager.currentRoom
                     val result = JSONObject().apply {
                         put("success", true)
@@ -399,6 +403,7 @@ class LanServer(
                             put("timestamp", m.timestamp)
                             put("isFromPhone", m.isFromPhone)
                             put("senderIp", m.senderIp)
+                            put("clientId", m.clientId)
                         }
                         jsonArray.put(item)
                     }
@@ -485,31 +490,34 @@ class LanServer(
         try { session.parseBody(map) } catch (_: Exception) {}
         val postData = getUtf8PostData(map)
         var content = ""
-        var senderName = "💻 电脑端"
+        var senderName = "成员"
         var senderIp = ""
+        var clientId = ""
         val clientIp = session.remoteIpAddress ?: ""
 
         if (!postData.isNullOrBlank()) {
             try {
                 val json = JSONObject(postData)
                 content = json.optString("content", "")
-                senderName = json.optString("senderName", "💻 电脑端")
+                senderName = json.optString("senderName", "成员")
                 senderIp = json.optString("senderIp", "")
+                clientId = json.optString("clientId", "")
             } catch (_: Exception) {}
         }
 
         if (content.isBlank()) {
             val params = session.parameters
             content = params["content"]?.firstOrNull() ?: ""
-            senderName = params["senderName"]?.firstOrNull() ?: "💻 电脑端"
+            senderName = params["senderName"]?.firstOrNull() ?: "成员"
             senderIp = params["senderIp"]?.firstOrNull() ?: ""
+            clientId = params["clientId"]?.firstOrNull() ?: ""
         }
         if (senderIp.isBlank()) {
             senderIp = clientIp
         }
 
         if (content.isNotBlank()) {
-            val msg = MessageManager.addClientMessage(content, senderName, senderIp)
+            val msg = MessageManager.addClientMessage(content, senderName, senderIp, clientId)
             val respBytes = "{\"success\": true, \"id\": \"${msg.id}\"}".toByteArray(Charsets.UTF_8)
             return newFixedLengthResponse(
                 Response.Status.OK,

@@ -18,28 +18,30 @@ object MessageManager {
         }
     }
 
-    fun addPhoneMessage(content: String, senderName: String = "📱 手机端", senderIp: String = ""): ChatMessage {
+    fun addPhoneMessage(content: String, senderName: String = "本机", senderIp: String = "", clientId: String = ""): ChatMessage {
         val msg = ChatMessage(
             id = UUID.randomUUID().toString(),
             senderName = senderName,
             content = content,
             timestamp = System.currentTimeMillis(),
             isFromPhone = true,
-            senderIp = senderIp
+            senderIp = senderIp,
+            clientId = clientId
         )
         messages.add(msg)
         onMessageReceivedListener?.invoke(msg)
         return msg
     }
 
-    fun addClientMessage(content: String, senderName: String = "💻 电脑端", senderIp: String = ""): ChatMessage {
+    fun addClientMessage(content: String, senderName: String = "成员", senderIp: String = "", clientId: String = ""): ChatMessage {
         val msg = ChatMessage(
             id = UUID.randomUUID().toString(),
             senderName = senderName,
             content = content,
             timestamp = System.currentTimeMillis(),
             isFromPhone = false,
-            senderIp = senderIp
+            senderIp = senderIp,
+            clientId = clientId
         )
         messages.add(msg)
         onMessageReceivedListener?.invoke(msg)
@@ -52,7 +54,8 @@ object MessageManager {
         senderName: String,
         timestamp: Long,
         senderIp: String = "",
-        isFromPhone: Boolean = false
+        isFromPhone: Boolean = false,
+        clientId: String = ""
     ): ChatMessage? {
         if (messages.any { it.id == id }) return null
         val msg = ChatMessage(
@@ -61,7 +64,8 @@ object MessageManager {
             content = content,
             timestamp = timestamp,
             isFromPhone = isFromPhone,
-            senderIp = senderIp
+            senderIp = senderIp,
+            clientId = clientId
         )
         messages.add(msg)
         onMessageReceivedListener?.invoke(msg)
