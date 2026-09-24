@@ -131,8 +131,7 @@ object RoomManager {
     }
 
     fun heartbeat(clientIp: String, name: String? = null, platform: String? = null, token: String? = null, accessIp: String? = null) {
-        val existing = (if (!token.isNullOrBlank()) members[token] else null)
-            ?: members.values.find { it.ip == clientIp }
+        val existing = if (!token.isNullOrBlank()) members[token] else null
         if (existing != null) {
             existing.lastSeen = System.currentTimeMillis()
             if (!accessIp.isNullOrBlank()) {
@@ -178,7 +177,7 @@ object RoomManager {
         val iterator = members.entries.iterator()
         while (iterator.hasNext()) {
             val item = iterator.next()
-            if (now - item.value.lastSeen > 8000 && item.key != "host") {
+            if (now - item.value.lastSeen > 15000 && item.key != "host") {
                 iterator.remove()
             }
         }

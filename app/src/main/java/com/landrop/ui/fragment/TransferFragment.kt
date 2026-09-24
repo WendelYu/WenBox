@@ -667,8 +667,12 @@ class TransferFragment : Fragment() {
                                 put("name", "📱 $newNick")
                                 put("platform", "Mobile")
                                 put("roomId", r.roomId)
+                                if (!joinedToken.isNullOrBlank()) {
+                                    put("token", joinedToken)
+                                }
                             }
-                            HttpHelper.postJson(hbUrl, hbBody)
+                            val headers = if (!joinedToken.isNullOrBlank()) mapOf("X-Room-Token" to joinedToken!!) else emptyMap()
+                            HttpHelper.postJson(hbUrl, hbBody, headers)
                         } catch (_: Exception) {}
                     }
                 }
@@ -769,8 +773,12 @@ class TransferFragment : Fragment() {
                         put("name", "📱 $myNick")
                         put("platform", "Mobile")
                         put("roomId", room.roomId)
+                        if (!joinedToken.isNullOrBlank()) {
+                            put("token", joinedToken)
+                        }
                     }
-                    val (hbCode, hbRes) = HttpHelper.postJson(hbUrl, hbBody)
+                    val headers = if (!joinedToken.isNullOrBlank()) mapOf("X-Room-Token" to joinedToken!!) else emptyMap()
+                    val (hbCode, hbRes) = HttpHelper.postJson(hbUrl, hbBody, headers)
                     if (hbCode == 200) {
                         cycleSuccess = true
                         val hbJson = JSONObject(hbRes)

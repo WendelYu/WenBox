@@ -443,6 +443,10 @@
                     selfDeviceInfo.ip = primary || (selfLanIps.length > 0 ? (selfLanIps[0].ip || selfLanIps[0]) : '127.0.0.1');
                 }
 
+                if (selfDeviceInfo.ip) {
+                    invoke('set_room_host_ip_cmd', { ip: selfDeviceInfo.ip }).catch(() => {});
+                }
+
                 renderMultiIpPills(selfLanIps, selfDeviceInfo.ip);
                 if (roomState.mode === 'host') {
                     updateHostBannerDisplay();
@@ -578,7 +582,8 @@
             pollRoomMembers();
         } else if (mode === 'joined') {
             roomState.roomInfo = data;
-            currentTargetBaseUrl = data.hostUrl.trim().trim_end ? data.hostUrl.trim().replace(/\/+$/, '') : data.hostUrl;
+            const rawHost = (data && data.hostUrl && String(data.hostUrl).trim()) ? String(data.hostUrl).trim() : (isTauriDesktop() ? 'http://127.0.0.1:9527' : window.location.origin);
+            currentTargetBaseUrl = rawHost.replace(/\/+$/, '');
             currentTargetDeviceName = data.hostDevice || '房主';
 
             if (roomClientBanner) roomClientBanner.style.display = 'none';
@@ -599,6 +604,7 @@
             if (uploadSectionSubtitle) uploadSectionSubtitle.textContent = '拖拽或点击选择文件，文件将直接投送到房主电脑 Downloads/WenBox 目录';
 
             loadFiles();
+            pollJoinedMembers();
         } else {
             // 默认客户端发现模式 (Client Mode)
             roomState.mode = 'client';
@@ -651,7 +657,7 @@
             if (!hUrl && data.hostIp && data.hostPort) {
                 hUrl = `http://${data.hostIp}:${data.hostPort}`;
             }
-            const memberCount = (latestRoomMembers && latestRoomMembers.length) || 2;
+            const memberCount = (latestRoomMembers && latestRoomMembers.length > 0) ? latestRoomMembers.length : 1;
             if (onlineBadge) onlineBadge.textContent = `👥 在线: ${memberCount} 人 (点击查看)`;
             if (ipBadge) ipBadge.textContent = `🌐 房主地址: ${hUrl || '已连接'}`;
             if (copyBtn) {
@@ -754,7 +760,8 @@
                 if (invoke) {
                     const cfg = await invoke('create_room_cmd', {
                         roomName: rName,
-                        pin: rPin
+                        pin: rPin,
+                        hostIp: selfDeviceInfo.ip || null
                     });
                     window.closeCreateRoomModal();
                     setRoomMode('host', cfg);
@@ -763,7 +770,7 @@
                     const resp = await fetch(getApiOrigin() + '/api/room/create', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ roomName: rName, pin: rPin })
+                        body: JSON.stringify({ roomName: rName, pin: rPin, hostIp: selfDeviceInfo.ip || undefined })
                     });
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                     const cfg = await resp.json();
@@ -912,8 +919,9 @@
 
     window.openJoinRoomDialog = function (data) {
         if (!data) return;
+        const effectiveHostUrl = (data.hostUrl && String(data.hostUrl).trim()) ? String(data.hostUrl).trim().replace(/\/+$/, '') : (isTauriDesktop() ? 'http://127.0.0.1:9527' : window.location.origin);
         pendingJoinRoomData = {
-            hostUrl: data.hostUrl,
+            hostUrl: effectiveHostUrl,
             roomName: data.roomName || data.roomId || '房间',
             roomId: data.roomId || '',
             hostDevice: data.hostDevice || '主机',
@@ -1010,16 +1018,17 @@
             showToast('正在验证并接入房间...');
             let joinRes = null;
             const myNick = nickname || localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
+            const effectiveHostUrl = (hostUrl && String(hostUrl).trim()) ? String(hostUrl).trim().replace(/\/+$/, '') : (isTauriDesktop() ? 'http://127.0.0.1:9527' : window.location.origin);
 
             const invoke = getTauriInvoke();
             if (invoke) {
                 joinRes = await invoke('join_remote_room_cmd', {
-                    hostUrl: hostUrl,
+                    hostUrl: effectiveHostUrl,
                     pin: pin,
                     myName: myNick
                 });
             } else {
-                const resp = await fetch(`${hostUrl}/api/room/join`, {
+                const resp = await fetch(`${effectiveHostUrl}/api/room/join`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1040,7 +1049,7 @@
                 localStorage.setItem('wenbox_room_token', roomState.token);
                 window.closeJoinPinModal();
                 setRoomMode('joined', {
-                    hostUrl: hostUrl,
+                    hostUrl: effectiveHostUrl,
                     roomName: joinRes.room ? joinRes.room.roomName : (roomName || '已加入房间'),
                     roomId: joinRes.room ? joinRes.room.roomId : roomId,
                     hostDevice: joinRes.room ? joinRes.room.hostDevice : hostDevice
@@ -1165,11 +1174,13 @@
 
     // 访客端轮询房间成员、心跳与在线人数
     async function pollJoinedMembers() {
-        if (roomState.mode !== 'joined' || !currentTargetBaseUrl) return;
+        if (roomState.mode !== 'joined') return;
+        const baseUrl = (currentTargetBaseUrl || (isTauriDesktop() ? 'http://127.0.0.1:9527' : window.location.origin)).replace(/\/+$/, '');
+        if (!baseUrl) return;
         try {
             // 1. 发送心跳保证在线登记，并反向同步主机最新房间名
             try {
-                const hbRes = await fetch(currentTargetBaseUrl + '/api/room/heartbeat', {
+                const hbRes = await fetch(baseUrl + '/api/room/heartbeat', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1181,7 +1192,7 @@
                         token: roomState.token || '',
                         roomId: roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : ''
                     }),
-                    signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(2000) : undefined
+                    signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(3000) : undefined
                 });
                 if (hbRes.ok) {
                     const hbData = await hbRes.json();
@@ -1197,36 +1208,50 @@
             } catch (_) {}
 
             // 2. 拉取最新在线成员列表
-            const api = currentTargetBaseUrl + '/api/room/members?t=' + Date.now();
+            const api = baseUrl + '/api/room/members?t=' + Date.now();
             const res = await fetch(api, {
-                signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(2000) : undefined
+                signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(3000) : undefined
             });
             if (res.ok) {
                 const data = await res.json();
                 const members = data.members || [];
                 latestRoomMembers = members;
                 const onlineBadge = document.getElementById('chatOnlineMemberBadge');
-                if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length || 2} 人 (点击查看)`;
+                if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length} 人 (点击查看)`;
             }
         } catch (_) {}
     }
 
-    window.openOnlineMembersModal = function() {
+    window.openOnlineMembersModal = async function() {
         const modal = document.getElementById('onlineMembersModal');
         const listEl = document.getElementById('onlineMembersModalList');
         if (!modal || !listEl) return;
 
-        let members = latestRoomMembers;
-        if (!members || members.length === 0) {
-            const myIp = selfDeviceInfo.ip || (currentTargetBaseUrl ? currentTargetBaseUrl.replace(/https?:\/\/([^:]+).*/, '$1') : '127.0.0.1');
-            members = [{ name: '当前设备 (本机)', ip: myIp }];
+        // 如果成员数据尚未加载，立即尝试获取一次
+        if (!latestRoomMembers || latestRoomMembers.length === 0) {
+            if (roomState.mode === 'joined') {
+                await pollJoinedMembers();
+            } else if (roomState.mode === 'host') {
+                await pollRoomMembers();
+            }
         }
 
+        let members = latestRoomMembers;
+        if (!members || members.length === 0) {
+            listEl.innerHTML = `<div style="text-align: center; color: var(--ic-text-sub); padding: 20px 0; font-size: 13px;">暂无在线成员信息</div>`;
+            modal.style.display = 'flex';
+            return;
+        }
+
+        const myName = getClientSenderName();
         listEl.innerHTML = members.map(m => {
             const isHost = (m.name || '').includes('房主') || m.id === 'host';
             let cleanName = (m.name || '局域网成员').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim();
             if (!cleanName) cleanName = m.name || '局域网成员';
-            const ip = m.ip || (selfDeviceInfo.ip || '127.0.0.1');
+            const isMe = (roomState.mode === 'host' && isHost)
+                || (roomState.token && m.id === roomState.token)
+                || (!isHost && cleanName === myName);
+            const ip = m.ip || '127.0.0.1';
             const accessIp = m.accessIp || '';
             const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
 
@@ -1263,7 +1288,7 @@
                     <div style="display: flex; flex-direction: column; gap: 4px; overflow: hidden; flex: 1;">
                         <div style="display: flex; align-items: center; gap: 6px;">
                             <span style="font-size: 13px; font-weight: 600; color: ${isHost ? '#10B981' : 'var(--ic-text-main)'}; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
-                                ${isHost ? '👑 ' : ''}${escapeHtml(cleanName)}${isHost ? ' (房主)' : ''}
+                                ${isHost ? '👑 ' : ''}${isMe ? '（我）' : ''}${escapeHtml(cleanName)}${isHost ? ' (房主)' : ''}
                             </span>
                             ${tagHtml}
                         </div>
@@ -2007,7 +2032,7 @@
                         sessionStorage.removeItem('wenbox_host_token');
                         setRoomMode('client');
                         window.openJoinRoomDialog({
-                            hostUrl: getApiOrigin(),
+                            hostUrl: getApiOrigin() || window.location.origin,
                             roomName: st.roomName || st.roomId,
                             roomId: st.roomId,
                             hostDevice: st.hostDevice || '主机',
@@ -2042,12 +2067,13 @@
             if (currentActiveTab === 'tab-transfer') {
                 loadFiles();
             }
+            pollJoinedMembers();
         } else {
             if (currentActiveTab === 'tab-transfer') {
                 pollDiscoveredRooms();
             }
         }
-    }, 3000);
+    }, 2500);
     setInterval(checkSelfServerStatus, 6000);
 
 
@@ -2213,10 +2239,6 @@
             }
 
             joinedDisconnectCount = 0;
-
-            if (roomState.mode === 'joined') {
-                pollJoinedMembers();
-            }
 
             let hasNew = false;
             messages.forEach(msg => {
