@@ -73,8 +73,10 @@ object RoomManager {
         val room = currentRoom ?: return
         val updated = room.copy(hostIp = clean)
         currentRoom = updated
-        members["host"]?.let {
-            it.ip = clean
+        val hostMember = members["host"]
+        if (hostMember != null) {
+            hostMember.ip = clean
+            members["host"] = hostMember
         }
         onRoomStateChangedListener?.invoke(updated)
         onMembersChangedListener?.invoke(getMembers())
