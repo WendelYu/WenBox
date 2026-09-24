@@ -777,8 +777,8 @@ class TransferFragment : Fragment() {
                             put("token", joinedToken)
                         }
                     }
-                    val headers = if (!joinedToken.isNullOrBlank()) mapOf("X-Room-Token" to joinedToken!!) else emptyMap()
-                    val (hbCode, hbRes) = HttpHelper.postJson(hbUrl, hbBody, headers)
+                    val hbHeaders = if (!joinedToken.isNullOrBlank()) mapOf("X-Room-Token" to joinedToken!!) else emptyMap()
+                    val (hbCode, hbRes) = HttpHelper.postJson(hbUrl, hbBody, hbHeaders)
                     if (hbCode == 200) {
                         cycleSuccess = true
                         val hbJson = JSONObject(hbRes)
@@ -834,9 +834,9 @@ class TransferFragment : Fragment() {
 
                     // 3. 拉取房间聊天消息
                     val msgUrl = "http://${room.ip}:${room.port}/api/messages"
-                    val headers = mutableMapOf<String, String>()
-                    joinedToken?.let { headers["X-Room-Token"] = it }
-                    val (code, res) = HttpHelper.getJson(msgUrl, headers)
+                    val msgHeaders = mutableMapOf<String, String>()
+                    joinedToken?.let { msgHeaders["X-Room-Token"] = it }
+                    val (code, res) = HttpHelper.getJson(msgUrl, msgHeaders)
                     if (code == 200) {
                         cycleSuccess = true
                         val json = JSONObject(res)
