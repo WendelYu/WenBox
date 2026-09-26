@@ -405,6 +405,30 @@ class LanServer(
                     )
                 }
 
+                // 2.5 获取已接收文件列表
+                method == Method.GET && uri == "/api/received_files" -> {
+                    val files = FileManager.getReceivedFiles()
+                    val jsonArray = JSONArray()
+                    for (f in files) {
+                        val item = JSONObject().apply {
+                            put("id", f.id)
+                            put("name", f.name)
+                            put("size", f.size)
+                            put("mimeType", f.mimeType)
+                            put("path", "Download/WenBox/" + f.name)
+                        }
+                        jsonArray.put(item)
+                    }
+                    val result = JSONObject().apply {
+                        put("files", jsonArray)
+                    }
+                    newFixedLengthResponse(
+                        Response.Status.OK,
+                        "application/json; charset=UTF-8",
+                        result.toString()
+                    )
+                }
+
                 // 3. 单文件流式下载
                 method == Method.GET && uri.startsWith("/api/download/") -> {
                     val fileId = uri.removePrefix("/api/download/")
@@ -516,7 +540,7 @@ class LanServer(
                     put("fileId", sharedFile?.id ?: "")
                     put("name", originalName)
                     put("size", sharedFile?.size ?: 0L)
-                    put("message", "File saved to Download/LanDrop")
+                    put("message", "File saved to Download/WenBox")
                 }
                 val resBytes = resObj.toString().toByteArray(Charsets.UTF_8)
                 return newFixedLengthResponse(

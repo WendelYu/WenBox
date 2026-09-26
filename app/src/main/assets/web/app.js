@@ -79,6 +79,7 @@
     // 模态弹窗元素
     const createRoomModal = document.getElementById('createRoomModal');
     const btnOpenCreateRoomModal = document.getElementById('btnOpenCreateRoomModal');
+    const modalInputCreateRoomNickname = document.getElementById('modalInputCreateRoomNickname');
     const modalInputRoomName = document.getElementById('modalInputRoomName');
     const modalInputRoomPin = document.getElementById('modalInputRoomPin');
     const modalBtnConfirmCreateRoom = document.getElementById('modalBtnConfirmCreateRoom');
@@ -154,12 +155,18 @@
     };
 
     window.openCreateRoomModal = function () {
+        if (modalInputCreateRoomNickname) {
+            modalInputCreateRoomNickname.value = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
+        }
         if (modalInputRoomName) {
             const randomNum = Math.floor(1000 + Math.random() * 9000);
             modalInputRoomName.value = `WenBox-${randomNum}`;
         }
         if (modalInputRoomPin) modalInputRoomPin.value = '';
         if (createRoomModal) createRoomModal.style.display = 'flex';
+        if (modalInputCreateRoomNickname) {
+            setTimeout(() => { modalInputCreateRoomNickname.focus(); modalInputCreateRoomNickname.select(); }, 120);
+        }
     };
 
     if (btnOpenCreateRoomModal) {
@@ -305,10 +312,14 @@
 
     function detectClientPlatform() {
         if (isTauriDesktop()) return 'Windows';
-        if (/Android/i.test(navigator.userAgent)) return 'Android';
-        if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) return 'iOS';
-        if (/Mobile/i.test(navigator.userAgent)) return 'Mobile';
-        return 'Browser';
+        const ua = navigator.userAgent || '';
+        if (/Android/i.test(ua)) return 'Android';
+        if (/iPhone|iPad|iPod/i.test(ua)) return 'iOS';
+        if (/Macintosh|Mac OS X/i.test(ua)) return 'macOS';
+        if (/Windows/i.test(ua)) return 'Windows';
+        if (/Linux/i.test(ua)) return 'Linux';
+        if (/Mobile/i.test(ua)) return 'Mobile';
+        return 'Web';
     }
 
     let initialIp = isTauriDesktop() ? '127.0.0.1' : '';
@@ -750,8 +761,13 @@
     // ---------------- 创建房间 (成为服务端) ----------------
     if (modalBtnConfirmCreateRoom) {
         modalBtnConfirmCreateRoom.addEventListener('click', async () => {
+            const rNick = (modalInputCreateRoomNickname && modalInputCreateRoomNickname.value.trim()) || localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
+            localStorage.setItem('wenbox_nickname', rNick);
+            updateMyNicknameDisplay(rNick);
+
             const rName = (modalInputRoomName && modalInputRoomName.value.trim()) || `WenBox-${Math.floor(1000 + Math.random() * 9000)}`;
             const rPin = modalInputRoomPin ? modalInputRoomPin.value.trim() : '';
+            const myPlatform = detectClientPlatform();
 
             modalBtnConfirmCreateRoom.disabled = true;
             modalBtnConfirmCreateRoom.textContent = '正在开启房间服务...';
@@ -762,14 +778,14 @@
                     const cfg = await invoke('create_room_cmd', {
                         roomName: rName,
                         pin: rPin,
-                        hostIp: selfDeviceInfo.ip || null
+                        hostIp: selfDeviceInfo.ip || null,
+                        creatorName: rNick,
+                        creatorPlatform: myPlatform
                     });
                     window.closeCreateRoomModal();
                     setRoomMode('host', cfg);
                     showToast(`房间「${rName}」已创建！本机已变身服务端`);
                 } else {
-                    const myNick = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
-                    const myPlatform = detectClientPlatform();
                     const resp = await fetch(getApiOrigin() + '/api/room/create', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -777,7 +793,7 @@
                             roomName: rName,
                             pin: rPin,
                             hostIp: selfDeviceInfo.ip || undefined,
-                            creatorName: myNick,
+                            creatorName: rNick,
                             creatorPlatform: myPlatform
                         })
                     });
@@ -1077,7 +1093,14 @@
     function whoami_device_name_client() {
         const storedNick = localStorage.getItem('wenbox_nickname');
         if (storedNick && storedNick.trim()) return storedNick.trim();
-        return `用户-${Math.floor(100 + Math.random() * 900)}`;
+        const plat = detectClientPlatform();
+        let prefix = '访客';
+        if (plat === 'macOS') prefix = 'Mac电脑';
+        else if (plat === 'Windows') prefix = 'Win电脑';
+        else if (plat === 'Android') prefix = 'Android手机';
+        else if (plat === 'iOS') prefix = 'iPhone';
+        else if (plat === 'Linux') prefix = 'Linux设备';
+        return `${prefix}-${Math.floor(100 + Math.random() * 900)}`;
     }
 
     function updateMyNicknameDisplay(nick) {
@@ -1329,10 +1352,11 @@
             let detailsHtml = '';
 
             if (isHost) {
-                tagHtml = `<span style="font-size: 11px; padding: 1px 6px; background: rgba(16, 185, 129, 0.15); color: #10B981; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.3);">本机服务</span>`;
+                tagHtml = `<span style="font-size: 11px; padding: 1px 6px; background: rgba(16, 185, 129, 0.15); color: #10B981; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.3);">👑 房主 (${escapeHtml(m.platform || '房主')})</span>`;
                 detailsHtml = `
                     <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">
-                        <span style="color: var(--ic-text-sub);">🌐 服务网卡: <b style="color: var(--ic-accent-blue);">${escapeHtml(ip)}</b></span>
+                        <span style="color: var(--ic-text-sub);">👑 房主设备 IP: <b style="color: #10B981;">${escapeHtml(ip)}</b></span>
+                        ${accessIp ? `<span style="color: var(--ic-text-sub);">🚪 服务接入网卡: <b style="color: var(--ic-accent-blue);">${escapeHtml(accessIp)}</b></span>` : ''}
                     </div>
                 `;
             } else if (isLoopback) {
@@ -1533,6 +1557,38 @@
         }
     }
 
+    function formatDisplayPath(rawPath) {
+        if (!rawPath) return '';
+        const clientPlat = detectClientPlatform();
+        const isWin = clientPlat === 'Windows';
+
+        // Check if rawPath is a Windows path with drive letter (e.g. C:\Users\...)
+        const winDriveMatch = rawPath.match(/^[A-Za-z]:[\\/](?:Users[\\/][^\\/]+[\\/])?Downloads[\\/](.*)$/i);
+        const winWenBoxMatch = rawPath.match(/^[A-Za-z]:[\\/].*?[\\/]WenBox[\\/](.*)$/i);
+
+        if (!isWin) {
+            // macOS, Android, iOS, Linux: use forward slashes and native-friendly naming
+            if (winDriveMatch) {
+                const sub = winDriveMatch[1].replace(/\\/g, ' / ');
+                return `下载 / ${sub}`;
+            }
+            if (winWenBoxMatch) {
+                const sub = winWenBoxMatch[1].replace(/\\/g, ' / ');
+                return `下载 / WenBox / ${sub}`;
+            }
+            if (/^[A-Za-z]:[\\/]/.test(rawPath)) {
+                return rawPath.replace(/^[A-Za-z]:[\\/]/, '').replace(/\\/g, ' / ');
+            }
+            return rawPath.replace(/\\/g, '/').replace(/^Download\//i, '下载 / ').replace(/\//g, ' / ');
+        } else {
+            // Windows client
+            if (/^Download[\\/]/i.test(rawPath)) {
+                return rawPath.replace(/\//g, '\\').replace(/^Download\\/i, 'Downloads\\');
+            }
+            return rawPath;
+        }
+    }
+
     function renderLocalSharedFiles(files) {
         if (!localSharedFileListContainer || !localEmptyState) return;
         if (!files || files.length === 0) {
@@ -1553,7 +1609,7 @@
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
                             <div class="file-name" title="${file.name}">${escapeHtml(file.name)}</div>
-                            <div class="file-size">${size} • 本地分享路径: ${escapeHtml(file.path || file.name)}</div>
+                            <div class="file-size">${size} • 本地分享路径: ${escapeHtml(formatDisplayPath(file.path || file.name))}</div>
                         </div>
                     </div>
                     <div style="display: flex; gap: 8px;">
@@ -1627,7 +1683,7 @@
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
                             <div class="file-name" title="${file.name}">${escapeHtml(file.name)}</div>
-                            <div class="file-size">${size} • 保存路径: ${escapeHtml(file.path || 'Downloads/WenBox')}</div>
+                            <div class="file-size">${size} • 保存路径: ${escapeHtml(formatDisplayPath(file.path || 'Downloads/WenBox'))}</div>
                         </div>
                     </div>
                     <a href="${dlUrl}" class="btn-download" download="${escapeHtml(file.name)}">
@@ -1791,7 +1847,8 @@
                         }
                     }
 
-                    reimburseStatus.innerHTML = `✅ <b>大功告成！</b>成功将 ${successCount} 个文件直存到 <b>${selectedPath}\\${dateFolderName}</b> 目录下！`;
+                    const sep = detectClientPlatform() === 'Windows' ? '\\' : '/';
+                    reimburseStatus.innerHTML = `✅ <b>大功告成！</b>成功将 ${successCount} 个文件直存到 <b>${selectedPath}${sep}${dateFolderName}</b> 目录下！`;
                     showToast(`已成功直存 ${successCount} 个文件！`);
                 } catch (tErr) {
                     reimburseStatus.style.display = 'block';
@@ -2099,16 +2156,9 @@
                             setRoomMode('host', st);
                             return;
                         }
-                        // 否则当前浏览器为局域网外部访客！严禁赋予 host 权限，立即清除无效的 hostToken，并引导输入昵称入房
+                        // 否则当前浏览器为局域网外部访客！严禁赋予 host 权限，立即清除无效的 hostToken，停留在客户端发现大厅供自由选择加入
                         sessionStorage.removeItem('wenbox_host_token');
                         setRoomMode('client');
-                        window.openJoinRoomDialog({
-                            hostUrl: getApiOrigin() || window.location.origin,
-                            roomName: st.roomName || st.roomId,
-                            roomId: st.roomId,
-                            hostDevice: st.hostDevice || '主机',
-                            needPassword: !!st.needPassword
-                        });
                         return;
                     } else {
                         // 房间未激活，清除无效的 hostToken

@@ -20,12 +20,15 @@ object FileManager {
 
     // 线程安全的待分享文件列表
     private val files = CopyOnWriteArrayList<SharedFile>()
+    private val receivedFiles = CopyOnWriteArrayList<SharedFile>()
 
     var onFilesChangedListener: (() -> Unit)? = null
 
     fun getFiles(): List<SharedFile> = files.toList()
 
-    fun getFileById(id: String): SharedFile? = files.firstOrNull { it.id == id }
+    fun getReceivedFiles(): List<SharedFile> = receivedFiles.toList()
+
+    fun getFileById(id: String): SharedFile? = files.firstOrNull { it.id == id } ?: receivedFiles.firstOrNull { it.id == id }
 
     fun addFile(context: Context, uri: Uri): SharedFile {
         val resolver = context.contentResolver
@@ -66,16 +69,18 @@ object FileManager {
 
     fun removeFile(id: String) {
         files.removeAll { it.id == id }
+        receivedFiles.removeAll { it.id == id }
         onFilesChangedListener?.invoke()
     }
 
     fun clearAll() {
         files.clear()
+        receivedFiles.clear()
         onFilesChangedListener?.invoke()
     }
 
     /**
-     * 将从电脑端上传的文件保存到手机的系统「下载/LanDrop」目录并注册可供房间内其他成员下载
+     * 将从电脑端上传的文件保存到手机的系统「下载/WenBox」目录并注册可供房间内其他成员下载
      */
     fun saveIncomingFile(context: Context, fileName: String, inputStream: InputStream): SharedFile? {
         return try {
@@ -84,7 +89,7 @@ object FileManager {
                 // Android 10+ 使用 MediaStore Downloads
                 val values = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/LanDrop")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/WenBox")
                     put(MediaStore.Downloads.IS_PENDING, 1)
                 }
                 val resolver = context.contentResolver
@@ -106,6 +111,7 @@ object FileManager {
                         uri = uri
                     )
                     files.add(0, sharedFile)
+                    receivedFiles.add(0, sharedFile)
                     onFilesChangedListener?.invoke()
                     sharedFile
                 } else null
@@ -113,7 +119,7 @@ object FileManager {
                 // Android 9 及以下使用公开外部存储
                 val dir = File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                    "LanDrop"
+                    "WenBox"
                 )
                 if (!dir.exists()) dir.mkdirs()
                 val targetFile = File(dir, fileName)
@@ -130,6 +136,7 @@ object FileManager {
                     uri = fileUri
                 )
                 files.add(0, sharedFile)
+                receivedFiles.add(0, sharedFile)
                 onFilesChangedListener?.invoke()
                 sharedFile
             }

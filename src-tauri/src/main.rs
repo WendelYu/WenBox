@@ -305,8 +305,16 @@ fn save_file_to_directory(dir_path: String, folder_name: String, file_name: Stri
 
 // ---------------- 房间制 Tauri 客户端调用命令 ----------------
 #[tauri::command]
-fn create_room_cmd(room_name: String, pin: String, host_ip: Option<String>, state: tauri::State<Arc<AppState>>) -> Result<RoomConfig, String> {
-    let dev_name = whoami_device_name();
+fn create_room_cmd(
+    room_name: String,
+    pin: String,
+    host_ip: Option<String>,
+    creator_name: Option<String>,
+    creator_platform: Option<String>,
+    state: tauri::State<Arc<AppState>>
+) -> Result<RoomConfig, String> {
+    let dev_name = creator_name.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| whoami_device_name());
+    let platform = creator_platform.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "Windows".to_string());
     let primary_ip = host_ip.filter(|s| !s.trim().is_empty())
         .or_else(|| state.selected_ip.lock().unwrap().clone())
         .unwrap_or_else(get_primary_ip);
@@ -349,7 +357,7 @@ fn create_room_cmd(room_name: String, pin: String, host_ip: Option<String>, stat
         id: uuid::Uuid::new_v4().to_string(),
         name: format!("{} (房主)", dev_name),
         ip: primary_ip.clone(),
-        platform: "Windows".into(),
+        platform: platform,
         access_ip: format!("{}:9527", primary_ip),
         joined_at: now,
         last_seen: now,
@@ -441,12 +449,21 @@ fn get_discovered_rooms_cmd(state: tauri::State<Arc<AppState>>) -> Vec<Discovere
     let my_room = state.room.lock().unwrap().clone();
     let is_tauri_host = *state.is_tauri_host.lock().unwrap();
     if my_room.is_active && !is_tauri_host {
-        // 本地服务由浏览器/外部创建为房主，Win 客户端大厅展示该房间以供加入
+        let (host_dev, host_plat) = {
+            let members = state.members.lock().unwrap();
+            if let Some(m) = members.get("host") {
+                let clean_name = m.name.replace(" (房主)", "").trim().to_string();
+                (if clean_name.is_empty() { my_room.host_device.clone() } else { clean_name }, m.platform.clone())
+            } else {
+                (my_room.host_device.clone(), "Web".to_string())
+            }
+        };
+        list.retain(|r| r.room_id != my_room.room_id);
         list.insert(0, DiscoveredRoom {
             room_id: my_room.room_id,
             room_name: my_room.room_name,
-            host_device: "本机网页房主".into(),
-            host_platform: "Web".into(),
+            host_device: host_dev,
+            host_platform: host_plat,
             ip: "127.0.0.1".into(),
             port: 9527,
             need_password: my_room.need_password,
@@ -509,7 +526,18 @@ fn join_remote_room_cmd(host_url: String, pin: String, my_name: String, state: t
     }
 }
 
-// ---------------- 鉴权辅助函数 ----------------
+// ---------------- 鉴权与网络辅助函数 ----------------
+fn get_clean_remote_ip(req: &tiny_http::Request) -> String {
+    req.remote_addr().map(|a| {
+        let s = a.ip().to_string();
+        if s.starts_with("::ffff:") {
+            s.trim_start_matches("::ffff:").to_string()
+        } else {
+            s
+        }
+    }).unwrap_or_else(|| "127.0.0.1".into())
+}
+
 fn is_authorized(req: &tiny_http::Request, state: &AppState) -> bool {
     let room = state.room.lock().unwrap();
     if !room.is_active || !room.need_password {
@@ -997,10 +1025,12 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     }
                 }
 
-                let client_ip = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_else(|| "127.0.0.1".into());
+                let client_ip = get_clean_remote_ip(&req);
                 let dev_name = creator_name_opt
                     .filter(|s| !s.trim().is_empty())
-                    .unwrap_or_else(|| whoami_device_name());
+                    .unwrap_or_else(|| {
+                        if client_ip == "127.0.0.1" || client_ip == "::1" { whoami_device_name() } else { "访客房主".into() }
+                    });
                 let platform_str = creator_platform_opt
                     .filter(|s| !s.trim().is_empty())
                     .unwrap_or_else(|| {
@@ -1353,20 +1383,27 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
 
                 let my_room = state.room.lock().unwrap().clone();
                 if my_room.is_active {
-                    let primary_ip = get_primary_ip();
-                    let dev_name = whoami_device_name();
-                    if !list.iter().any(|r| r.room_id == my_room.room_id || r.ip == primary_ip) {
-                        list.insert(0, DiscoveredRoom {
-                            room_id: my_room.room_id,
-                            room_name: my_room.room_name,
-                            host_device: dev_name,
-                            host_platform: "Windows".to_string(),
-                            ip: primary_ip,
-                            port,
-                            need_password: my_room.need_password,
-                            last_seen: now,
-                        });
-                    }
+                    let primary_ip = state.selected_ip.lock().unwrap().clone().unwrap_or_else(get_primary_ip);
+                    let (host_dev, host_plat) = {
+                        let members = state.members.lock().unwrap();
+                        if let Some(m) = members.get("host") {
+                            let clean_name = m.name.replace(" (房主)", "").trim().to_string();
+                            (if clean_name.is_empty() { my_room.host_device.clone() } else { clean_name }, m.platform.clone())
+                        } else {
+                            (my_room.host_device.clone(), "Web".to_string())
+                        }
+                    };
+                    list.retain(|r| r.room_id != my_room.room_id && r.ip != primary_ip);
+                    list.insert(0, DiscoveredRoom {
+                        room_id: my_room.room_id,
+                        room_name: my_room.room_name,
+                        host_device: host_dev,
+                        host_platform: host_plat,
+                        ip: primary_ip,
+                        port,
+                        need_password: my_room.need_password,
+                        last_seen: now,
+                    });
                 }
 
                 let json = serde_json::json!({ "rooms": list }).to_string();
@@ -1771,13 +1808,8 @@ fn send_room_probe_cmd() -> Result<bool, String> {
 }
 
 fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
-    let dev_name = whoami_device_name();
-    let platform = "Windows".to_string();
-
     // 1. 启动接收监听线程
     let state_recv = state.clone();
-    let dev_name_recv = dev_name.clone();
-    let platform_recv = platform.clone();
     thread::spawn(move || {
         let socket = match UdpSocket::bind("0.0.0.0:9528") {
             Ok(s) => s,
@@ -1862,6 +1894,15 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                             let my_room = state_recv.room.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             if my_room.is_active {
                                 let member_count = state_recv.members.lock().unwrap_or_else(|e| e.into_inner()).len();
+                                let (host_dev, host_plat) = {
+                                    let members = state_recv.members.lock().unwrap_or_else(|e| e.into_inner());
+                                    if let Some(m) = members.get("host") {
+                                        let clean_name = m.name.replace(" (房主)", "").trim().to_string();
+                                        (if clean_name.is_empty() { my_room.host_device.clone() } else { clean_name }, m.platform.clone())
+                                    } else {
+                                        (my_room.host_device.clone(), "Web".to_string())
+                                    }
+                                };
                                 // 如果发来探测的 src 在某个物理网卡子网，优先以该子网的 IP 应答
                                 let target_ip = src.ip();
                                 let matched_iface_ip = get_ipv4_interfaces()
@@ -1882,8 +1923,8 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                     "action": "wenbox_room_broadcast",
                                     "roomId": my_room.room_id,
                                     "roomName": my_room.room_name,
-                                    "hostDevice": dev_name_recv,
-                                    "platform": platform_recv,
+                                    "hostDevice": host_dev,
+                                    "platform": host_plat,
                                     "port": my_port,
                                     "hostPort": my_port,
                                     "hostIp": matched_iface_ip,
@@ -1946,6 +1987,15 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
             // 仅当房主开房后，才对外进行房间广播；默认客户端模式下绝不广播
             if let Some(room) = active_room {
                 let member_count = state_bcast.members.lock().unwrap_or_else(|e| e.into_inner()).len();
+                let (host_dev, host_plat) = {
+                    let members = state_bcast.members.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(m) = members.get("host") {
+                        let clean_name = m.name.replace(" (房主)", "").trim().to_string();
+                        (if clean_name.is_empty() { room.host_device.clone() } else { clean_name }, m.platform.clone())
+                    } else {
+                        (room.host_device.clone(), "Web".to_string())
+                    }
+                };
                 let ifaces = get_ipv4_interfaces();
 
                 // 针对每一个网卡独立绑定 socket 发送，彻底解决多网卡（WiFi+网口）路由限制
@@ -1962,8 +2012,8 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                             "action": "wenbox_room_broadcast",
                             "roomId": room.room_id,
                             "roomName": room.room_name,
-                            "hostDevice": dev_name,
-                            "platform": platform,
+                            "hostDevice": host_dev,
+                            "platform": host_plat,
                             "port": my_port,
                             "hostPort": my_port,
                             "hostIp": host_ip_str,
@@ -1990,8 +2040,8 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                 "action": "wenbox_room_broadcast",
                                 "roomId": room.room_id,
                                 "roomName": room.room_name,
-                                "hostDevice": dev_name,
-                                "platform": platform,
+                                "hostDevice": host_dev,
+                                "platform": host_plat,
                                 "port": my_port,
                                 "hostPort": my_port,
                                 "hostIp": room.host_ip,
