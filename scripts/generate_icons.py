@@ -70,6 +70,12 @@ def main():
     render(256).save(f'{base}/icon.ico',
                      sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 
+    # Web SPA / README logo (512px 圆角版)
+    web_base = os.path.abspath(os.path.join(base, '..', '..', 'app', 'src', 'main', 'assets', 'web'))
+    os.makedirs(web_base, exist_ok=True)
+    render(512).save(f'{web_base}/logo.png')
+    print(f'web logo -> {web_base}/logo.png')
+
     if sys.platform == 'darwin':
         subprocess.run(['iconutil', '-c', 'icns', f'{base}/icon.iconset', '-o', f'{base}/icon.icns'], check=True)
         print('icon.icns generated')

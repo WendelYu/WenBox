@@ -1,7 +1,7 @@
 # WenBox (文盒) - 跨平台局域网高速传输与全能多端百宝箱
 
 <p align="center">
-  <img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" alt="WenBox Logo" width="96" height="96" style="border-radius: 16px;">
+  <img src="app/src/main/assets/web/logo.png" alt="WenBox Logo" width="96" height="96" style="border-radius: 16px;">
 </p>
 
 <p align="center">

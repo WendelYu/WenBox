@@ -1072,7 +1072,10 @@
                             creatorPlatform: myPlatform
                         })
                     });
-                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    if (!resp.ok) {
+                        const errData = await resp.json().catch(() => ({}));
+                        throw new Error(errData.message || `HTTP ${resp.status}`);
+                    }
                     const cfg = await resp.json();
                     if (cfg && cfg.hostToken) {
                         sessionStorage.setItem('wenbox_host_token', cfg.hostToken);

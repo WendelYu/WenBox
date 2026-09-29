@@ -50,6 +50,8 @@ class LanServer(
                 uri == "/" || uri == "/index.html" -> serveAsset("web/index.html", "text/html; charset=UTF-8")
                 uri == "/style.css" -> serveAsset("web/style.css", "text/css; charset=UTF-8")
                 uri == "/app.js" -> serveAsset("web/app.js", "application/javascript; charset=UTF-8")
+                uri == "/logo.png" || uri == "/favicon.png" || uri == "/apple-touch-icon.png" ->
+                    serveAsset("web/logo.png", "image/png")
 
                 // 1.4 已发现房间列表
                 method == Method.GET && uri == "/api/discovered_rooms" -> {
@@ -120,45 +122,55 @@ class LanServer(
 
                 // 1.42 创建房间
                 method == Method.POST && uri == "/api/room/create" -> {
-                    val map = HashMap<String, String>()
-                    try { session.parseBody(map) } catch (_: Exception) {}
-                    val postData = getUtf8PostData(map)
-                    var rName = ""
-                    var pin = ""
-                    var creatorName = ""
-                    var creatorPlatform = ""
-                    if (!postData.isNullOrBlank()) {
-                        try {
-                            val json = JSONObject(postData)
-                            rName = json.optString("roomName", "")
-                            pin = json.optString("pin", "")
-                            creatorName = json.optString("creatorName", "")
-                            creatorPlatform = json.optString("creatorPlatform", "")
-                        } catch (_: Exception) {}
+                    // 同一服务端同时只有一个活跃房间: 已有房间进行中时拒绝再建，
+                    // 防止浏览器访客建房覆盖设备原生端的房间，原房主解散时误伤新房间
+                    if (RoomManager.currentRoom?.isActive == true) {
+                        newFixedLengthResponse(
+                            Response.Status.CONFLICT,
+                            "application/json; charset=UTF-8",
+                            "{\"success\":false,\"message\":\"本机已有进行中的房间，请直接加入该房间；如需另建新房间，请先由本机解散现有房间\"}"
+                        )
+                    } else {
+                        val map = HashMap<String, String>()
+                        try { session.parseBody(map) } catch (_: Exception) {}
+                        val postData = getUtf8PostData(map)
+                        var rName = ""
+                        var pin = ""
+                        var creatorName = ""
+                        var creatorPlatform = ""
+                        if (!postData.isNullOrBlank()) {
+                            try {
+                                val json = JSONObject(postData)
+                                rName = json.optString("roomName", "")
+                                pin = json.optString("pin", "")
+                                creatorName = json.optString("creatorName", "")
+                                creatorPlatform = json.optString("creatorPlatform", "")
+                            } catch (_: Exception) {}
+                        }
+                        val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
+                        val clientIp = session.remoteIpAddress ?: "127.0.0.1"
+                        val hostDev = if (creatorName.isNotBlank()) creatorName else "${Build.BRAND} ${Build.MODEL}"
+                        val hostDisplayIp = if (clientIp != "127.0.0.1" && clientIp != "::1") clientIp else primaryIp
+                        val cfg = RoomManager.createRoom(
+                            roomName = rName,
+                            pin = pin,
+                            hostDevice = hostDev,
+                            hostIp = hostDisplayIp,
+                            hostPort = serverPort
+                        )
+                        val result = JSONObject().apply {
+                            put("isActive", cfg.isActive)
+                            put("roomId", cfg.roomId)
+                            put("roomName", cfg.roomName)
+                            put("pin", cfg.pin)
+                            put("needPassword", cfg.needPassword)
+                            put("hostDevice", cfg.hostDevice)
+                            put("hostIp", cfg.hostIp)
+                            put("hostPort", cfg.hostPort)
+                            put("hostToken", RoomManager.currentHostToken)
+                        }
+                        newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", result.toString())
                     }
-                    val primaryIp = NetworkUtils.getAllLocalIpAddresses(context).firstOrNull()?.ip ?: "127.0.0.1"
-                    val clientIp = session.remoteIpAddress ?: "127.0.0.1"
-                    val hostDev = if (creatorName.isNotBlank()) creatorName else "${Build.BRAND} ${Build.MODEL}"
-                    val hostDisplayIp = if (clientIp != "127.0.0.1" && clientIp != "::1") clientIp else primaryIp
-                    val cfg = RoomManager.createRoom(
-                        roomName = rName,
-                        pin = pin,
-                        hostDevice = hostDev,
-                        hostIp = hostDisplayIp,
-                        hostPort = serverPort
-                    )
-                    val result = JSONObject().apply {
-                        put("isActive", cfg.isActive)
-                        put("roomId", cfg.roomId)
-                        put("roomName", cfg.roomName)
-                        put("pin", cfg.pin)
-                        put("needPassword", cfg.needPassword)
-                        put("hostDevice", cfg.hostDevice)
-                        put("hostIp", cfg.hostIp)
-                        put("hostPort", cfg.hostPort)
-                        put("hostToken", RoomManager.currentHostToken)
-                    }
-                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", result.toString())
                 }
 
                 // 1.43 解散房间

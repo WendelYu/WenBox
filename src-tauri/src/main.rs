@@ -315,6 +315,13 @@ fn create_room_cmd(
     creator_platform: Option<String>,
     state: tauri::State<Arc<AppState>>
 ) -> Result<RoomConfig, String> {
+    {
+        let room = state.room.lock().unwrap();
+        if room.is_active && *state.is_tauri_host.lock().unwrap() {
+            return Err("本机已有进行中的房间，请先解散当前房间".into());
+        }
+        // 若当前房间由浏览器访客创建 (is_tauri_host=false)，本机原生端作为设备所有者可接管重建
+    }
     let dev_name = creator_name.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| whoami_device_name());
     let platform = creator_platform.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "Windows".to_string());
     let primary_ip = host_ip.filter(|s| !s.trim().is_empty())
@@ -1114,6 +1121,18 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
             }
 
             if url == "/api/room/create" && method == Method::Post {
+                // 同一服务端同时只有一个活跃房间: 已有房间进行中时拒绝再建。
+                // 否则浏览器访客创建的新房间会覆盖设备原生端的房间 (清空成员/令牌/消息),
+                // 原房主随后点击解散会误伤新房间。访客应直接加入现有房间。
+                if state.room.lock().unwrap().is_active {
+                    let mut resp = Response::from_string(
+                        "{\"success\":false,\"message\":\"本机已有进行中的房间，请直接加入该房间；如需另建新房间，请先由本机解散现有房间\"}"
+                    ).with_status_code(409);
+                    resp.add_header(cors_origin);
+                    resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap());
+                    let _ = req.respond(resp);
+                    return;
+                }
                 let mut body = String::new();
                 let _ = req.as_reader().read_to_string(&mut body);
                 let mut room_name = String::new();
@@ -2254,6 +2273,65 @@ mod tests {
         let (name, data) = parse_multipart_body(&body, boundary).expect("parse failed");
         assert_eq!(name, filename);
         assert_eq!(data, &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    }
+
+    #[test]
+    fn test_http_create_room_rejects_when_active() {
+        // 端到端复现用户报告的场景: 浏览器在已开房的服务端上再建新房间应被 409 拒绝,
+        // 否则会覆盖设备原生端的房间, 原房主解散时误伤新房间
+        let state = Arc::new(AppState {
+            files: Mutex::new(HashMap::new()),
+            received_files: Mutex::new(Vec::new()),
+            messages: Mutex::new(Vec::new()),
+            devices: Mutex::new(HashMap::new()),
+            room: Mutex::new(RoomConfig::default()),
+            members: Mutex::new(HashMap::new()),
+            discovered_rooms: Mutex::new(HashMap::new()),
+            auth_tokens: Mutex::new(HashSet::new()),
+            host_token: Mutex::new(String::new()),
+            is_tauri_host: Mutex::new(false),
+            selected_ip: Mutex::new(None),
+        });
+
+        let port = 39528;
+        let server = Arc::new(tiny_http::Server::http(&format!("127.0.0.1:{}", port)).unwrap());
+        let server_clone = server.clone();
+        let state_clone = state.clone();
+        std::thread::spawn(move || {
+            for req in server_clone.incoming_requests() {
+                let s = state_clone.clone();
+                std::thread::spawn(move || handle_http_request(req, s, port));
+            }
+        });
+
+        let post_create = |client: &ureq::Agent| -> (u16, serde_json::Value) {
+            let resp = client.post(&format!("http://127.0.0.1:{}/api/room/create", port))
+                .set("Content-Type", "application/json; charset=utf-8")
+                .send_string(r#"{"roomName":"Browser-Room","pin":""}"#);
+            // ureq 对非 2xx 返回 Err(Status(code, resp))，需从错误中取回响应体
+            let resp = match resp {
+                Ok(r) => r,
+                Err(ureq::Error::Status(code, r)) => r,
+                Err(e) => panic!("unexpected transport error: {}", e),
+            };
+            let status = resp.status();
+            let val: serde_json::Value = resp.into_json().unwrap();
+            (status, val)
+        };
+
+        // 第一次建房 (浏览器访客视角) 成功
+        let client = get_http_client();
+        let (status, val) = post_create(&client);
+        assert_eq!(status, 200, "first create should succeed");
+        assert!(val["isActive"].as_bool().unwrap());
+        assert!(val["hostToken"].as_str().unwrap_or("").len() > 0);
+
+        // 第二次建房 (另一个浏览器) 被 409 拒绝，原房间保持不变
+        let (status2, val2) = post_create(&client);
+        assert_eq!(status2, 409, "second create must be rejected");
+        assert_eq!(val2["success"].as_bool(), Some(false));
+        assert_eq!(state.room.lock().unwrap().room_name, "Browser-Room");
+        assert_eq!(state.room.lock().unwrap().is_active, true);
     }
 
     #[test]
