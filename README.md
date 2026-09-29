@@ -232,6 +232,8 @@ WenBox/
 | **Android** | `WenBox-Android.apk` | 支持 Android 8.0+，纯局域网免流量直传，前台服务稳定保活 |
 | **Windows** | `WenBox-Windows-x64.exe` | **超轻量独立单文件**，仅 **3~5 MB**，双击即开，内置完整服务 |
 | **Windows** | `WenBox-Windows-Installer.exe` | 带安装向导与开始菜单快捷方式的标准安装程序 |
+| **macOS** | `WenBox-macOS-aarch64.dmg` | Apple Silicon (M 系列) 原生版本，未公证签名，首次打开请右键 ->【打开】 |
+| **macOS** | `WenBox-macOS-x64.dmg` | Intel 芯片版本，首次打开请右键 ->【打开】 |
 | **任意设备** | Web 浏览器 | 手机/平板/Mac/Linux 浏览器直接访问 `http://[房主IP]:9527` 即可使用全部功能 |
 
 ---
