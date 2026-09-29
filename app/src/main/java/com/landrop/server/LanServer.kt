@@ -11,6 +11,7 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
@@ -28,6 +29,19 @@ class LanServer(
             val response = newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "")
             addCorsHeaders(response)
             return response
+        }
+
+        // 统一鉴权：密码保护房间的敏感接口要求有效房间令牌 (与桌面端行为一致)
+        val isProtected = uri == "/api/files" || uri == "/api/files/clear" || uri == "/api/received_files"
+                || uri.startsWith("/api/download/") || uri == "/api/upload" || uri.startsWith("/api/messages")
+        if (isProtected && !isRequestAuthorized(session)) {
+            val resp = newFixedLengthResponse(
+                Response.Status.UNAUTHORIZED,
+                "application/json; charset=UTF-8",
+                "{\"success\":false,\"unauthorized\":true,\"message\":\"未授权：请先输入房间密码加入房间\"}"
+            )
+            addCorsHeaders(resp)
+            return resp
         }
 
         val response = try {
@@ -431,7 +445,12 @@ class LanServer(
 
                 // 3. 单文件流式下载
                 method == Method.GET && uri.startsWith("/api/download/") -> {
-                    val fileId = uri.removePrefix("/api/download/")
+                    val rawId = uri.removePrefix("/api/download/")
+                    val fileId = try {
+                        URLDecoder.decode(rawId, StandardCharsets.UTF_8.name())
+                    } catch (_: Exception) {
+                        rawId
+                    }
                     val file = FileManager.getFileById(fileId)
                     if (file == null) {
                         newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "File not found")
@@ -442,15 +461,20 @@ class LanServer(
                         } else {
                             val encodedFilename = URLEncoder.encode(file.name, StandardCharsets.UTF_8.name())
                                 .replace("+", "%20")
-                            val resp = newFixedLengthResponse(
-                                Response.Status.OK,
-                                file.mimeType.ifBlank { "application/octet-stream" },
-                                inputStream,
-                                file.size
-                            )
+                            // filename 字段仅保留可见 ASCII (部分服务端/客户端不接受非 ASCII 头), 中文由 RFC 5987 的 filename* 传递
+                            val asciiFallback = file.name.map { ch ->
+                                if (ch.code in 33..126 && ch != '"' && ch != '\\') ch else '_'
+                            }.joinToString("").ifBlank { "file" }
+                            val mime = file.mimeType.ifBlank { "application/octet-stream" }
+                            val resp = if (file.size > 0) {
+                                newFixedLengthResponse(Response.Status.OK, mime, inputStream, file.size)
+                            } else {
+                                // 部分 ContentProvider 上报大小为 0，定长响应会把传输截断为 0 字节，退化为分块流式
+                                newChunkedResponse(Response.Status.OK, mime, inputStream)
+                            }
                             resp.addHeader(
                                 "Content-Disposition",
-                                "attachment; filename=\"${file.name.replace("\"", "\\\"")}\"; filename*=UTF-8''$encodedFilename"
+                                "attachment; filename=\"$asciiFallback\"; filename*=UTF-8''$encodedFilename"
                             )
                             resp
                         }
@@ -526,7 +550,7 @@ class LanServer(
 
         val tempFilePath = files["file"]
         val params = session.parameters
-        val originalName = params["file"]?.firstOrNull() ?: "upload_${System.currentTimeMillis()}"
+        val originalName = resolveUploadFileName(session, params["file"]?.firstOrNull())
 
         if (tempFilePath != null) {
             val tempFile = File(tempFilePath)
@@ -557,6 +581,56 @@ class LanServer(
             "application/json",
             "{\"success\": false, \"message\": \"No file received\"}"
         )
+    }
+
+    /**
+     * 还原上传文件的真实名称：
+     * 1. 优先使用 X-File-Name 头 (Android/桌面客户端始终携带，URL 编码无字符集歧义)；
+     * 2. 否则取 multipart 表单字段，NanoHTTPD 以 ISO-8859-1 解析头部，
+     *    将字节按 ISO-8859-1 还原为 UTF-8 (与 getUtf8PostData 同样的恢复策略)。
+     */
+    private fun resolveUploadFileName(session: IHTTPSession, rawFormName: String?): String {
+        val headerName = session.headers["x-file-name"]?.trim()
+        if (!headerName.isNullOrEmpty()) {
+            try {
+                val decoded = URLDecoder.decode(headerName, StandardCharsets.UTF_8.name())
+                if (decoded.isNotBlank()) return sanitizeFileName(decoded)
+            } catch (_: Exception) {
+            }
+        }
+        val name = rawFormName?.trim()?.takeUnless { it.isEmpty() }
+            ?: "upload_${System.currentTimeMillis()}"
+        val recovered = if (name.any { it.code > 0xFF }) {
+            name
+        } else {
+            try {
+                val converted = String(name.toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8)
+                if (converted.contains('\uFFFD')) name else converted
+            } catch (_: Exception) {
+                name
+            }
+        }
+        return sanitizeFileName(recovered)
+    }
+
+    private fun sanitizeFileName(name: String): String =
+        name.substringAfterLast('/').substringAfterLast('\\')
+            .ifBlank { "upload_${System.currentTimeMillis()}" }
+
+    /**
+     * 密码保护房间的请求鉴权：校验 X-Room-Token / X-Host-Token 头或 ?token= 参数；
+     * 本机回环请求 (房主自己浏览器打开管理页) 直接放行。
+     */
+    private fun isRequestAuthorized(session: IHTTPSession): Boolean {
+        val room = RoomManager.currentRoom ?: return true
+        if (!room.isActive || !room.needPassword) return true
+        val remoteIp = session.remoteIpAddress ?: ""
+        if (remoteIp == "127.0.0.1" || remoteIp == "::1") return true
+        val headerToken = session.headers["x-room-token"] ?: session.headers["x-host-token"]
+        val queryToken = session.parameters["token"]?.firstOrNull()
+        val token = headerToken?.trim()?.takeIf { it.isNotEmpty() }
+            ?: queryToken?.trim()?.takeIf { it.isNotEmpty() }
+        return RoomManager.isAuthorized(token)
     }
 
     private fun handleSendMessage(session: IHTTPSession): Response {

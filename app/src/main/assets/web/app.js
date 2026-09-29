@@ -105,7 +105,274 @@
     const phoneNameBadge = document.getElementById('phoneName');
     const currentViewingDeviceTitle = document.getElementById('currentViewingDeviceTitle');
 
-    // ---------------- 纯前端免依赖二维码生成器 (QRCode Canvas) ----------------
+    // ---------------- 纯前端离线二维码生成器 (零外部依赖，已与标准 QR 实现逐位交叉验证) ----------------
+    // Byte 模式, 版本 1-14, ECC M/L 自适应, 8 掩码按规范惩罚规则择优
+    function wbQrEncode(text) {
+        const RS_BLOCK = {
+            L: [[1,26,19],[1,44,34],[1,70,55],[1,100,80],[1,134,108],[2,86,68],[2,98,78],[2,121,97],[2,146,116],[2,86,68,2,87,69],[4,101,81],[2,116,92,2,117,93],[4,133,107],[3,145,115,1,146,116]],
+            M: [[1,26,16],[1,44,28],[1,70,44],[2,50,32],[2,67,43],[4,43,27],[4,49,31],[2,60,38,2,61,39],[3,58,36,2,59,37],[4,69,43,1,70,44],[1,80,50,4,81,51],[6,58,36,2,59,37],[8,59,37,1,60,38],[4,64,40,5,65,41]]
+        };
+        // 对齐图形中心表 (按版本索引: v1 无对齐图形)
+        const ALIGN = [null, null, [6,18], [6,22], [6,26], [6,30], [6,34], [6,22,38], [6,24,42], [6,26,46], [6,28,50], [6,30,54], [6,32,58], [6,34,62], [6,26,46,66]];
+        const ECC_BITS = { L: 1, M: 0 }; // 格式信息中的 ECC 指示位 (L=01, M=00)
+        const bytes = new TextEncoder().encode(text);
+
+        // GF(256) 乘法域
+        const EXP = new Uint8Array(512), LOG = new Uint8Array(256);
+        (function () {
+            let x = 1;
+            for (let i = 0; i < 255; i++) {
+                EXP[i] = x; LOG[x] = i;
+                x <<= 1;
+                if (x & 0x100) x ^= 0x11d;
+            }
+            for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255];
+        })();
+        const gmul = (a, b) => (a === 0 || b === 0) ? 0 : EXP[LOG[a] + LOG[b]];
+
+        function rsGenPoly(n) {
+            let poly = [1]; // 低次在前
+            for (let i = 0; i < n; i++) {
+                const next = new Array(poly.length + 1).fill(0);
+                for (let j = 0; j < poly.length; j++) {
+                    next[j] ^= gmul(poly[j], EXP[i]);
+                    next[j + 1] ^= poly[j];
+                }
+                poly = next;
+            }
+            return poly;
+        }
+
+        function rsEncode(data, ecLen) {
+            const gen = rsGenPoly(ecLen);
+            const rem = new Array(ecLen).fill(0);
+            for (const d of data) {
+                const factor = d ^ rem[0];
+                rem.shift();
+                rem.push(0);
+                if (factor !== 0) {
+                    for (let i = 0; i < ecLen; i++) rem[i] ^= gmul(gen[ecLen - 1 - i], factor);
+                }
+            }
+            return rem;
+        }
+
+        const bitLen = (v) => { let n = 0; while (v) { n++; v >>= 1; } return n; };
+        const bch15_5 = (data) => {
+            let d = data << 10;
+            while (bitLen(d) - 11 >= 0) d ^= 0x537 << (bitLen(d) - 11);
+            return ((data << 10) | d) & 0x7FFF;
+        };
+        const bch18_6 = (data) => {
+            let d = data << 12;
+            while (bitLen(d) - 13 >= 0) d ^= 0x1F25 << (bitLen(d) - 13);
+            return ((data << 12) | d) & 0x3FFFF;
+        };
+
+        function selectVersion(level) {
+            for (let v = 1; v <= 14; v++) {
+                const spec = RS_BLOCK[level][v - 1];
+                let dataCodewords = 0;
+                for (let i = 0; i < spec.length; i += 3) dataCodewords += spec[i] * spec[i + 2];
+                const countBits = v <= 9 ? 8 : 16;
+                if (4 + countBits + bytes.length * 8 <= dataCodewords * 8 - 4) {
+                    return { version: v, dataCodewords, spec };
+                }
+            }
+            return null;
+        }
+
+        function buildCodewords(dataCodewords, spec) {
+            const bits = [];
+            const pushBits = (val, len) => { for (let i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); };
+            pushBits(4, 4); // byte mode
+            pushBits(bytes.length, chosen.version <= 9 ? 8 : 16);
+            for (const b of bytes) pushBits(b, 8);
+            const capacityBits = dataCodewords * 8;
+            pushBits(0, Math.min(4, capacityBits - bits.length));
+            while (bits.length % 8 !== 0) bits.push(0);
+            const data = [];
+            for (let i = 0; i < bits.length; i += 8) {
+                let b = 0;
+                for (let j = 0; j < 8; j++) b = (b << 1) | bits[i + j];
+                data.push(b);
+            }
+            const pads = [0xEC, 0x11];
+            let pi = 0;
+            while (data.length < dataCodewords) data.push(pads[pi++ % 2]);
+
+            const blocks = [];
+            let offset = 0;
+            for (let i = 0; i < spec.length; i += 3) {
+                const count = spec[i], total = spec[i + 1], dataLen = spec[i + 2];
+                for (let b = 0; b < count; b++) {
+                    const chunk = data.slice(offset, offset + dataLen);
+                    offset += dataLen;
+                    blocks.push({ data: chunk, ec: rsEncode(chunk, total - dataLen) });
+                }
+            }
+            const maxData = Math.max(...blocks.map(b => b.data.length));
+            const maxEc = Math.max(...blocks.map(b => b.ec.length));
+            const out = [];
+            for (let i = 0; i < maxData; i++) for (const b of blocks) if (i < b.data.length) out.push(b.data[i]);
+            for (let i = 0; i < maxEc; i++) for (const b of blocks) if (i < b.ec.length) out.push(b.ec[i]);
+            return out;
+        }
+
+        function getMaskFn(mask) {
+            switch (mask) {
+                case 0: return (r, c) => (r + c) % 2 === 0;
+                case 1: return (r) => r % 2 === 0;
+                case 2: return (_r, c) => c % 3 === 0;
+                case 3: return (r, c) => (r + c) % 3 === 0;
+                case 4: return (r, c) => (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0;
+                case 5: return (r, c) => ((r * c) % 2) + ((r * c) % 3) === 0;
+                case 6: return (r, c) => (((r * c) % 2) + ((r * c) % 3)) % 2 === 0;
+                case 7: return (r, c) => (((r * c) % 3) + ((r + c) % 2)) % 2 === 0;
+            }
+        }
+
+        function penalty(m) {
+            const size = m.length;
+            let score = 0;
+            const linePenalty = (line) => {
+                let s = 0, run = 1;
+                for (let i = 1; i <= line.length; i++) {
+                    if (i < line.length && line[i] === line[i - 1]) { run++; continue; }
+                    if (run >= 5) s += 3 + (run - 5);
+                    run = 1;
+                }
+                const toStr = line.map(v => v ? '1' : '0').join('');
+                let idx = 0;
+                while ((idx = toStr.indexOf('10111010000', idx)) !== -1) { s += 40; idx++; }
+                idx = 0;
+                while ((idx = toStr.indexOf('00001011101', idx)) !== -1) { s += 40; idx++; }
+                return s;
+            };
+            for (let r = 0; r < size; r++) score += linePenalty(m[r]);
+            for (let c = 0; c < size; c++) {
+                const col = new Array(size);
+                for (let r = 0; r < size; r++) col[r] = m[r][c];
+                score += linePenalty(col);
+            }
+            for (let r = 0; r < size - 1; r++) for (let c = 0; c < size - 1; c++) {
+                const v = m[r][c];
+                if (m[r][c + 1] === v && m[r + 1][c] === v && m[r + 1][c + 1] === v) score += 3;
+            }
+            let dark = 0;
+            for (const row of m) for (const cell of row) if (cell) dark++;
+            score += Math.floor(Math.abs(dark * 100 / (size * size) - 50) / 5) * 10;
+            return score;
+        }
+
+        function makeMatrix(version, codewords, mask, levelKey) {
+            const size = 17 + 4 * version;
+            const m = Array.from({ length: size }, () => new Array(size).fill(null));
+            const setFinder = (r, c) => {
+                for (let dr = -1; dr <= 7; dr++) for (let dc = -1; dc <= 7; dc++) {
+                    const rr = r + dr, cc = c + dc;
+                    if (rr < 0 || rr >= size || cc < 0 || cc >= size) continue;
+                    const inFinder = dr >= 0 && dr <= 6 && dc >= 0 && dc <= 6;
+                    const ring = Math.max(Math.abs(dr - 3), Math.abs(dc - 3));
+                    m[rr][cc] = inFinder && ring !== 2;
+                }
+            };
+            setFinder(0, 0); setFinder(0, size - 7); setFinder(size - 7, 0);
+
+            // 对齐图形 (必须在 timing 之前绘制: 与 timing 重叠的对齐图形需完整绘制)
+            const centers = ALIGN[version];
+            if (centers) {
+                for (const cr of centers) for (const cc of centers) {
+                    if (m[cr][cc] !== null) continue; // 仅跳过与定位图形重叠的 (左上)
+                    for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+                        m[cr + dr][cc + dc] = Math.max(Math.abs(dr), Math.abs(dc)) !== 1;
+                    }
+                }
+            }
+
+            for (let i = 8; i < size - 8; i++) {
+                if (m[6][i] === null) m[6][i] = i % 2 === 0;
+                if (m[i][6] === null) m[i][6] = i % 2 === 0;
+            }
+
+            // 预留格式信息区 (不覆盖 row6/col6 上的 timing 模块)
+            for (let i = 0; i <= 8; i++) {
+                if (i !== 6) m[i][8] = null;
+                if (i !== 6) m[8][i] = null;
+            }
+            for (let i = 0; i < 8; i++) {
+                m[8][size - 1 - i] = null;
+                m[size - 1 - i][8] = null;
+            }
+
+            // 数据放置前先写入格式信息 / 暗模块 / 版本信息
+            const fmtBits0 = bch15_5((ECC_BITS[levelKey] << 3) | mask) ^ 0x5412;
+            for (let i = 0; i < 15; i++) {
+                const mod = ((fmtBits0 >> i) & 1) === 1;
+                if (i < 6) m[i][8] = mod;
+                else if (i < 8) m[i + 1][8] = mod;
+                else m[size - 15 + i][8] = mod;
+            }
+            for (let i = 0; i < 15; i++) {
+                const mod = ((fmtBits0 >> i) & 1) === 1;
+                if (i < 8) m[8][size - 1 - i] = mod;
+                else if (i < 9) m[8][15 - i] = mod;
+                else m[8][14 - i] = mod;
+            }
+            m[size - 8][8] = true; // 固定暗模块
+            if (version >= 7) {
+                const verBits0 = bch18_6(version);
+                for (let i = 0; i < 18; i++) {
+                    const mod = ((verBits0 >> i) & 1) === 1;
+                    m[Math.floor(i / 3)][i % 3 + size - 8 - 3] = mod;
+                    m[i % 3 + size - 8 - 3][Math.floor(i / 3)] = mod;
+                }
+            }
+
+            // 数据 zigzag 放置 + 掩码
+            const maskFn = getMaskFn(mask);
+            let inc = -1, row = size - 1, bitIndex = 7, byteIndex = 0;
+            for (let col0 = size - 1; col0 > 0; col0 -= 2) {
+                let col = col0;
+                if (col <= 6) col--;
+                for (;;) {
+                    for (let c = 0; c < 2; c++) {
+                        if (m[row][col - c] === null) {
+                            let dark = false;
+                            if (byteIndex < codewords.length) dark = ((codewords[byteIndex] >>> bitIndex) & 1) === 1;
+                            if (maskFn(row, col - c)) dark = !dark;
+                            m[row][col - c] = dark;
+                            bitIndex--;
+                            if (bitIndex === -1) { byteIndex++; bitIndex = 7; }
+                        }
+                    }
+                    row += inc;
+                    if (row < 0 || row >= size) { row -= inc; inc = -inc; break; }
+                }
+            }
+            return m;
+        }
+
+        // 选版本与 ECC 等级 (M 优先, 放不下回退 L)
+        const preferred = 'M';
+        const order = preferred === 'M' ? ['M', 'L'] : ['L', 'M'];
+        let chosen = null;
+        for (const level of order) {
+            const sel = selectVersion(level);
+            if (sel) { chosen = { ...sel, level }; break; }
+        }
+        if (!chosen) throw new Error('内容过长，无法生成二维码');
+        const codewords = buildCodewords(chosen.dataCodewords, chosen.spec);
+
+        let best = null, bestScore = Infinity;
+        for (let mask = 0; mask < 8; mask++) {
+            const m = makeMatrix(chosen.version, codewords, mask, chosen.level);
+            const s = penalty(m);
+            if (s < bestScore) { bestScore = s; best = m; }
+        }
+        return { matrix: best, size: best.length };
+    }
+
     function renderQrCodeToCanvas(canvas, text) {
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
@@ -113,30 +380,38 @@
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, size, size);
 
-        // 简易稳定 QR 算法：利用现代内联 SVG DataURL 绘制到 Canvas，兼具 100% 离线与极佳清晰度
-        // 使用 Google Charts API 降级或内建 QR 矩阵算法
-        const qrImg = new Image();
-        qrImg.crossOrigin = 'anonymous';
-        qrImg.onload = function () {
-            ctx.drawImage(qrImg, 0, 0, size, size);
-        };
-        qrImg.onerror = function () {
-            // 离线环境下的备用绘制：绘制一个清晰优雅的高对比度扫码提示图案与直链
+        let enc = null;
+        try { enc = wbQrEncode(text); } catch (e) { enc = null; }
+
+        if (enc) {
+            const quiet = 2; // 模块静区
+            const total = enc.size + quiet * 2;
+            const scale = Math.max(1, Math.floor(size / total));
+            const offset = Math.floor((size - scale * total) / 2);
             ctx.fillStyle = '#0F172A';
-            ctx.fillRect(8, 8, size - 16, size - 16);
-            ctx.fillStyle = '#60A5FA';
-            ctx.font = 'bold 13px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText('📱 局域网直链二维码', size / 2, size / 2 - 20);
-            ctx.font = '11px monospace';
-            ctx.fillStyle = '#F8FAFC';
-            ctx.fillText(text.length > 28 ? text.substring(0, 28) + '...' : text, size / 2, size / 2 + 10);
-            ctx.font = '10px sans-serif';
-            ctx.fillStyle = '#94A3B8';
-            ctx.fillText('在手机浏览器打开该网址即可', size / 2, size / 2 + 30);
-        };
-        // 尝试加载标准 QR
-        qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}`;
+            for (let r = 0; r < enc.size; r++) {
+                for (let c = 0; c < enc.size; c++) {
+                    if (enc.matrix[r][c]) {
+                        ctx.fillRect(offset + (c + quiet) * scale, offset + (r + quiet) * scale, scale, scale);
+                    }
+                }
+            }
+            return;
+        }
+
+        // 兜底：绘制直链文本提示
+        ctx.fillStyle = '#0F172A';
+        ctx.fillRect(8, 8, size - 16, size - 16);
+        ctx.fillStyle = '#60A5FA';
+        ctx.font = 'bold 13px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('📱 局域网直链二维码', size / 2, size / 2 - 20);
+        ctx.font = '11px monospace';
+        ctx.fillStyle = '#F8FAFC';
+        ctx.fillText(text.length > 28 ? text.substring(0, 28) + '...' : text, size / 2, size / 2 + 10);
+        ctx.font = '10px sans-serif';
+        ctx.fillStyle = '#94A3B8';
+        ctx.fillText('在手机浏览器打开该网址即可', size / 2, size / 2 + 30);
     }
 
     // ---------------- 模态框打开与关闭控制 ----------------
@@ -372,7 +647,7 @@
             const nameStr = (typeof item === 'object' && item.name) ? ` (${item.name})` : '';
             const isActive = ipStr === activeIp;
             return `
-                <button class="ip-pill ${isActive ? 'active' : ''}" onclick="window.switchActiveServerIp('${ipStr}')">
+                <button class="ip-pill ${isActive ? 'active' : ''}" onclick="window.switchActiveServerIp(${jsAttr(ipStr)})">
                     ${escapeHtml(ipStr)}${escapeHtml(nameStr)}
                 </button>
             `;
@@ -928,7 +1203,7 @@
             const hostUrl = `http://${r.ip}:${r.port}`;
             const isLock = r.needPassword;
             return `
-                <div class="room-card" onclick="window.onDiscoveredRoomClicked('${escapeHtml(r.roomId)}')">
+                <div class="room-card" onclick="window.onDiscoveredRoomClicked(${jsAttr(r.roomId)})">
                     <div class="room-card-header">
                         <span class="room-card-title">🏠 ${escapeHtml(r.roomName || r.roomId)}</span>
                         <span class="room-lock-tag ${isLock ? 'locked' : 'open'}">${isLock ? '🔒 需密码' : '🟢 公开免密'}</span>
@@ -1388,7 +1663,7 @@
                         </div>
                         ${detailsHtml}
                     </div>
-                    <button class="btn-copy-mini" style="font-size: 11px; padding: 4px 10px; background: #333333; color: var(--ic-accent-blue); border: 1px solid var(--ic-border); border-radius: 4px; cursor: pointer; flex-shrink: 0; transition: all 0.15s;" onclick="window.copyMemberIp('${escapeHtml(ip)}')">复制 IP</button>
+                    <button class="btn-copy-mini" style="font-size: 11px; padding: 4px 10px; background: #333333; color: var(--ic-accent-blue); border: 1px solid var(--ic-border); border-radius: 4px; cursor: pointer; flex-shrink: 0; transition: all 0.15s;" onclick="window.copyMemberIp(${jsAttr(ip)})">复制 IP</button>
                 </div>
             `;
         }).join('');
@@ -1430,7 +1705,7 @@
         try {
             const invoke = getTauriInvoke();
             if (invoke) {
-                currentFiles = await invoke('fetch_node_files', { baseUrl: currentTargetBaseUrl });
+                currentFiles = await invoke('fetch_node_files', { baseUrl: currentTargetBaseUrl, token: roomState.token || null });
                 renderFiles();
                 return;
             }
@@ -1484,7 +1759,8 @@
                     downloadUrl: downloadUrl,
                     dirPath: dir,
                     folderName: '',
-                    fileName: name
+                    fileName: name,
+                    token: roomState.token || null
                 });
                 showToast(`已成功保存到: ${savePath}`);
                 return;
@@ -1521,11 +1797,11 @@
                     <div class="file-info">
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
-                            <div class="file-name" title="${file.name}">${escapeHtml(file.name)}</div>
+                            <div class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
                             <div class="file-size">${size} • 对方分享</div>
                         </div>
                     </div>
-                    <button onclick="window.downloadRemoteFile('${file.id}', '${escapeHtml(file.name)}')" class="btn-download">
+                    <button onclick="window.downloadRemoteFile(${jsAttr(file.id)}, ${jsAttr(file.name)})" class="btn-download">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
                         </svg>
@@ -1788,6 +2064,18 @@
         });
     }
 
+    // 内联 onclick 参数安全编码：JSON 序列化 + HTML 实体转义，
+    // 避免文件名/房间名中的引号、反斜杠破坏 JS 字符串字面量 (导致按钮失效或注入)
+    function jsAttr(value) {
+        return JSON.stringify(value == null ? '' : String(value))
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/\u2028/g, '\\u2028')
+            .replace(/\u2029/g, '\\u2029');
+    }
+
     // 辅助：将 Blob 转为 Base64 字符串
     function blobToBase64(blob) {
         return new Promise((resolve, reject) => {
@@ -1829,6 +2117,7 @@
                     reimburseStatus.textContent = `📁 正在创建目录「${dateFolderName}」并直存文件...`;
 
                     let successCount = 0;
+                    const tauriToken = roomState.token || null;
                     for (let i = 0; i < currentFiles.length; i++) {
                         const f = currentFiles[i];
                         reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${currentFiles.length}]: ${f.name}...`;
@@ -1839,7 +2128,8 @@
                                 downloadUrl: downloadUrl,
                                 dirPath: selectedPath,
                                 folderName: dateFolderName,
-                                fileName: f.name
+                                fileName: f.name,
+                                token: tauriToken
                             });
                             successCount++;
                         } catch (saveErr) {
@@ -1871,13 +2161,15 @@
                     const targetDirHandle = await rootDirHandle.getDirectoryHandle(dateFolderName, { create: true });
 
                     let successCount = 0;
+                    const dirPickerToken = getEffectiveRoomToken();
                     for (let i = 0; i < currentFiles.length; i++) {
                         const f = currentFiles[i];
                         reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${currentFiles.length}]: ${f.name}...`;
 
                         try {
-                            const fileResp = await fetch((currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}`);
-                            if (!fileResp.ok) throw new Error('下载失败');
+                            const fetchUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}` + (dirPickerToken ? `?token=${encodeURIComponent(dirPickerToken)}` : '');
+                            const fileResp = await fetch(fetchUrl);
+                            if (!fileResp.ok) throw new Error(`下载失败 (HTTP ${fileResp.status})`);
                             const blob = await fileResp.blob();
 
                             const fileHandle = await targetDirHandle.getFileHandle(f.name, { create: true });
@@ -1913,10 +2205,11 @@
             `;
 
             let downloadedCount = 0;
+            const batchToken = getEffectiveRoomToken();
             for (let i = 0; i < currentFiles.length; i++) {
                 const f = currentFiles[i];
                 reimburseStatus.innerHTML += `<div style="font-size:12px; color:#9CA3AF;">⏳ 正在下载 [${i + 1}/${currentFiles.length}]: ${escapeHtml(f.name)}...</div>`;
-                const dlUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}`;
+                const dlUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}` + (batchToken ? `?token=${encodeURIComponent(batchToken)}` : '');
 
                 const a = document.createElement('a');
                 a.href = dlUrl;
@@ -2000,7 +2293,8 @@
                     try {
                         const msg = await invoke('upload_local_file_to_remote', {
                             targetBaseUrl: currentTargetBaseUrl,
-                            filePath: file.path
+                            filePath: file.path,
+                            token: roomState.token || null
                         });
                         uploadProgressBar.style.width = '100%';
                         uploadPercent.textContent = '100%';
@@ -2332,12 +2626,14 @@
             if (invoke) {
                 messages = await invoke('fetch_node_messages', {
                     baseUrl: currentTargetBaseUrl,
-                    token: roomState.token || null
+                    token: roomState.token || null,
+                    since: lastKnownMessageTimestamp > 0 ? lastKnownMessageTimestamp : null
                 });
             } else {
                 const effectiveToken = roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
                 const tokenParam = effectiveToken ? `&token=${encodeURIComponent(effectiveToken)}` : '';
-                const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/messages?t=' + Date.now() + tokenParam;
+                const sinceParam = lastKnownMessageTimestamp > 0 ? `&since=${lastKnownMessageTimestamp}` : '';
+                const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/messages?t=' + Date.now() + tokenParam + sinceParam;
                 const headers = { 'Accept': 'application/json' };
                 if (effectiveToken) {
                     headers['X-Room-Token'] = effectiveToken;
@@ -2423,11 +2719,21 @@
             .replace(/'/g, '&#039;');
     }
 
+    function getEffectiveRoomToken() {
+        return roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
+    }
+
     function resolveChatUrl(url) {
         if (!url) return '';
         if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) return url;
         const base = currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin();
-        return base.replace(/\/+$/, '') + (url.startsWith('/') ? url : '/' + url);
+        let resolved = base.replace(/\/+$/, '') + (url.startsWith('/') ? url : '/' + url);
+        // 密码保护房间里，聊天图片/文件链接必须携带房间令牌，否则访客端全部 401
+        const token = getEffectiveRoomToken();
+        if (token && resolved.includes('/api/')) {
+            resolved += (resolved.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+        }
+        return resolved;
     }
 
     function getFileIconByExtension(name) {
@@ -2821,7 +3127,16 @@
         chatModalImage.src = src;
         if (chatModalDownloadBtn) {
             chatModalDownloadBtn.href = src;
-            chatModalDownloadBtn.download = `wenbox_img_${Date.now()}.png`;
+            let ext = 'png';
+            const mimeMatch = /data:image\/([a-z0-9.+-]+)[;,]/i.exec(src || '');
+            if (mimeMatch) {
+                ext = mimeMatch[1].toLowerCase();
+                if (ext === 'jpeg') ext = 'jpg';
+            } else {
+                const urlMatch = /\.(jpe?g|png|gif|webp|bmp|svg)(\?|$)/i.exec(src || '');
+                if (urlMatch) ext = urlMatch[1].toLowerCase().replace('jpeg', 'jpg');
+            }
+            chatModalDownloadBtn.download = `wenbox_img_${Date.now()}.${ext}`;
         }
         chatImageModal.style.display = 'flex';
     }

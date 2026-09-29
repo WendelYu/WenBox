@@ -79,15 +79,17 @@ object HttpHelper {
             conn.doOutput = true
             conn.doInput = true
             conn.useCaches = false
-            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            // 声明 UTF-8 编码，服务端 (NanoHTTPD) 据此以 UTF-8 解析 multipart 头部中的文件名
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary; charset=UTF-8")
             conn.setRequestProperty("X-File-Name", java.net.URLEncoder.encode(fileName, "UTF-8"))
             headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
 
             conn.outputStream.use { out ->
                 val writer = java.io.DataOutputStream(out)
-                writer.writeBytes(twoHyphens + boundary + lineEnd)
-                writer.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"$lineEnd")
-                writer.writeBytes("Content-Type: application/octet-stream$lineEnd$lineEnd")
+                // 不能用 writeBytes: 它按 ISO-8859-1 截断字符, 中文文件名会被写成乱码字节
+                writer.write((twoHyphens + boundary + lineEnd).toByteArray(Charsets.UTF_8))
+                writer.write(("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"$lineEnd").toByteArray(Charsets.UTF_8))
+                writer.write(("Content-Type: application/octet-stream$lineEnd$lineEnd").toByteArray(Charsets.UTF_8))
                 writer.flush()
 
                 val buffer = ByteArray(32768)
@@ -97,8 +99,8 @@ object HttpHelper {
                 }
                 out.flush()
 
-                writer.writeBytes(lineEnd)
-                writer.writeBytes(twoHyphens + boundary + twoHyphens + lineEnd)
+                writer.write(lineEnd.toByteArray(Charsets.UTF_8))
+                writer.write((twoHyphens + boundary + twoHyphens + lineEnd).toByteArray(Charsets.UTF_8))
                 writer.flush()
             }
 

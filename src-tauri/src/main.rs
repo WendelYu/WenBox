@@ -24,6 +24,7 @@ pub struct SharedFile {
     pub name: String,
     pub size: u64,
     pub path: String,
+    #[serde(rename = "mimeType")]
     pub mime_type: String,
 }
 
@@ -213,9 +214,10 @@ fn set_room_host_ip_cmd(ip: String, state: tauri::State<Arc<AppState>>) -> Resul
     *state.selected_ip.lock().unwrap() = Some(clean.clone());
     let mut room = state.room.lock().map_err(|e| e.to_string())?;
     room.host_ip = clean.clone();
+    let host_port = room.host_port;
     if let Some(host_member) = state.members.lock().unwrap().get_mut("host") {
         host_member.ip = clean.clone();
-        host_member.access_ip = format!("{}:9527", clean);
+        host_member.access_ip = format!("{}:{}", clean, host_port);
     }
     Ok(())
 }
@@ -489,6 +491,15 @@ fn get_http_client() -> ureq::Agent {
         .build()
 }
 
+// 大文件流式传输专用客户端: 只限制连接/单次读写超时, 不设整体超时, 避免大文件被中断
+fn get_stream_client() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout_read(Duration::from_secs(30))
+        .timeout_write(Duration::from_secs(120))
+        .build()
+}
+
 #[tauri::command]
 fn clear_chat_messages_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
     state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -536,6 +547,64 @@ fn get_clean_remote_ip(req: &tiny_http::Request) -> String {
             s
         }
     }).unwrap_or_else(|| "127.0.0.1".into())
+}
+
+// 严格百分号解码 (不把 '+' 还原为空格)，用于路径中的文件 id
+fn percent_decode_strict(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+// 表单风格解码 ('+' 还原为空格)，用于 X-File-Name 等表单编码的头
+fn form_urldecode(input: &str) -> String {
+    percent_decode_strict(&input.replace('+', " "))
+}
+
+// 百分号编码 (UTF-8)，用于把非 ASCII 文件名放进 HTTP 头
+fn percent_encode_utf8(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() * 3);
+    for b in input.as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b' ') {
+            if *b == b' ' {
+                out.push_str("%20");
+            } else {
+                out.push(*b as char);
+            }
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
+}
+
+// tiny_http 只接受 ASCII 头部值：非 ASCII 文件名必须走 RFC 5987 的 filename*，
+// 并提供一个 ASCII 兜底名，避免 Header::from_bytes(...).unwrap() 因中文名 panic 导致下载线程崩溃
+fn build_content_disposition(file_name: &str) -> Header {
+    let ascii_fallback: String = file_name
+        .chars()
+        .map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' { c } else { '_' })
+        .collect();
+    let fallback = if ascii_fallback.trim().is_empty() { "file".to_string() } else { ascii_fallback };
+    let disp = format!(
+        "attachment; filename=\"{}\"; filename*=UTF-8''{}",
+        fallback,
+        percent_encode_utf8(file_name)
+    );
+    Header::from_bytes(&b"Content-Disposition"[..], disp.as_bytes())
+        .unwrap_or_else(|_| Header::from_bytes(&b"Content-Disposition"[..], &b"attachment"[..]).unwrap())
 }
 
 fn is_authorized(req: &tiny_http::Request, state: &AppState) -> bool {
@@ -675,7 +744,7 @@ fn connect_device_node(target: String, state: tauri::State<Arc<AppState>>) -> Re
 }
 
 #[tauri::command]
-fn fetch_node_files(base_url: String, state: tauri::State<Arc<AppState>>) -> Result<Vec<SharedFile>, String> {
+fn fetch_node_files(base_url: String, token: Option<String>, state: tauri::State<Arc<AppState>>) -> Result<Vec<SharedFile>, String> {
     let clean = base_url.trim().trim_end_matches('/');
     if clean.is_empty() || clean.contains("localhost") || clean.contains("127.0.0.1") {
         let files_map = state.files.lock().unwrap();
@@ -684,9 +753,13 @@ fn fetch_node_files(base_url: String, state: tauri::State<Arc<AppState>>) -> Res
 
     let url = format!("{}/api/files", clean);
     let client = get_http_client();
-    let resp = client.get(&url)
-        .call()
-        .map_err(|e| format!("拉取文件列表失败: {}", e))?;
+    let mut req = client.get(&url);
+    if let Some(ref t) = token {
+        if !t.is_empty() {
+            req = req.set("X-Room-Token", t).set("X-Host-Token", t);
+        }
+    }
+    let resp = req.call().map_err(|e| format!("拉取文件列表失败: {}", e))?;
 
     let val: serde_json::Value = resp.into_json().map_err(|e| format!("解析文件列表失败: {}", e))?;
     let mut list = Vec::new();
@@ -695,7 +768,10 @@ fn fetch_node_files(base_url: String, state: tauri::State<Arc<AppState>>) -> Res
             let id = item["id"].as_str().unwrap_or("").to_string();
             let name = item["name"].as_str().unwrap_or("").to_string();
             let size = item["size"].as_u64().unwrap_or(0);
-            let mime_type = item["mimeType"].as_str().unwrap_or("application/octet-stream").to_string();
+            let mime_type = item["mimeType"].as_str()
+                .or_else(|| item["mime_type"].as_str())
+                .unwrap_or("application/octet-stream")
+                .to_string();
             list.push(SharedFile {
                 id,
                 name,
@@ -709,20 +785,34 @@ fn fetch_node_files(base_url: String, state: tauri::State<Arc<AppState>>) -> Res
 }
 
 #[tauri::command]
-fn save_remote_file_to_directory(download_url: String, dir_path: String, folder_name: String, file_name: String) -> Result<String, String> {
+fn save_remote_file_to_directory(download_url: String, dir_path: String, folder_name: String, file_name: String, token: Option<String>) -> Result<String, String> {
     let base_dir = PathBuf::from(&dir_path);
-    let target_dir = base_dir.join(&folder_name);
+    let target_dir = if folder_name.trim().is_empty() {
+        base_dir
+    } else {
+        base_dir.join(&folder_name)
+    };
     if !target_dir.exists() {
         std::fs::create_dir_all(&target_dir).map_err(|e| format!("创建目标目录失败: {}", e))?;
     }
 
-    let file_path = target_dir.join(&file_name);
-    let mut dest_file = File::create(&file_path).map_err(|e| format!("创建文件失败: {}", e))?;
+    // 携带房间令牌，否则受密码保护房间的下载会被 401 拒绝
+    let mut request = get_stream_client().get(&download_url);
+    if let Some(ref t) = token {
+        if !t.is_empty() {
+            request = request
+                .set("X-Room-Token", t)
+                .set("X-Host-Token", t);
+        }
+    }
+    let resp = request.call().map_err(|e| format!("下载远端文件流失败: {}", e))?;
 
-    let resp = ureq::get(&download_url)
-        .timeout(Duration::from_secs(300))
-        .call()
-        .map_err(|e| format!("下载远端文件流失败: {}", e))?;
+    let safe_name = PathBuf::from(&file_name)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download.bin".into());
+    let file_path = target_dir.join(&safe_name);
+    let mut dest_file = File::create(&file_path).map_err(|e| format!("创建文件失败: {}", e))?;
 
     let mut reader = resp.into_reader();
     std::io::copy(&mut reader, &mut dest_file).map_err(|e| format!("写入文件失败: {}", e))?;
@@ -731,19 +821,28 @@ fn save_remote_file_to_directory(download_url: String, dir_path: String, folder_
 }
 
 #[tauri::command]
-fn fetch_node_messages(base_url: String, token: Option<String>, state: tauri::State<Arc<AppState>>) -> Result<Vec<ChatMessage>, String> {
+fn fetch_node_messages(base_url: String, token: Option<String>, since: Option<u64>, state: tauri::State<Arc<AppState>>) -> Result<Vec<ChatMessage>, String> {
     let clean = base_url.trim().trim_end_matches('/');
     if clean.is_empty() || clean.contains("localhost") || clean.contains("127.0.0.1") {
-        let msgs = state.messages.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        return Ok(msgs);
+        let since_ts = since.unwrap_or(0);
+        let msgs: Vec<ChatMessage> = state.messages.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        return Ok(if since_ts > 0 {
+            msgs.into_iter().filter(|m| m.timestamp > since_ts).collect()
+        } else {
+            msgs
+        });
     }
 
-    let url = format!("{}/api/messages", clean);
+    let url = if let Some(s) = since.filter(|s| *s > 0) {
+        format!("{}/api/messages?since={}", clean, s)
+    } else {
+        format!("{}/api/messages", clean)
+    };
     let client = get_http_client();
     let mut req = client.get(&url);
     if let Some(ref t) = token {
         if !t.is_empty() {
-            req = req.set("X-Room-Token", t);
+            req = req.set("X-Room-Token", t).set("X-Host-Token", t);
         }
     }
     let resp = req.call().map_err(|e| format!("获取消息失败: {}", e))?;
@@ -849,34 +948,55 @@ fn upload_local_file_to_remote(target_base_url: String, file_path: String, token
         return Err("文件不存在".into());
     }
     let file_name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
-    let file_data = std::fs::read(&p).map_err(|e| format!("读取文件失败: {}", e))?;
+    let file_size = std::fs::metadata(&p).map_err(|e| format!("读取文件信息失败: {}", e))?.len();
 
     let base = target_base_url.trim().trim_end_matches('/');
     let url = format!("{}/api/upload", base);
 
     let boundary = format!("----WenBoxBoundary{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
-    let mut body = Vec::new();
-    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
-    body.extend_from_slice(format!("Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n", file_name).as_bytes());
-    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
-    body.extend_from_slice(&file_data);
-    body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
-
     let content_type = format!("multipart/form-data; boundary={}", boundary);
-    let mut req = ureq::post(&url)
+
+    // 将 multipart 报文落盘为临时文件流式发送，避免把整个文件读入内存导致大文件 OOM
+    let head = format!(
+        "--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
+        boundary, file_name
+    );
+    let tail = format!("\r\n--{}--\r\n", boundary);
+    let body_len = head.len() as u64 + file_size + tail.len() as u64;
+
+    let body_file = tempfile_path();
+    {
+        use std::io::BufWriter;
+        let mut writer = BufWriter::new(File::create(&body_file).map_err(|e| format!("创建临时文件失败: {}", e))?);
+        writer.write_all(head.as_bytes()).map_err(|e| format!("写入临时文件失败: {}", e))?;
+        let mut src = File::open(&p).map_err(|e| format!("读取文件失败: {}", e))?;
+        std::io::copy(&mut src, &mut writer).map_err(|e| format!("写入临时文件失败: {}", e))?;
+        writer.write_all(tail.as_bytes()).map_err(|e| format!("写入临时文件失败: {}", e))?;
+        writer.flush().ok();
+    }
+
+    let mut req = get_stream_client().post(&url)
         .set("Content-Type", &content_type)
-        .timeout(Duration::from_secs(300));
+        .set("Content-Length", &body_len.to_string())
+        .set("X-File-Name", &percent_encode_utf8(&file_name));
     if let Some(ref t) = token {
         if !t.is_empty() {
-            req = req.set("X-Room-Token", t);
+            req = req.set("X-Room-Token", t).set("X-Host-Token", t);
         }
     }
-    let resp = req.send_bytes(&body);
 
-    match resp {
+    let send_result = File::open(&body_file).and_then(|mut reader| req.send(&mut reader).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+
+    let _ = std::fs::remove_file(&body_file);
+
+    match send_result {
         Ok(_) => Ok(format!("成功发送文件: {}", file_name)),
         Err(e) => Err(format!("向对方投送文件失败: {}", e)),
     }
+}
+
+fn tempfile_path() -> PathBuf {
+    std::env::temp_dir().join(format!("wenbox_upload_{}.part", uuid::Uuid::new_v4()))
 }
 
 // ---------------- 上传文件解析辅助函数 ----------------
@@ -1170,7 +1290,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         room.host_ip = clean.clone();
                         if let Some(host_member) = state.members.lock().unwrap().get_mut("host") {
                             host_member.ip = clean.clone();
-                            host_member.access_ip = format!("{}:9527", clean);
+                            host_member.access_ip = format!("{}:{}", clean, port);
                         }
                     }
                 }
@@ -1555,10 +1675,10 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
 
             // 4. 文件下载 (支持下载分享的文件或接收到的文件)
             if url.starts_with("/api/download/") && method == Method::Get {
-                let file_id = url.trim_start_matches("/api/download/");
+                let file_id = percent_decode_strict(url.trim_start_matches("/api/download/"));
                 let file_info = {
                     let files = state.files.lock().unwrap();
-                    let f = files.get(file_id).cloned();
+                    let f = files.get(&file_id).cloned();
                     if f.is_some() {
                         f
                     } else {
@@ -1570,8 +1690,10 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 if let Some(info) = file_info {
                     if let Ok(f) = File::open(&info.path) {
                         let mut resp = Response::from_file(f);
-                        let disp = format!("attachment; filename=\"{}\"", info.name);
-                        resp.add_header(Header::from_bytes(&b"Content-Disposition"[..], disp.as_bytes()).unwrap());
+                        resp.add_header(build_content_disposition(&info.name));
+                        if let Ok(ct) = Header::from_bytes(&b"Content-Type"[..], info.mime_type.as_bytes()) {
+                            resp.add_header(ct);
+                        }
                         resp.add_header(cors_origin);
                         let _ = req.respond(resp);
                         return;
@@ -1598,7 +1720,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
 
                 let x_filename = headers.iter()
                     .find(|h| h.field.equiv("X-File-Name"))
-                    .map(|h| h.value.to_string());
+                    .map(|h| form_urldecode(h.value.as_str()));
 
                 let mut body_bytes = Vec::new();
                 if req.as_reader().read_to_end(&mut body_bytes).is_ok() && !body_bytes.is_empty() {
@@ -1664,7 +1786,22 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     let room_id = room.room_id.clone();
                     let is_active = room.is_active;
                     drop(room);
-                    let msgs = state.messages.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    // 支持 ?since= 时间戳增量拉取，避免每 2s 全量传输历史消息（含大图 base64）
+                    let since_ts = raw_url.split('?').nth(1).map(|q| {
+                        q.split('&').find_map(|pair| {
+                            let mut kv = pair.splitn(2, '=');
+                            match (kv.next(), kv.next()) {
+                                (Some("since"), Some(v)) => v.parse::<u64>().ok(),
+                                _ => None,
+                            }
+                        })
+                    }).flatten().unwrap_or(0);
+                    let msgs: Vec<ChatMessage> = state.messages.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let msgs: Vec<ChatMessage> = if since_ts > 0 {
+                        msgs.into_iter().filter(|m| m.timestamp > since_ts).collect()
+                    } else {
+                        msgs
+                    };
                     let json = serde_json::json!({
                         "messages": msgs,
                         "roomId": room_id,
@@ -2062,6 +2199,114 @@ fn whoami_device_name() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "Windows电脑".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_percent_decode_strict() {
+        assert_eq!(percent_decode_strict("%E5%8F%91%E7%A5%A8.pdf"), "发票.pdf");
+        assert_eq!(percent_decode_strict("a+b"), "a+b"); // 不把 '+' 还原为空格
+        assert_eq!(percent_decode_strict("abc%2"), "abc%2"); // 残缺转义原样保留
+        assert_eq!(percent_decode_strict("plain-id"), "plain-id");
+    }
+
+    #[test]
+    fn test_form_urldecode() {
+        assert_eq!(form_urldecode("%E5%8F%91%E7%A5%A8.pdf"), "发票.pdf");
+        assert_eq!(form_urldecode("my+file.pdf"), "my file.pdf"); // '+' 还原为空格
+    }
+
+    #[test]
+    fn test_percent_encode_utf8() {
+        assert_eq!(percent_encode_utf8("发票.pdf"), "%E5%8F%91%E7%A5%A8.pdf");
+        assert_eq!(percent_encode_utf8("my file.pdf"), "my%20file.pdf");
+        let encoded = percent_encode_utf8("发票.pdf");
+        assert_eq!(percent_decode_strict(&encoded), "发票.pdf");
+    }
+
+    #[test]
+    fn test_content_disposition_ascii_safe() {
+        // tiny_http 只接受 ASCII 头部值: 非 ASCII 文件名必须走 filename*, 不得 panic
+        let h = build_content_disposition("报销发票-2026.pdf");
+        let v = h.value.as_str();
+        assert!(v.contains("filename*=\"") == false);
+        assert!(v.contains("filename*=UTF-8''%E6%8A%A5%E9%94%80%E5%8F%91%E7%A5%A8-2026.pdf"), "{}", v);
+        assert!(v.starts_with("attachment; filename=\""));
+        // ASCII 名保持原样
+        let h2 = build_content_disposition("plain-name.pdf");
+        assert!(h2.value.as_str().contains("filename=\"plain-name.pdf\""));
+    }
+
+    #[test]
+    fn test_parse_multipart_body_utf8_filename() {
+        let boundary = "----WenBoxBoundary123";
+        let filename = "截图-测试.png";
+        let mut body: Vec<u8> = Vec::new();
+        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        body.extend_from_slice(format!("Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n", filename).as_bytes());
+        body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+        body.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
+
+        let (name, data) = parse_multipart_body(&body, boundary).expect("parse failed");
+        assert_eq!(name, filename);
+        assert_eq!(data, &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    }
+
+    #[test]
+    fn test_http_download_chinese_filename() {
+        // 端到端复现修复前的崩溃场景: HTTP 下载中文文件名的共享文件
+        let dir = std::env::temp_dir().join(format!("wenbox_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("测试文件-报销.pdf");
+        let content = b"%PDF-1.4 test content";
+        std::fs::write(&file_path, content).unwrap();
+
+        let state = Arc::new(AppState {
+            files: Mutex::new(HashMap::new()),
+            received_files: Mutex::new(Vec::new()),
+            messages: Mutex::new(Vec::new()),
+            devices: Mutex::new(HashMap::new()),
+            room: Mutex::new(RoomConfig::default()),
+            members: Mutex::new(HashMap::new()),
+            discovered_rooms: Mutex::new(HashMap::new()),
+            auth_tokens: Mutex::new(HashSet::new()),
+            host_token: Mutex::new(String::new()),
+            is_tauri_host: Mutex::new(false),
+            selected_ip: Mutex::new(None),
+        });
+        let file_id = "test-file-id".to_string();
+        state.files.lock().unwrap().insert(file_id.clone(), SharedFile {
+            id: file_id.clone(),
+            name: "测试文件-报销.pdf".to_string(),
+            size: content.len() as u64,
+            path: file_path.to_string_lossy().to_string(),
+            mime_type: "application/pdf".to_string(),
+        });
+
+        let port = 39527;
+        let server = tiny_http::Server::http(&format!("127.0.0.1:{}", port)).unwrap();
+        let server = Arc::new(server);
+        let server_clone = server.clone();
+        let state_clone = state.clone();
+        std::thread::spawn(move || {
+            for req in server_clone.incoming_requests() {
+                let s = state_clone.clone();
+                std::thread::spawn(move || handle_http_request(req, s, port));
+            }
+        });
+
+        let resp = get_stream_client().get(&format!("http://127.0.0.1:{}/api/download/{}", port, file_id)).call().expect("download failed");
+        assert_eq!(resp.status(), 200);
+        let disp = resp.header("Content-Disposition").expect("missing Content-Disposition").to_string();
+        assert!(disp.contains("filename*=UTF-8''"), "missing RFC5987 field: {}", disp);
+        let body: Vec<u8> = std::io::Read::bytes(resp.into_reader()).collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(body, content);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
 
 fn main() {

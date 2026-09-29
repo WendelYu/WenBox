@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/WendelYu/WenBox/releases"><img src="https://img.shields.io/github/v/release/WendelYu/WenBox?color=38BDF8&label=Release&logo=github" alt="GitHub release"></a>
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Android%20%7C%20Web-10B981" alt="Platform">
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Android%20%7C%20Web-10B981" alt="Platform">
   <img src="https://img.shields.io/badge/Rust-1.70%2B-orange?logo=rust" alt="Rust">
   <img src="https://img.shields.io/badge/Tauri-1.5-blue?logo=tauri" alt="Tauri">
   <img src="https://img.shields.io/badge/Android-8.0%2B%20(API%2026%2B)-green?logo=android" alt="Android">
@@ -31,7 +31,7 @@
 4. **整理繁琐**：报销发票、现场照片、测试文档需要手动解压、命名建文件夹；
 5. **开发工具分散**：查 Cron 表达式、格式化 JSON、进制转换需要在各类网页广告插件间来回切换。
 
-**WenBox** 采用**自研房间制拓扑架构**与**多网卡独立并发探测协议**，彻底解决以上所有痛点。不管是 Windows 桌面端、Android 手机端，还是任意未安装客户端的浏览器设备，均能实现秒级发现、满速传输、即时文字/截图交流与高效开发辅助。
+**WenBox** 采用**自研房间制拓扑架构**与**多网卡独立并发探测协议**，彻底解决以上所有痛点。不管是 Windows / macOS 桌面端、Android 手机端，还是任意未安装客户端的浏览器设备（手机、平板、Linux），均能实现秒级发现、满速传输、即时文字/截图交流与高效开发辅助。
 
 ---
 
@@ -51,7 +51,7 @@ flowchart TD
         H_Discovery --> H_Engine
     end
 
-    subgraph Desktop["💻 Windows 桌面端 (WenBox Client)"]
+    subgraph Desktop["💻 桌面端 (WenBox Client - Windows / macOS)"]
         D_Tauri["Tauri 容器 (WebView2 + Rust 后台)"]
         D_UI["现代暗色 Web SPA (HTML5 + CSS Variables + Vanilla JS)"]
         D_Tauri <--> D_UI
@@ -122,7 +122,7 @@ sequenceDiagram
 - **一键建房变身服务端 (Host Mode)**：
   - 任意设备点击**【➕ 创建房间】**即可变身服务端，自由设置房间名称与入房 PIN 码（支持留空免密）。
   - 创建后本机**动态激活为服务端主机 (Port 9527)**，并向所有网卡广播宣告自身房间。
-  - 主机控制台提供直观的**【📱 扫码秒进】二维码**、**【📋 复制入房直链】**、**【👥 实时在线成员与访问 IP】**与**【⏹️ 解散房间】**操作。
+  - 主机控制台提供直观的**【📱 扫码秒进】二维码**（纯前端本地生成，完全离线可用）、**【📋 复制入房直链】**、**【👥 实时在线成员与访问 IP】**与**【⏹️ 解散房间】**操作。
 - **自定义入房昵称与真实 IP 追溯**：
   - 加入房间时支持手动输入个性化昵称（如 `研发-小张`、`现场工程师`）。
   - 房间内所有成员统一以 **`昵称 (IP)`** 格式清晰展示，谁在线、谁发的消息一目了然。
@@ -186,7 +186,7 @@ sequenceDiagram
 
 | 模块 | 技术方案 | 优势 |
 | :--- | :--- | :--- |
-| **桌面端核心 (Windows)** | Rust + Tauri 1.5 + tiny_http | 编译产物仅 **3~5 MB**，内存占用仅 **~15MB**，极速启动 |
+| **桌面端核心 (Windows / macOS / Linux)** | Rust + Tauri 1.5 + tiny_http | 编译产物仅 **3~5 MB**，内存占用仅 **~15MB**，极速启动 |
 | **移动端 (Android)** | Kotlin + Android Jetpack + OkHttp3 | 原生 Android 8.0+ 支持，前台常驻保活，息屏低功耗 |
 | **前端展现层 (Web SPA)** | HTML5 + CSS3 (Variables) + Vanilla JS | 零框架依赖、加载速度 < 50ms，跨浏览器零兼容包袱 |
 | **局域网协议层** | UDP 组播/多播广播 + HTTP/1.1 流式传输 | 跨子网多网卡穿透，无需互联网，跑满千兆硬件上限 |
@@ -199,7 +199,7 @@ sequenceDiagram
 WenBox/
 ├── README.md                     # 项目完整说明文档与架构设计
 ├── package.json                  # 项目依赖与版本管理配置
-├── src-tauri/                    # Windows 桌面端 (Rust / Tauri)
+├── src-tauri/                    # 桌面端 (Rust / Tauri, Windows / macOS 通用)
 │   ├── Cargo.toml                # Rust 依赖与版本定义
 │   ├── tauri.conf.json           # Tauri 桌面应用窗口与构建配置
 │   └── src/
@@ -244,7 +244,7 @@ WenBox/
 - 菜单栏点击 **Build -> Build Bundle(s) / APK(s) -> Build APK(s)**；
 - 编译产物位于：`app/build/outputs/apk/debug/app-debug.apk`。
 
-### 2. Windows 桌面端编译 (Rust / Tauri)
+### 2. 桌面端编译 (Rust / Tauri，适用于 Windows / macOS / Linux)
 - 前置依赖：
   - [Rust 环境](https://rustup.rs/) (Stable 1.70+)
   - [Node.js](https://nodejs.org/) (v18+)
@@ -265,7 +265,7 @@ WenBox/
 - **100% 局域网传输**：WenBox 所有数据传输与通讯均在设备所在局域网内直接点对点进行；
 - **零云端依赖**：不依赖任何外部中心化服务器或云存储；
 - **零数据收集**：无任何遥测（Telemetry）、无统计上报、无用户跟踪；
-- **访问控制**：房主建房可自由设置 PIN 码，只有输入正确密码或扫码授权的设备方可连入。
+- **访问控制**：房主建房可自由设置 PIN 码，桌面端 / Android 端 / Web 服务端三端均强制校验房间令牌，文件列表、下载与上传接口对未授权设备一律拒绝；只有输入正确密码或扫码授权的设备方可连入。
 
 ---
 

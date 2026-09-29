@@ -760,6 +760,7 @@ class TransferFragment : Fragment() {
         clientPollJob?.cancel()
         clientPollJob = lifecycleScope.launch {
             val knownJoinedMsgIds = mutableSetOf<String>()
+            var lastMsgTs = 0L
             var failCount = 0
             while (isActive && currentRoomMode == RoomMode.JOINED) {
                 var cycleSuccess = false
@@ -832,8 +833,11 @@ class TransferFragment : Fragment() {
                         joinedRoomMembers = list
                     }
 
-                    // 3. 拉取房间聊天消息
-                    val msgUrl = "http://${room.ip}:${room.port}/api/messages"
+                    // 3. 拉取房间聊天消息 (since 增量，避免每次全量拉取历史大图)
+                    val msgUrl = buildString {
+                        append("http://${room.ip}:${room.port}/api/messages")
+                        if (lastMsgTs > 0) append("?since=$lastMsgTs")
+                    }
                     val msgHeaders = mutableMapOf<String, String>()
                     joinedToken?.let { msgHeaders["X-Room-Token"] = it }
                     val (code, res) = HttpHelper.getJson(msgUrl, msgHeaders)
@@ -864,6 +868,7 @@ class TransferFragment : Fragment() {
                                         MessageManager.addClientMessage(content, sender, senderIp)
                                     }
                                 }
+                                if (ts > lastMsgTs) lastMsgTs = ts
                             }
                         }
                     }
@@ -1013,7 +1018,7 @@ class TransferFragment : Fragment() {
                 } else {
                     joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
                 }
-                "$host$rawImgPayload"
+                appendRoomToken("$host$rawImgPayload")
             } else {
                 rawImgPayload
             }
@@ -1056,7 +1061,7 @@ class TransferFragment : Fragment() {
                 } else {
                     joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
                 }
-                val finalUrl = if (fileUrl.startsWith("http")) fileUrl else "$host$fileUrl"
+                val finalUrl = appendRoomToken(if (fileUrl.startsWith("http")) fileUrl else "$host$fileUrl")
                 textToCopy = "$fileName - $finalUrl"
                 itemBinding.tvMessageContent.setOnClickListener {
                     try {
@@ -1082,6 +1087,21 @@ class TransferFragment : Fragment() {
         binding.llChatMessages.addView(itemBinding.root)
         binding.nestedScrollView.post {
             binding.nestedScrollView.fullScroll(View.FOCUS_DOWN)
+        }
+    }
+
+    private fun appendRoomToken(url: String): String {
+        val token = when (currentRoomMode) {
+            RoomMode.HOST -> RoomManager.currentHostToken
+            RoomMode.JOINED -> joinedToken
+            else -> null
+        }
+        if (token.isNullOrBlank() || !url.contains("/api/")) return url
+        val sep = if (url.contains('?')) "&" else "?"
+        return try {
+            url + sep + "token=" + URLEncoder.encode(token, "UTF-8")
+        } catch (_: Exception) {
+            url + sep + "token=" + token
         }
     }
 
