@@ -2220,6 +2220,49 @@ fn whoami_device_name() -> String {
         .unwrap_or_else(|_| "Windows电脑".into())
 }
 
+// 打开软件即自动创建的默认免密房间 (设备所有者身份, 可随时解散后改建密码房)
+fn start_default_open_room(state: &Arc<AppState>) {
+    let dev_name = whoami_device_name();
+    let primary_ip = get_primary_ip();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+
+    let room_name = format!("WenBox·{}", dev_name);
+    let cfg = RoomConfig {
+        is_active: true,
+        room_id: room_name.clone(),
+        room_name: room_name.clone(),
+        pin: String::new(),
+        need_password: false,
+        host_device: dev_name.clone(),
+        host_ip: primary_ip.clone(),
+        host_port: 9527,
+        created_at: now,
+    };
+
+    *state.room.lock().unwrap() = cfg.clone();
+    state.members.lock().unwrap().clear();
+    state.auth_tokens.lock().unwrap().clear();
+    state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
+
+    let host_token = uuid::Uuid::new_v4().to_string();
+    *state.host_token.lock().unwrap() = host_token.clone();
+    *state.is_tauri_host.lock().unwrap() = true;
+    state.auth_tokens.lock().unwrap().insert(host_token.clone());
+
+    let host_member = RoomMember {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: format!("{} (房主)", dev_name),
+        ip: primary_ip.clone(),
+        platform: "Windows".to_string(),
+        access_ip: format!("{}:9527", primary_ip),
+        joined_at: now,
+        last_seen: now,
+    };
+    state.members.lock().unwrap().insert("host".into(), host_member);
+
+    println!("已自动创建免密房间「{}」，局域网内可通过 http://{}:9527 直接加入", room_name, primary_ip);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2407,6 +2450,10 @@ fn main() {
 
     // 启动 UDP 自动发现与设备节点探测 (9528)
     start_udp_discovery(state.clone(), 9527);
+
+    // 软件打开即自动创建一个免密房间并对外广播:
+    // 局域网内其他设备通过 IP 访问后无需任何操作即可直接加入互传
+    start_default_open_room(&state);
 
     tauri::Builder::default()
         .manage(state)

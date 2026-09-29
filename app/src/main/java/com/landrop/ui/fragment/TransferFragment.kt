@@ -63,6 +63,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -509,6 +510,8 @@ class TransferFragment : Fragment() {
             )
         }
 
+        renderRoomProfiles(dialogBinding)
+
         dialogBinding.btnCancelCreateRoom.setOnClickListener {
             dialog.dismiss()
         }
@@ -516,6 +519,11 @@ class TransferFragment : Fragment() {
         dialogBinding.btnConfirmCreateRoom.setOnClickListener {
             val rName = dialogBinding.etRoomName.text.toString().trim()
             val rPin = dialogBinding.etRoomPin.text.toString().trim()
+
+            // 勾选"保存为常用密码房"时记录该配置，下次创建可一键填入
+            if (dialogBinding.chkSaveProfile.isChecked && rPin.isNotBlank()) {
+                saveRoomProfile(rName, rPin)
+            }
 
             val service = getTransferService()
             if (service?.isRunning != true) {
@@ -542,6 +550,74 @@ class TransferFragment : Fragment() {
         }
 
         dialog.show()
+    }
+
+    // ---------------- 常用密码房配置 (保存 / 一键填入 / 长按删除) ----------------
+
+    private fun getRoomProfiles(): MutableList<JSONObject> {
+        val ctx = context ?: return mutableListOf()
+        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
+        return try {
+            val arr = JSONArray(sp.getString("room_profiles", "[]") ?: "[]")
+            (0 until arr.length()).mapTo(mutableListOf()) { arr.getJSONObject(it) }
+        } catch (_: Exception) {
+            mutableListOf()
+        }
+    }
+
+    private fun persistRoomProfiles(profiles: List<JSONObject>) {
+        val ctx = context ?: return
+        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
+        sp.edit().putString("room_profiles", JSONArray(profiles).toString()).apply()
+    }
+
+    private fun saveRoomProfile(name: String, pin: String) {
+        val profiles = getRoomProfiles()
+        profiles.removeAll { it.optString("name") == name }
+        profiles.add(0, JSONObject().put("name", name).put("pin", pin))
+        while (profiles.size > 10) profiles.removeAt(profiles.size - 1)
+        persistRoomProfiles(profiles)
+    }
+
+    private fun renderRoomProfiles(dialogBinding: DialogCreateRoomBinding) {
+        val profiles = getRoomProfiles()
+        val container = dialogBinding.llRoomProfiles
+        container.removeAllViews()
+        if (profiles.isEmpty()) {
+            container.visibility = View.GONE
+            return
+        }
+        container.visibility = View.VISIBLE
+
+        val hint = TextView(requireContext()).apply {
+            text = "📌 常用密码房 (点击填入，长按删除)："
+            setTextColor(ContextCompat.getColor(requireContext(), R.color.text_secondary))
+            textSize = 12f
+        }
+        container.addView(hint)
+
+        profiles.forEach { profile ->
+            val name = profile.optString("name", "未命名房间")
+            val pin = profile.optString("pin", "")
+            val row = TextView(requireContext()).apply {
+                text = "▸ $name${if (pin.isNotBlank()) " (PIN: $pin)" else " (免密)"}"
+                setTextColor(Color.parseColor("#60A5FA"))
+                textSize = 13f
+                setPadding(0, (8 * resources.displayMetrics.density).toInt(), 0, (8 * resources.displayMetrics.density).toInt())
+                setOnClickListener {
+                    dialogBinding.etRoomName.setText(name)
+                    dialogBinding.etRoomPin.setText(pin)
+                }
+                setOnLongClickListener {
+                    val remaining = getRoomProfiles().filter { it.optString("name") != name }
+                    persistRoomProfiles(remaining)
+                    renderRoomProfiles(dialogBinding)
+                    Toast.makeText(context, "已删除常用房间「$name」", Toast.LENGTH_SHORT).show()
+                    true
+                }
+            }
+            container.addView(row)
+        }
     }
 
     private fun confirmCloseRoom() {

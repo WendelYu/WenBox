@@ -1,4 +1,4 @@
-name: Release WenBox (Android APK & Windows EXE & macOS DMG)
+name: Release WenBox (Android APK & Windows EXE)
 
 on:
   push:
@@ -87,65 +87,9 @@ jobs:
           name: windows-exe
           path: release-win/*
 
-  build-macos:
-    name: Build macOS DMG (Rust/Tauri, ${{ matrix.arch }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest      # Apple Silicon (M 系列)
-            target: aarch64-apple-darwin
-            arch: aarch64
-          - os: macos-13          # Intel
-            target: x86_64-apple-darwin
-            arch: x64
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
-          key: ${{ matrix.target }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-
-      - name: Build Tauri macOS App
-        run: npx @tauri-apps/cli@1.5 build -- --target ${{ matrix.target }}
-
-      - name: Prepare macOS Files for Release
-        run: |
-          mkdir -p release-mac
-          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
-          if ls "$BUNDLE_DIR"/dmg/*.dmg 1> /dev/null 2>&1; then
-            cp "$BUNDLE_DIR"/dmg/*.dmg "release-mac/WenBox-macOS-${{ matrix.arch }}.dmg"
-          fi
-          if [ -d "$BUNDLE_DIR/macos/WenBox.app" ]; then
-            cd "$BUNDLE_DIR/macos"
-            zip -qry "$GITHUB_WORKSPACE/release-mac/WenBox-macOS-${{ matrix.arch }}.app.zip" WenBox.app
-            cd "$GITHUB_WORKSPACE"
-          fi
-          ls -la release-mac
-
-      - name: Upload macOS Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-dmg-${{ matrix.arch }}
-          path: release-mac/*
-
   publish-release:
     name: Publish to GitHub Releases
-    needs: [build-android, build-windows, build-macos]
+    needs: [build-android, build-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -161,18 +105,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: windows-exe
-          path: release-assets
-
-      - name: Download macOS Artifacts (aarch64)
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-dmg-aarch64
-          path: release-assets
-
-      - name: Download macOS Artifacts (x64)
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-dmg-x64
           path: release-assets
 
       - name: Create Release and Upload Assets

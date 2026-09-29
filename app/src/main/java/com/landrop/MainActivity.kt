@@ -19,11 +19,13 @@ import androidx.viewpager2.adapter.FragmentStateAdapter
 import androidx.viewpager2.widget.ViewPager2
 import com.landrop.databinding.ActivityMainBinding
 import com.landrop.server.FileManager
+import com.landrop.server.RoomManager
 import com.landrop.service.TransferService
 import com.landrop.ui.fragment.ConverterFragment
 import com.landrop.ui.fragment.CronFragment
 import com.landrop.ui.fragment.JsonFragment
 import com.landrop.ui.fragment.TransferFragment
+import com.landrop.utils.NetworkUtils
 
 class MainActivity : AppCompatActivity() {
 
@@ -57,6 +59,26 @@ class MainActivity : AppCompatActivity() {
                     transferFragment.updateServerUi(running)
                 }
             }
+
+            // 打开软件即自动开启服务并创建免密房间:
+            // 局域网内其他设备通过 IP 访问后无需任何操作即可直接加入互传
+            val svc = transferService
+            if (svc != null && RoomManager.currentRoom?.isActive != true) {
+                if (!svc.isRunning) {
+                    svc.startServer(9527)
+                }
+                val primaryIp = NetworkUtils.getAllLocalIpAddresses(this@MainActivity)
+                    .firstOrNull()?.ip ?: "127.0.0.1"
+                val devName = "${Build.BRAND} ${Build.MODEL}"
+                RoomManager.createRoom(
+                    roomName = "${devName}的房间",
+                    pin = "",
+                    hostDevice = devName,
+                    hostIp = primaryIp,
+                    hostPort = 9527
+                )
+            }
+
             transferFragment.onServiceConnected()
         }
 

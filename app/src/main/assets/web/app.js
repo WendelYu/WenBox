@@ -429,6 +429,63 @@
         if (hostQrModal) hostQrModal.style.display = 'none';
     };
 
+    // ---------------- 常用密码房配置 (保存 / 一键填入 / 删除) ----------------
+    function getRoomProfiles() {
+        try {
+            const list = JSON.parse(localStorage.getItem('wenbox_room_profiles') || '[]');
+            return Array.isArray(list) ? list : [];
+        } catch (_) {
+            return [];
+        }
+    }
+
+    function persistRoomProfiles(list) {
+        try {
+            localStorage.setItem('wenbox_room_profiles', JSON.stringify(list.slice(0, 10)));
+        } catch (_) {}
+    }
+
+    function renderRoomProfiles() {
+        const container = document.getElementById('roomProfilesContainer');
+        if (!container) return;
+        const profiles = getRoomProfiles();
+        if (!profiles.length) {
+            container.innerHTML = '';
+            return;
+        }
+        container.innerHTML = `
+            <div style="margin-top: 12px; font-size: 12.5px; color: var(--ic-text-sub);">📌 常用密码房 (点击填入)：</div>
+            ${profiles.map((p, i) => `
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 6px 10px; background: rgba(56, 189, 248, 0.08); border: 1px solid var(--ic-border); border-radius: 8px; cursor: pointer;" onclick="window.fillRoomProfile(${i})">
+                    <span style="font-size: 13px; color: #60A5FA; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">▸ ${escapeHtml(p.name)}${p.pin ? ` (PIN: ${escapeHtml(p.pin)})` : ' (免密)'}</span>
+                    <button onclick="event.stopPropagation(); window.deleteRoomProfile(${i})" title="删除该常用配置" style="background: none; border: none; color: #EF4444; cursor: pointer; font-size: 13px; flex-shrink: 0;">✕</button>
+                </div>
+            `).join('')}
+        `;
+    }
+
+    window.fillRoomProfile = function (i) {
+        const p = getRoomProfiles()[i];
+        if (!p) return;
+        if (modalInputRoomName) modalInputRoomName.value = p.name || '';
+        if (modalInputRoomPin) modalInputRoomPin.value = p.pin || '';
+    };
+
+    window.deleteRoomProfile = function (i) {
+        const list = getRoomProfiles();
+        list.splice(i, 1);
+        persistRoomProfiles(list);
+        renderRoomProfiles();
+    };
+
+    function saveRoomProfile(name, pin) {
+        if (!name) return;
+        const list = getRoomProfiles().filter(p => p.name !== name);
+        list.unshift({ name, pin });
+        persistRoomProfiles(list);
+        showToast(`已保存常用密码房「${name}」`);
+    }
+
     window.openCreateRoomModal = function () {
         if (modalInputCreateRoomNickname) {
             modalInputCreateRoomNickname.value = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
@@ -438,11 +495,23 @@
             modalInputRoomName.value = `WenBox-${randomNum}`;
         }
         if (modalInputRoomPin) modalInputRoomPin.value = '';
+        const chkSave = document.getElementById('chkSaveProfile');
+        if (chkSave) chkSave.checked = false;
+        const saveRow = document.getElementById('saveProfileRow');
+        if (saveRow) saveRow.style.display = 'none';
+        renderRoomProfiles();
         if (createRoomModal) createRoomModal.style.display = 'flex';
         if (modalInputCreateRoomNickname) {
             setTimeout(() => { modalInputCreateRoomNickname.focus(); modalInputCreateRoomNickname.select(); }, 120);
         }
     };
+
+    if (modalInputRoomPin) {
+        modalInputRoomPin.addEventListener('input', () => {
+            const saveRow = document.getElementById('saveProfileRow');
+            if (saveRow) saveRow.style.display = modalInputRoomPin.value.trim() ? 'flex' : 'none';
+        });
+    }
 
     if (btnOpenCreateRoomModal) {
         btnOpenCreateRoomModal.addEventListener('click', () => {
@@ -1060,6 +1129,8 @@
                     window.closeCreateRoomModal();
                     setRoomMode('host', cfg);
                     showToast(`房间「${rName}」已创建！本机已变身服务端`);
+                    const chkSaveInvoke = document.getElementById('chkSaveProfile');
+                    if (chkSaveInvoke && chkSaveInvoke.checked && rPin) saveRoomProfile(rName, rPin);
                 } else {
                     const resp = await fetch(getApiOrigin() + '/api/room/create', {
                         method: 'POST',
@@ -1084,6 +1155,8 @@
                     window.closeCreateRoomModal();
                     setRoomMode('host', cfg);
                     showToast(`房间「${rName}」已创建！`);
+                    const chkSaveFetch = document.getElementById('chkSaveProfile');
+                    if (chkSaveFetch && chkSaveFetch.checked && rPin) saveRoomProfile(rName, rPin);
                 }
             } catch (err) {
                 window.showAlertDialog('创建房间失败', err.message || err);

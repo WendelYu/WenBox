@@ -66,9 +66,26 @@
         android:singleLine="true" />
 
     <LinearLayout
+        android:id="@+id/llRoomProfiles"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="22dp"
+        android:layout_marginTop="10dp"
+        android:orientation="vertical"
+        android:visibility="gone" />
+
+    <CheckBox
+        android:id="@+id/chkSaveProfile"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="保存为常用密码房 (下次创建时可一键填入)"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
         android:gravity="end"
         android:orientation="horizontal">
 

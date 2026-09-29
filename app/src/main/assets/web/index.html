@@ -579,6 +579,11 @@
                     <label>入房密码 / PIN 码 (留空则免密自由加入)：</label>
                     <input type="text" id="modalInputRoomPin" class="converter-input" placeholder="建议输入 4 位简短数字，如 6888" maxlength="16">
                 </div>
+                <div id="roomProfilesContainer"></div>
+                <label id="saveProfileRow" style="display: none; margin-top: 10px; font-size: 12.5px; color: var(--ic-text-sub); cursor: pointer; align-items: center; gap: 6px;">
+                    <input type="checkbox" id="chkSaveProfile" style="accent-color: #38BDF8;">
+                    保存为常用密码房 (下次打开创建窗口可一键填入)
+                </label>
             </div>
             <div class="modal-footer">
                 <button class="btn-secondary" onclick="window.closeCreateRoomModal()">取消</button>
