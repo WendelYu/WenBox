@@ -266,7 +266,7 @@ WenBox/
 
 ## 开发验证
 
-共享 Web 界面的回归检查无需安装 npm 依赖：
+共享 Web 界面的回归检查无需安装 npm 依赖（需要 Node.js 18 及以上）：
 
 ```bash
 npm test

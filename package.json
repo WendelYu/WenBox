@@ -4,7 +4,7 @@
   "description": "WenBox - 工控现场与工程师百宝箱",
   "main": "main.js",
   "scripts": {
-    "test": "node --test tests/*.test.js",
+    "test": "node --test",
     "start": "electron .",
     "dist:win": "electron-builder --win --x64 -p never",
     "lint:css": "stylelint \"app/src/main/assets/web/*.css\""
@@ -48,5 +48,8 @@
       "preload.js",
       "app/src/main/assets/web/**/*"
     ]
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

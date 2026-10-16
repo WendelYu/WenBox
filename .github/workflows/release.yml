@@ -25,6 +25,9 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          # AGP 8.2.2 要求 Gradle >= 8.2，不能依赖 runner 自带的 gradle（7.x）
+          gradle-version: 8.2
 
       - name: Ensure gradlew exists
         run: |
@@ -36,6 +39,9 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
 
+      - name: Run unit tests and lint
+        run: ./gradlew testDebugUnitTest lintDebug --stacktrace
+
       - name: Rename APK for Release
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk WenBox-Android.apk
@@ -44,6 +50,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
+          retention-days: 1
           path: WenBox-Android.apk
 
   build-windows:
@@ -64,7 +71,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
 
       - name: Build Tauri Windows EXE
         run: npx @tauri-apps/cli@1.5 build
@@ -85,6 +92,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-exe
+          retention-days: 1
           path: release-win/*
 
   publish-release:

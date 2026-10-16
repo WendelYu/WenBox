@@ -26,11 +26,13 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
 
       - name: Verify shared web runtime
         run: |
           node --check app/src/main/assets/web/app.js
+          node --check app/src/main/assets/web/runtime.js
+          node --check app/src/main/assets/web/theme.js
           npm test
 
       - name: Test desktop backend
@@ -39,10 +41,14 @@ jobs:
       - name: Build Tauri Windows EXE
         run: npx @tauri-apps/cli@1.5 build
 
+      # 产物上传会占用 Actions 存储配额（配额耗尽时即使构建成功也会失败），
+      # 因此日常 push / PR 只做构建验证，只有手动触发才上传并缩短保留期。
       - name: Upload Windows EXE / Installer Artifact
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: WenBox-Windows-Rust-Exe
+          retention-days: 7
           path: |
             src-tauri/target/release/wenbox.exe
             src-tauri/target/release/bundle/nsis/*.exe

@@ -23,6 +23,10 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          # AGP 8.2.2 要求 Gradle >= 8.2，必须显式固定，
+          # 不能依赖 runner 自带的 gradle（7.x 会直接配置失败）
+          gradle-version: 8.2
 
       - name: Ensure gradlew wrapper exists
         run: |
@@ -31,12 +35,20 @@ jobs:
             gradle wrapper --gradle-version 8.2
           fi
           chmod +x gradlew
+          ./gradlew --version
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
 
+      - name: Run unit tests and lint
+        run: ./gradlew testDebugUnitTest lintDebug --stacktrace
+
+      # 产物上传会占用 Actions 存储配额（配额耗尽时即使构建成功也会失败），
+      # 因此日常 push / PR 只做构建与测试验证，只有手动触发才上传并缩短保留期。
       - name: Upload APK Artifact
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: WenBox-Android-APK
+          retention-days: 7
           path: app/build/outputs/apk/debug/app-debug.apk
