@@ -2,10 +2,12 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="color-scheme" content="dark light">
     <title>WenBox - 局域网房间快传与即时互通工具箱</title>
     <link rel="icon" type="image/png" href="logo.png">
     <link rel="apple-touch-icon" href="logo.png">
+    <link rel="stylesheet" href="tokens.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -14,7 +16,7 @@
         <header class="header">
             <div class="brand">
                 <div class="logo-icon">
-                    <img src="logo.png" alt="WenBox" style="width: 100%; height: 100%; object-fit: cover; border-radius: 12px;">
+                    <img src="logo.png" alt="WenBox" class="w-full h-full">
                 </div>
                 <div class="brand-text">
                     <h1>WenBox</h1>
@@ -23,17 +25,31 @@
             </div>
 
             <!-- 网页端导航切换 -->
-            <nav class="nav-tabs">
-                <button class="nav-tab active" data-tab="tab-transfer">📁 文件快传</button>
-                <button class="nav-tab" data-tab="tab-chat">💬 局域网互通</button>
-                <button class="nav-tab" data-tab="tab-json">📋 JSON 工具</button>
-                <button class="nav-tab" data-tab="tab-converter">⚙️ 进制转换</button>
-                <button class="nav-tab" data-tab="tab-cron">⏱️ Cron 工作台</button>
+            <nav class="nav-tabs" aria-label="主导航">
+                <button class="nav-tab active" data-tab="tab-transfer" type="button">
+                    <svg class="icon icon--sm" aria-hidden="true"><use href="#i-upload"/></svg>快传
+                </button>
+                <button class="nav-tab" data-tab="tab-chat" type="button">
+                    <svg class="icon icon--sm" aria-hidden="true"><use href="#i-message-square"/></svg>互动
+                </button>
+                <button class="nav-tab" data-tab="tab-json" type="button">
+                    <svg class="icon icon--sm" aria-hidden="true"><use href="#i-braces"/></svg>JSON
+                </button>
+                <button class="nav-tab" data-tab="tab-converter" type="button">
+                    <svg class="icon icon--sm" aria-hidden="true"><use href="#i-binary"/></svg>进制
+                </button>
+                <button class="nav-tab" data-tab="tab-cron" type="button">
+                    <svg class="icon icon--sm" aria-hidden="true"><use href="#i-clock"/></svg>Cron
+                </button>
             </nav>
 
             <div class="device-status">
                 <span class="status-dot"></span>
                 <span id="phoneName">手机直连已就绪</span>
+                <button id="btnThemeToggle" class="btn btn--ghost btn--icon" type="button"
+                        title="切换深色 / 浅色主题" aria-label="切换深色或浅色主题">
+                    <svg class="icon icon--sm" aria-hidden="true"><use href="#i-sun"/></svg>
+                </button>
             </div>
         </header>
 
@@ -43,76 +59,76 @@
             <section class="card room-banner room-client-banner" id="roomClientBanner">
                 <div class="room-banner-header">
                     <div class="room-status-badge">
-                        <span class="status-pulse-dot" style="background: #3B82F6; box-shadow: 0 0 10px #3B82F6;"></span>
-                        <span class="room-status-title">🔍 房间发现大厅: <span style="color: #60A5FA; font-weight: bold;">正在探测局域网房间...</span></span>
+                        <span class="status-pulse-dot status-dot-blue"></span>
+                        <span class="room-status-title">🔍 房间发现大厅: <span class="text-primary fw-semibold">正在探测局域网房间...</span></span>
                     </div>
                     <div class="room-header-actions">
-                        <button id="btnOpenCreateRoomModal" class="btn-create-room" title="创建新房间 (本机变身服务端)">➕ 创建房间 (成为主机)</button>
-                        <button id="btnOpenManualJoinModal" class="btn-secondary" title="手动输入对方 IP/URL 加入">🔗 手动输入加入</button>
+                        <button id="btnOpenCreateRoomModal" class="btn btn--primary btn--sm" title="创建新房间 (本机变身服务端)">➕ 创建房间</button>
+                        <button id="btnOpenManualJoinModal" class="btn btn--secondary btn--sm" title="手动输入对方 IP/URL 加入">🔗 手动输入加入</button>
                     </div>
                 </div>
                 <div class="room-tip">
-                    💡 <b>工作模式：</b>程序启动默认处于「客户端发现模式」，自动监听并显示局域网中已创建的房间；点击「创建房间」后本机将变身「服务端主机」，其他电脑或手机扫码/点击即可加入互传！
+                    💡 创建或加入同一局域网中的房间，即可互传文件。未发现对方时，可用房主 IP 手动加入。
                 </div>
 
                 <!-- 局域网发现到的房间列表 -->
-                <div class="discovered-rooms-section" style="margin-top: 16px;">
-                    <div class="section-title" style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 14px; font-weight: 600; color: #E2E8F0;">📡 局域网可用房间 (<span id="discoveredRoomsCount">0</span>)</span>
-                        <button id="btnRefreshDiscoveredRooms" class="btn-copy-mini" style="font-size: 12px; padding: 4px 10px;">🔄 刷新房间</button>
+                <div class="discovered-rooms-section mt-4">
+                    <div class="section-title row row--between mb-2">
+                        <span class="fs-md fw-semibold text-1">📡 局域网可用房间 (<span id="discoveredRoomsCount">0</span>)</span>
+                        <button id="btnRefreshDiscoveredRooms" class="btn btn--ghost btn--sm">🔄 刷新房间</button>
                     </div>
                     <div id="discoveredRoomsContainer" class="room-cards-grid">
                         <!-- 动态渲染局域网房间卡片 -->
                     </div>
-                    <div id="noRoomsDiscoveredPrompt" class="empty-state" style="padding: 24px 10px; background: rgba(0,0,0,0.15); border-radius: 10px; margin-top: 8px;">
-                        <div class="empty-icon" style="font-size: 28px;">📡</div>
-                        <p style="font-size: 14px;">暂未发现其他设备创建的房间</p>
-                        <span style="font-size: 12px; color: #94A3B8;">您可以点击创建自己的互传房间，或者等待对方设备创建房间。</span>
-                        <div style="margin-top: 12px;">
-                            <button class="btn-create-room" onclick="window.openCreateRoomModal()" style="font-size: 13px; padding: 6px 18px;">➕ 立即创建房间 (成为主机)</button>
+                    <div id="noRoomsDiscoveredPrompt" class="empty-state p-4 mt-2 surface-inset">
+                        <div class="empty-icon fs-2xl">📡</div>
+                        <p class="fs-md">暂未发现其他设备创建的房间</p>
+                        <span class="fs-xs text-2">请确认双方连接到同一网络，也可创建房间或手动输入房主 IP。</span>
+                        <div class="mt-3">
+                            <button class="btn btn--primary btn--sm" onclick="window.openCreateRoomModal()">➕ 创建房间</button>
                         </div>
                     </div>
                 </div>
             </section>
 
             <!-- 模式 2：本机创建房间后的服务端控制台 (Host Mode) -->
-            <section class="card room-banner room-host-banner" id="roomHostBanner" style="display: none;">
+            <section class="card room-banner room-host-banner" id="roomHostBanner" hidden>
                 <div class="room-banner-header">
                     <div class="room-status-badge">
-                        <span class="status-pulse-dot" style="background: #10B981; box-shadow: 0 0 10px #10B981;"></span>
-                        <span class="room-status-title">👑 房间服务端已开启: <span id="hostRoomNameDisplay" style="color: #10B981; font-weight: bold;">--</span></span>
+                        <span class="status-pulse-dot status-dot-green"></span>
+                        <span class="room-status-title">👑 房间服务端已开启: <span id="hostRoomNameDisplay" class="text-success fw-semibold">--</span></span>
                     </div>
                     <div class="room-header-actions">
-                        <button id="btnShowHostQrCode" class="btn-qr-action" title="查看入房二维码">📱 扫码秒进</button>
-                        <button id="btnCopyRoomDirectLink" class="btn-copy-url" title="复制入房直链">📋 复制直链</button>
-                        <button id="btnCloseRoom" class="btn-danger-outline" style="padding: 6px 14px;" title="解散当前房间并切回客户端">⏹️ 解散房间</button>
+                        <button id="btnShowHostQrCode" class="btn btn--secondary btn--sm" title="查看入房二维码">📱 入房二维码</button>
+                        <button id="btnCopyRoomDirectLink" class="btn btn--secondary btn--sm" title="复制入房直链">📋 复制链接</button>
+                        <button id="btnCloseRoom" class="btn btn--danger btn--sm" title="解散当前房间并切回客户端">⏹️ 解散房间</button>
                     </div>
                 </div>
 
-                <div class="host-info-grid" style="margin-top: 14px;">
+                <div class="host-info-grid mt-3">
                     <div class="host-info-item">
                         <span class="host-info-label">房间号</span>
                         <span class="host-info-val" id="hostRoomIdDisplay">--</span>
                     </div>
                     <div class="host-info-item">
                         <span class="host-info-label">入房密码 (PIN)</span>
-                        <span class="host-info-val" id="hostRoomPinDisplay" style="color: #F59E0B;">--</span>
+                        <span class="host-info-val" id="hostRoomPinDisplay" class="text-warning">--</span>
                     </div>
-                    <div class="host-info-item" style="grid-column: span 2;">
+                    <div class="host-info-item span-2">
                         <span class="host-info-label">局域网入房网址</span>
                         <span class="host-info-val url-highlight" id="hostRoomUrlDisplay">http://...:9527</span>
                     </div>
                 </div>
 
                 <!-- 多网卡 IP 切换栏 (当存在多个物理/虚拟网卡时展开显示) -->
-                <div id="multiIpSelectorContainer" class="multi-ip-row" style="display: none; margin-top: 12px;">
-                    <span class="multi-ip-label">切换展示网卡 IP：</span>
+                <div id="multiIpSelectorContainer" class="multi-ip-row mt-3" hidde">
+                    <span class="multi-ip-label">选择访问地址：</span>
                     <div id="multiIpPills" class="multi-ip-pills"></div>
                 </div>
 
                 <!-- 房间在线成员栏 -->
-                <div class="room-members-bar" style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed rgba(255,255,255,0.1);">
-                    <div style="font-size: 13px; color: #94A3B8; margin-bottom: 8px;">👥 房间在线成员 (<span id="hostMemberCount">1</span>)：</div>
+                <div class="room-members-bar mt-3 divider-top">
+                    <div class="fs-sm text-2 mb-2">👥 房间在线成员 (<span id="hostMemberCount">1</span>)：</div>
                     <div id="hostMembersContainer" class="room-member-pills">
                         <!-- 动态渲染成员 -->
                     </div>
@@ -120,40 +136,40 @@
             </section>
 
             <!-- 模式 3：客户端加入他人房间后的状态横幅 (Joined Mode) -->
-            <section class="card room-banner room-joined-banner" id="roomJoinedBanner" style="display: none;">
+            <section class="card room-banner room-joined-banner" id="roomJoinedBanner" hidden>
                 <div class="room-banner-header">
                     <div class="room-status-badge">
-                        <span class="status-pulse-dot" style="background: #06B6D4; box-shadow: 0 0 10px #06B6D4;"></span>
-                        <span class="room-status-title">🔗 已加入房间: <span id="joinedRoomNameDisplay" style="color: #38BDF8; font-weight: bold;">--</span> (房主: <span id="joinedHostDeviceDisplay">--</span>)</span>
+                        <span class="status-pulse-dot status-dot-cyan"></span>
+                        <span class="room-status-title">🔗 已加入房间: <span id="joinedRoomNameDisplay" class="text-info fw-semibold">--</span> (房主: <span id="joinedHostDeviceDisplay">--</span>)</span>
                     </div>
                     <div class="room-header-actions">
-                        <button id="btnChangeNicknameBanner" class="btn-secondary" title="点击修改我的房间昵称">✏️ 我的昵称: <span id="bannerMyNicknameDisplay">--</span></button>
-                        <button id="btnLeaveRoom" class="btn-secondary" title="退出当前房间">🚪 退出房间</button>
+                        <button id="btnChangeNicknameBanner" class="btn btn--secondary btn--sm" title="点击修改我的房间昵称">✏️ 我的昵称: <span id="bannerMyNicknameDisplay">--</span></button>
+                        <button id="btnLeaveRoom" class="btn btn--secondary btn--sm" title="退出当前房间">🚪 退出房间</button>
                     </div>
                 </div>
-                <div class="room-tip" style="margin-top: 8px;">
+                <div class="room-tip mt-2">
                     ✨ <b>已接入房主服务：</b>您可以浏览下载房主分享的文件，也可以直接在下方将您的文件投送给房主。
                 </div>
             </section>
 
             <!-- 视图 A：当前选定为「本端 (本机)」时的面板 -->
-            <div id="selfViewSection" style="display: none;">
+            <div id="selfViewSection" hidden>
                 <!-- 面板 A1：本机对外分享的文件列表 -->
-                <section class="card section-download" style="margin-top: 20px;">
+                <section class="card section-download mt-5">
                     <div class="section-header">
                         <div class="section-title">
                             <h2>📤 本机对外分享的文件</h2>
                             <span class="subtitle">供手机或其他设备从本电脑下载的文件列表</span>
                         </div>
-                        <div class="actions" style="display: flex; gap: 8px;">
-                            <button id="btnSelectShareFile" class="btn-primary-action">
+                        <div class="actions row gap-2">
+                            <button id="btnSelectShareFile" class="btn btn--primary">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M12 5v14m-7-7h14"/>
                                 </svg>
                                 + 选择电脑文件分享
                             </button>
-                            <button id="btnClearShareFiles" class="btn-danger-outline" title="清空分享">清空分享</button>
-                            <button id="btnRefreshLocalFiles" class="btn-secondary" title="刷新列表">🔄 刷新</button>
+                            <button id="btnClearShareFiles" class="btn btn--danger btn--sm" title="清空分享">清空分享</button>
+                            <button id="btnRefreshLocalFiles" class="btn btn--secondary btn--sm" title="刷新列表">🔄 刷新</button>
                         </div>
                     </div>
 
@@ -167,49 +183,49 @@
                 </section>
 
                 <!-- 面板 A2：本机已接收的文件列表 (保存于 Downloads/WenBox) -->
-                <section class="card" style="margin-top: 20px;">
+                <section class="card mt-5">
                     <div class="section-header">
                         <div class="section-title">
                             <h2>📥 本机已接收的文件</h2>
                             <span class="subtitle">手机或其他设备发送到本电脑的文件 (直存至系统 Downloads/WenBox 目录)</span>
                         </div>
-                        <div class="actions" style="display: flex; gap: 8px;">
-                            <button id="btnOpenDownloadFolder" class="btn-secondary">
+                        <div class="actions row gap-2">
+                            <button id="btnOpenDownloadFolder" class="btn btn--secondary btn--sm">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                                 </svg>
                                 📂 打开保存目录
                             </button>
-                            <button id="btnRefreshReceivedFiles" class="btn-secondary">🔄 刷新</button>
+                            <button id="btnRefreshReceivedFiles" class="btn btn--secondary btn--sm">🔄 刷新</button>
                         </div>
                     </div>
 
                     <div id="receivedFileListContainer" class="file-list"></div>
 
-                    <div id="receivedEmptyState" class="empty-state" style="padding: 24px 20px;">
-                        <div class="empty-icon" style="font-size: 32px;">📥</div>
-                        <p style="font-size: 14px;">暂未接收到任何文件</p>
+                    <div id="receivedEmptyState" class="empty-state p-4">
+                        <div class="empty-icon fs-3xl">📥</div>
+                        <p class="fs-md">暂未接收到任何文件</p>
                         <span>手机端在浏览器或 App 中点击「发送文件」，文件将直接传输保存至此</span>
                     </div>
                 </section>
             </div>
 
             <!-- 视图 B：当前选定为「远程设备 (如手机)」时的面板 -->
-            <div id="remoteViewSection" style="display: none;">
+            <div id="remoteViewSection" hidden>
                 <!-- 日期归类直存模式 (报销/照片/发票/日志整理利器) -->
-                <section class="card reimbursement-banner" style="margin-top: 20px;">
+                <section class="card reimbursement-banner mt-5">
                     <div class="reimbursement-header">
                         <div class="reimbursement-info">
                             <span class="reimbursement-tag">📁 日期归类直存模式 (报销/发票/照片整理，免解压)</span>
                             <h3>指定电脑根目录，按日期与自定义主题自动建文件夹直存</h3>
                             <p>将所选远程设备的文件一键存入电脑目标目录，自动按当天日期归档（如 <span class="highlight-code" id="previewFolderName">YYYY-MM-DD_报销</span>），告别散乱和繁琐解压！</p>
                         </div>
-                        <div class="reimbursement-action" style="display: flex; flex-direction: column; gap: 8px; align-items: flex-end;">
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <label style="font-size: 12px; color: #94A3B8;">文件夹后缀名：</label>
-                                <input type="text" id="customFolderSuffix" class="converter-input" style="width: 120px; padding: 5px 10px; font-size: 13px;" value="报销" placeholder="如: 报销/发票/现场照片">
+                        <div class="reimbursement-action flex-col flex-end gap-2">
+                            <div class="row gap-2">
+                                <label class="fs-xs text-2">文件夹后缀名：</label>
+                                <input type="text" id="customFolderSuffix" class="converter-input input mw-120" value="报销" placeholder="如: 报销/发票/现场照片">
                             </div>
-                            <button id="btnSelectReimburseDir" class="btn-reimburse">
+                            <button id="btnSelectReimburseDir" class="btn btn--primary">
                                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                                 </svg>
@@ -217,18 +233,18 @@
                             </button>
                         </div>
                     </div>
-                    <div id="reimburseStatus" class="reimburse-status" style="display: none;"></div>
+                    <div id="reimburseStatus" class="reimburse-status" hidden></div>
                 </section>
 
                 <!-- 远程设备的文件列表 (按需下载) -->
-                <section class="card section-download" style="margin-top: 20px;">
+                <section class="card section-download mt-5">
                     <div class="section-header">
                         <div class="section-title">
                             <h2 id="currentViewingDeviceTitle">📂 对方分享的文件</h2>
                             <span id="fileCount" class="counter">0 个文件</span>
                         </div>
                         <div class="actions">
-                            <button id="btnRefreshRemoteFiles" class="btn-secondary" title="刷新列表">
+                            <button id="btnRefreshRemoteFiles" class="btn btn--secondary btn--sm" title="刷新列表">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M23 4v6h-6M1 20v-6h6M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
                                 </svg>
@@ -248,7 +264,7 @@
             </div>
 
             <!-- 向当前设备投送文件通用组件 (不管是本机还是远程) -->
-            <section class="card section-upload" style="margin-top: 20px;">
+            <section class="card section-upload mt-5">
                 <div class="section-header">
                     <div class="section-title">
                         <h2 id="uploadSectionTitle">📤 发送文件</h2>
@@ -257,7 +273,7 @@
                 </div>
 
                 <div id="dropZone" class="drop-zone">
-                    <input type="file" id="fileInput" multiple style="display: none;">
+                    <input type="file" id="fileInput" multiple hidden>
                     <div class="drop-zone-content">
                         <div class="upload-icon">
                             <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="#3B82F6" stroke-width="1.8">
@@ -265,12 +281,12 @@
                             </svg>
                         </div>
                         <p class="drop-text">拖拽任意文件到这里，或 <span class="browse-link">点击选择</span></p>
-                        <p class="drop-hint" id="dropZoneHint">局域网无损点对点高速直传</p>
+                        <p class="drop-hint" id="dropZoneHint">文件按原样传输，请保持双方设备在线</p>
                     </div>
                 </div>
 
                 <!-- 上传进度列表 -->
-                <div id="uploadProgressContainer" class="upload-progress-list" style="display: none;">
+                <div id="uploadProgressContainer" class="upload-progress-list" hidden>
                     <div class="upload-item">
                         <div class="upload-info">
                             <span id="uploadFileName">准备上传...</span>
@@ -289,25 +305,25 @@
             <!-- 状态 1：未加入任何房间时的锁屏大厅提示 -->
             <div id="chatLockedState" class="card chat-locked-card">
                 <div class="chat-locked-icon">🔒</div>
-                <h2 class="chat-locked-title">局域网互通聊天室尚未开启</h2>
+                <h2 class="chat-locked-title">加入房间，开始互通</h2>
                 <p class="chat-locked-desc">
-                    为了确保通信安全与数据隔离，即时消息收发、代码分享与文件快传需在同一房间内进行。<br>
-                    请先在「文件快传」大厅中<strong>创建房间</strong>（成为房主），或者<strong>加入局域网内其他设备创建的房间</strong>。
+                    消息、代码、图片和文件都在同一个房间中共享。<br>
+                    在「文件快传」中<strong>创建房间</strong>，或<strong>加入同一局域网内的房间</strong>。
                 </p>
                 <div class="chat-locked-actions">
-                    <button id="btnChatGoLobby" class="btn-primary">
-                        📡 前往大厅选择/发现房间
+                    <button id="btnChatGoLobby" class="btn btn--primary">
+                        📡 发现房间
                     </button>
-                    <button id="btnChatCreateRoom" class="btn-secondary">
-                        ➕ 立即创建房间 (当房主)
+                    <button id="btnChatCreateRoom" class="btn btn--secondary btn--sm">
+                        ➕ 创建房间
                     </button>
                 </div>
             </div>
 
             <!-- 状态 2：已创建或已加入房间时的完整即时聊天面板 -->
-            <section id="chatActiveContent" class="card chat-card" style="display: none; position: relative;">
+            <section id="chatActiveContent" class="card chat-card" hidde">
                 <!-- 文件拖拽悬停遮罩 -->
-                <div id="chatDropOverlay" class="chat-drop-overlay" style="display: none;">
+                <div id="chatDropOverlay" class="chat-drop-overlay" hidden>
                     <div class="chat-drop-content">
                         <span class="chat-drop-icon">📥</span>
                         <p>释放文件以直接发送到聊天室</p>
@@ -317,15 +333,15 @@
 
                 <div class="section-header chat-header-bar">
                     <div class="section-title">
-                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <div class="row row--wrap gap-2">
                             <h2>💬 局域网即时互发消息</h2>
                             <span id="chatRoomBadge" class="chat-room-badge">👑 房主服务中</span>
-                            <span id="chatRoomPinBadge" class="chat-pin-badge" style="display: none;">🔒 PIN 保护</span>
+                            <span id="chatRoomPinBadge" class="chat-pin-badge" hidden>🔒 PIN 保护</span>
                         </div>
                         <span id="chatRoomSubinfo" class="subtitle">与局域网内已连通设备实时秒发富文本、超链接、代码块、截图与文件</span>
                     </div>
-                    <div class="actions" style="display: flex; gap: 8px;">
-                        <button id="webBtnClearChat" class="btn-secondary" title="清空当前聊天记录">清屏</button>
+                    <div class="actions row gap-2">
+                        <button id="webBtnClearChat" class="btn btn--secondary btn--sm" title="清空当前聊天记录">清屏</button>
                     </div>
                 </div>
 
@@ -333,10 +349,10 @@
                 <div class="chat-status-bar">
                     <div class="chat-status-left">
                         <span id="chatOnlineMemberBadge" class="chat-online-badge" title="点击查看所有在线成员与 IP">👥 在线: 1 人 (点击查看)</span>
-                        <span style="color: var(--ic-text-subtle);">|</span>
+                        <span class="text-3">|</span>
                         <span id="chatRoomIpBadge" class="chat-room-ip">🌐 访问地址: http://127.0.0.1:9527</span>
                     </div>
-                    <div style="display: flex; gap: 6px; flex-shrink: 0;">
+                    <div class="row gap-2">
                         <button id="btnChangeNicknameChat" class="chat-status-btn" title="点击修改我的房间昵称">✏️ 昵称: <span id="chatMyNicknameDisplay">--</span></button>
                         <button id="btnShowChatMembersModal" class="chat-status-btn btn-member-list">👥 在线 IP</button>
                         <button id="btnCopyChatRoomUrl" class="chat-status-btn">复制链接</button>
@@ -344,11 +360,11 @@
                 </div>
 
                 <!-- 消息展示区 -->
-                <div id="webChatMessages" class="chat-message-list">
-                    <div id="webEmptyChat" class="empty-state" style="padding: 36px 0;">
-                        <div class="empty-icon" style="font-size: 36px;">💬</div>
-                        <p style="font-size: 15px; font-weight: 500;">局域网聊天室已就绪</p>
-                        <span style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">可在下方输入文字、粘贴图片(Ctrl+V)或拖拽文件发送</span>
+                <div id="webChatMessages" role="log" aria-label="房间消息" class="chat-message-list">
+                    <div id="webEmptyChat" class="empty-state py-6">
+                        <div class="empty-icon fs-3xl">💬</div>
+                        <p class="fs-md fw-medium">局域网聊天室已就绪</p>
+                        <span class="fs-xs text-2 mt-1">输入文字或代码，也可粘贴截图、拖入文件。</span>
                     </div>
                 </div>
 
@@ -364,7 +380,7 @@
                                 </svg>
                                 <span>图片</span>
                             </button>
-                            <input type="file" id="chatImageFileInput" accept="image/*" style="display: none;">
+                            <input type="file" id="chatImageFileInput" accept="image/*" hidden>
 
                             <button id="chatBtnSendFile" class="chat-tool-btn" title="发送任意文档或压缩包">
                                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
@@ -372,11 +388,11 @@
                                 </svg>
                                 <span>文件</span>
                             </button>
-                            <input type="file" id="chatFileInput" style="display: none;">
+                            <input type="file" id="chatFileInput" hidden>
                         </div>
                         <div class="chat-toolbar-right">
                             <span class="chat-input-shortcut-hint">Enter 发送 / Shift+Enter 换行</span>
-                            <button id="webBtnSendMessage" class="btn-send-message" title="发送消息 (Enter)">
+                            <button id="webBtnSendMessage" class="btn btn--primary" title="发送消息 (Enter)">
                                 <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
                                     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
                                 </svg>
@@ -384,7 +400,7 @@
                             </button>
                         </div>
                     </div>
-                    <textarea id="webChatMessageInput" class="chat-textarea" placeholder="输入要发送的消息或代码，支持拖入文件或直接粘贴截图 (Ctrl+V)..." rows="3"></textarea>
+                    <textarea id="webChatMessageInput" aria-label="消息内容" class="chat-textarea" placeholder="输入消息或代码，也可拖入文件、粘贴截图…" rows="3"></textarea>
                 </div>
             </section>
         </main>
@@ -397,19 +413,19 @@
                         <h2>📋 JSON 格式化与校验</h2>
                         <span class="subtitle">支持 2 空格/4 空格层级美化、单行精简压缩、语法纠错分析</span>
                     </div>
-                    <div class="actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
-                        <button id="webBtnFormatJson2" class="btn-primary-mini">2 空格美化</button>
-                        <button id="webBtnFormatJson4" class="btn-secondary">4 空格美化</button>
-                        <button id="webBtnMinifyJson" class="btn-secondary">压缩成单行</button>
-                        <button id="webBtnLoadSampleJson" class="btn-secondary">载入示例</button>
-                        <button id="webBtnCopyJson" class="btn-secondary">复制结果</button>
-                        <button id="webBtnClearJson" class="btn-secondary">清空</button>
+                    <div class="actions row row--wrap gap-2">
+                        <button id="webBtnFormatJson2" class="btn btn--primary btn--sm">2 空格美化</button>
+                        <button id="webBtnFormatJson4" class="btn btn--secondary btn--sm">4 空格美化</button>
+                        <button id="webBtnMinifyJson" class="btn btn--secondary btn--sm">压缩成单行</button>
+                        <button id="webBtnLoadSampleJson" class="btn btn--secondary btn--sm">载入示例</button>
+                        <button id="webBtnCopyJson" class="btn btn--secondary btn--sm">复制结果</button>
+                        <button id="webBtnClearJson" class="btn btn--secondary btn--sm">清空</button>
                     </div>
                 </div>
 
                 <div class="json-editor-wrapper">
                     <textarea id="webJsonInput" class="json-textarea" placeholder="在此粘贴或输入需要格式化/校验的 JSON 字符串..."></textarea>
-                    <div id="webJsonError" class="json-error-banner" style="display: none;"></div>
+                    <div id="webJsonError" class="json-error-banner" hidden></div>
                 </div>
             </section>
         </main>
@@ -422,7 +438,7 @@
                         <h2>多进制实时互转</h2>
                         <span class="subtitle">在任意输入框中输入，其他所有进制秒级自动联动转换</span>
                     </div>
-                    <button id="webBtnClearConverter" class="btn-secondary">清空所有</button>
+                    <button id="webBtnClearConverter" class="btn btn--secondary btn--sm">清空所有</button>
                 </div>
 
                 <div class="converter-grid">
@@ -430,7 +446,7 @@
                     <div class="converter-box">
                         <div class="box-header">
                             <span class="box-tag tag-hex">16 进制 (HEX)</span>
-                            <button class="btn-copy-mini" data-target="webHex">复制</button>
+                            <button class="btn btn--ghost btn--sm" data-target="webHex">复制</button>
                         </div>
                         <input type="text" id="webHex" class="converter-input" placeholder="例如: 1A3F 或 48 65 6C 6C 6F" value="1A 3F">
                     </div>
@@ -439,7 +455,7 @@
                     <div class="converter-box">
                         <div class="box-header">
                             <span class="box-tag tag-dec">10 进制 (DEC)</span>
-                            <button class="btn-copy-mini" data-target="webDec">复制</button>
+                            <button class="btn btn--ghost btn--sm" data-target="webDec">复制</button>
                         </div>
                         <input type="number" id="webDec" class="converter-input" placeholder="例如: 6719">
                     </div>
@@ -448,7 +464,7 @@
                     <div class="converter-box">
                         <div class="box-header">
                             <span class="box-tag tag-bin">2 进制 (BIN)</span>
-                            <button class="btn-copy-mini" data-target="webBin">复制</button>
+                            <button class="btn btn--ghost btn--sm" data-target="webBin">复制</button>
                         </div>
                         <input type="text" id="webBin" class="converter-input" placeholder="例如: 0001 1010 0011 1111">
                     </div>
@@ -457,7 +473,7 @@
                     <div class="converter-box">
                         <div class="box-header">
                             <span class="box-tag tag-oct">8 进制 (OCT)</span>
-                            <button class="btn-copy-mini" data-target="webOct">复制</button>
+                            <button class="btn btn--ghost btn--sm" data-target="webOct">复制</button>
                         </div>
                         <input type="text" id="webOct" class="converter-input" placeholder="例如: 15077">
                     </div>
@@ -466,7 +482,7 @@
                     <div class="converter-box full-width">
                         <div class="box-header">
                             <span class="box-tag tag-ascii">ASCII 字符文本</span>
-                            <button class="btn-copy-mini" data-target="webAscii">复制</button>
+                            <button class="btn btn--ghost btn--sm" data-target="webAscii">复制</button>
                         </div>
                         <input type="text" id="webAscii" class="converter-input" placeholder="例如: Hello">
                     </div>
@@ -532,20 +548,20 @@
                         </select>
                     </div>
 
-                    <div class="cron-field-group" style="margin-top: 16px;">
+                    <div class="cron-field-group mt-4">
                         <label>Cron 表达式：</label>
                         <div class="input-with-btn">
                             <input type="text" id="webCronInput" class="converter-input" value="* * * * * ?">
-                            <button id="webBtnCopyCron" class="btn-download" style="padding: 10px 18px;">复制表达式</button>
+                            <button id="webBtnCopyCron" class="btn btn--secondary btn--sm">复制表达式</button>
                         </div>
                     </div>
 
-                    <div class="cron-result-card" style="margin-top: 16px;">
+                    <div class="cron-result-card mt-4">
                         <span class="cron-label">中文自然语言解析：</span>
                         <div id="webCronMeaning" class="cron-meaning">每秒执行一次</div>
                     </div>
 
-                    <div class="cron-result-card" style="margin-top: 14px;">
+                    <div class="cron-result-card mt-3">
                         <span class="cron-label">📅 接下来 5 次预计触发时刻：</span>
                         <div id="webCronNextTimes" class="cron-next-list"></div>
                     </div>
@@ -559,206 +575,208 @@
     </div>
 
     <!-- 弹窗 1：创建房间 Modal (变身服务端) -->
-    <div id="createRoomModal" class="modal-overlay" style="display: none;">
+    <div id="createRoomModal" class="modal-overlay" hidden>
         <div class="modal-card">
             <div class="modal-header">
                 <h3>👑 创建房间 (本机成为服务端主机)</h3>
-                <button class="modal-close" onclick="window.closeCreateRoomModal()">✕</button>
+                <button class="btn btn--ghost btn--icon modal-close" onclick="window.closeCreateRoomModal()">✕</button>
             </div>
             <div class="modal-body">
                 <p class="modal-tip">创建房间后，本机将开启局域网广播与文件服务。其他电脑或手机可扫码或输入 PIN 码极速接入！</p>
-                <div class="form-group" style="margin-top: 14px;">
+                <div class="form-group mt-3">
                     <label>您的昵称 / 房主名称：</label>
                     <input type="text" id="modalInputCreateRoomNickname" class="converter-input" placeholder="例如: 🍎 我的 Mac / 房主小王">
                 </div>
-                <div class="form-group" style="margin-top: 14px;">
+                <div class="form-group mt-3">
                     <label>房间名称：</label>
                     <input type="text" id="modalInputRoomName" class="converter-input" placeholder="例如: 办公室互传-01">
                 </div>
-                <div class="form-group" style="margin-top: 14px;">
+                <div class="form-group mt-3">
                     <label>入房密码 / PIN 码 (留空则免密自由加入)：</label>
                     <input type="text" id="modalInputRoomPin" class="converter-input" placeholder="建议输入 4 位简短数字，如 6888" maxlength="16">
                 </div>
                 <div id="roomProfilesContainer"></div>
-                <label id="saveProfileRow" style="display: none; margin-top: 10px; font-size: 12.5px; color: var(--ic-text-sub); cursor: pointer; align-items: center; gap: 6px;">
-                    <input type="checkbox" id="chkSaveProfile" style="accent-color: #38BDF8;">
+                <label id="saveProfileRow" class="row gap-2 mt-2 fs-xs text-2" hidden>
+                    <input type="checkbox" id="chkSaveProfile" class="accent-primary">
                     保存为常用密码房 (下次打开创建窗口可一键填入)
                 </label>
             </div>
             <div class="modal-footer">
-                <button class="btn-secondary" onclick="window.closeCreateRoomModal()">取消</button>
-                <button id="modalBtnConfirmCreateRoom" class="btn-primary-action">立即创建并开启服务</button>
+                <button class="btn btn--secondary btn--sm" onclick="window.closeCreateRoomModal()">取消</button>
+                <button id="modalBtnConfirmCreateRoom" class="btn btn--primary">创建房间</button>
             </div>
         </div>
     </div>
 
     <!-- 弹窗 2：输入昵称与 PIN 码加入房间 Modal -->
-    <div id="joinRoomPinModal" class="modal-overlay" style="display: none;">
+    <div id="joinRoomPinModal" class="modal-overlay" hidden>
         <div class="modal-card">
             <div class="modal-header">
                 <h3 id="joinPinModalTitle">📱 加入房间</h3>
-                <button class="modal-close" onclick="window.closeJoinPinModal()">✕</button>
+                <button class="btn btn--ghost btn--icon modal-close" onclick="window.closeJoinPinModal()">✕</button>
             </div>
             <div class="modal-body">
                 <p class="modal-tip" id="joinPinModalDesc">设置进入房间后展示的昵称，加入后将显示为「昵称 (IP)」</p>
-                <div class="form-group" style="margin-top: 14px;">
+                <div class="form-group mt-3">
                     <label>您的昵称：</label>
                     <input type="text" id="modalInputJoinNickname" class="converter-input" placeholder="例如: 💻 我的电脑 / 小王">
                 </div>
-                <div class="form-group" id="joinPinContainer" style="margin-top: 14px;">
+                <div class="form-group" id="joinPinContainer" class="mt-3">
                     <label id="modalJoinPinLabel">房间密码 (PIN)：</label>
-                    <input type="password" id="modalInputJoinPin" class="converter-input" style="font-size: 18px; letter-spacing: 2px;" placeholder="若免密可留空" maxlength="16">
+                    <input type="password" id="modalInputJoinPin" class="converter-input input pin-input" placeholder="若免密可留空" maxlength="16">
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn-secondary" onclick="window.closeJoinPinModal()">取消</button>
-                <button id="modalBtnConfirmJoinPin" class="btn-primary-action">加入房间</button>
+                <button class="btn btn--secondary btn--sm" onclick="window.closeJoinPinModal()">取消</button>
+                <button id="modalBtnConfirmJoinPin" class="btn btn--primary">加入房间</button>
             </div>
         </div>
     </div>
 
     <!-- 弹窗 3：手动输入 IP/URL 加入房间 Modal -->
-    <div id="manualJoinModal" class="modal-overlay" style="display: none;">
+    <div id="manualJoinModal" class="modal-overlay" hidden>
         <div class="modal-card">
             <div class="modal-header">
                 <h3>🔗 手动加入远程房间</h3>
-                <button class="modal-close" onclick="window.closeManualJoinModal()">✕</button>
+                <button class="btn btn--ghost btn--icon modal-close" onclick="window.closeManualJoinModal()">✕</button>
             </div>
             <div class="modal-body">
                 <p class="modal-tip">若因网络隔离未能自动探测到房间，可直接输入对方主机的 IP 或网址直连：</p>
-                <div class="form-group" style="margin-top: 14px;">
+                <div class="form-group mt-3">
                     <label>主机 IP 或完整网址：</label>
                     <input type="text" id="modalInputManualUrl" class="converter-input" placeholder="例如: 192.168.1.5 或 http://192.168.1.5:9527">
                 </div>
-                <div class="form-group" style="margin-top: 14px;">
+                <div class="form-group mt-3">
                     <label>房间 PIN 码 (若无则留空)：</label>
                     <input type="text" id="modalInputManualPin" class="converter-input" placeholder="入房 PIN 码" maxlength="16">
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn-secondary" onclick="window.closeManualJoinModal()">取消</button>
-                <button id="modalBtnConfirmManualJoin" class="btn-primary-action">连接并进入</button>
+                <button class="btn btn--secondary btn--sm" onclick="window.closeManualJoinModal()">取消</button>
+                <button id="modalBtnConfirmManualJoin" class="btn btn--primary">加入房间</button>
             </div>
         </div>
     </div>
 
     <!-- 弹窗 4：房主二维码 Modal (扫码秒进) -->
-    <div id="hostQrModal" class="modal-overlay" style="display: none;">
-        <div class="modal-card" style="text-align: center; max-width: 380px;">
+    <div id="hostQrModal" class="modal-overlay" hidden>
+        <div class="modal-card text-center max-w-sm">
             <div class="modal-header">
                 <h3>📱 手机扫码秒进房间</h3>
-                <button class="modal-close" onclick="window.closeHostQrModal()">✕</button>
+                <button class="btn btn--ghost btn--icon modal-close" onclick="window.closeHostQrModal()">✕</button>
             </div>
-            <div class="modal-body" style="display: flex; flex-direction: column; align-items: center; padding: 20px 0;">
-                <div id="qrCanvasContainer" style="background: #fff; padding: 16px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);">
+            <div class="modal-body flex-col items-center p-5">
+                <div id="qrCanvasContainer" class="qr-card">
                     <canvas id="hostQrCanvas" width="220" height="220"></canvas>
                 </div>
-                <div style="margin-top: 14px; font-size: 13px; color: #94A3B8;">
+                <div class="mt-3 fs-sm text-2">
                     同一 Wi-Fi 下使用手机相机或微信/浏览器扫码<br>免输入密码，即开即传！
                 </div>
-                <div id="qrDirectUrlText" style="margin-top: 8px; font-size: 12px; color: #60A5FA; font-family: monospace; word-break: break-all;"></div>
+                <div id="qrDirectUrlText" class="mt-2 fs-xs text-mono-primary"></div>
             </div>
-            <div class="modal-footer" style="justify-content: center;">
-                <button class="btn-primary-action" onclick="window.closeHostQrModal()">完成</button>
+            <div class="modal-footer justify-center">
+                <button class="btn btn--primary" onclick="window.closeHostQrModal()">完成</button>
             </div>
         </div>
     </div>
 
     <!-- 弹窗 5：操作确认弹窗 (替代有 Bug 的 window.confirm) -->
-    <div id="appConfirmModal" class="modal-overlay" style="display: none;">
-        <div class="modal-card" style="max-width: 400px;">
+    <div id="appConfirmModal" class="modal-overlay" hidden>
+        <div class="modal-card max-w-sm">
             <div class="modal-header">
                 <h3 id="appConfirmTitle">⚠️ 操作确认</h3>
-                <button class="modal-close" onclick="window.closeAppConfirm(false)">✕</button>
+                <button class="btn btn--ghost btn--icon modal-close" onclick="window.closeAppConfirm(false)">✕</button>
             </div>
             <div class="modal-body">
-                <p id="appConfirmMessage" class="modal-tip" style="font-size: 14px; color: #E2E8F0; line-height: 1.6; margin-top: 6px;">确定要执行此操作吗？</p>
+                <p id="appConfirmMessage" class="modal-tip fs-md text-1 mt-2">确定要执行此操作吗？</p>
             </div>
-            <div class="modal-footer" style="margin-top: 20px;">
-                <button class="btn-secondary" onclick="window.closeAppConfirm(false)">取消</button>
-                <button id="appConfirmOkBtn" class="btn-primary-action" style="background: #EF4444;">确定</button>
+            <div class="modal-footer mt-5">
+                <button class="btn btn--secondary btn--sm" onclick="window.closeAppConfirm(false)">取消</button>
+                <button id="appConfirmOkBtn" class="btn btn--primary btn--danger-solid">确定</button>
             </div>
         </div>
     </div>
 
     <!-- 弹窗 6：操作通知/提示弹窗 (替代原生的 window.alert) -->
-    <div id="appAlertModal" class="modal-overlay" style="display: none;">
-        <div class="modal-card" style="max-width: 400px;">
+    <div id="appAlertModal" class="modal-overlay" hidden>
+        <div class="modal-card max-w-sm">
             <div class="modal-header">
                 <h3 id="appAlertTitle">ℹ️ 提示</h3>
-                <button class="modal-close" onclick="window.closeAppAlert()">✕</button>
+                <button class="btn btn--ghost btn--icon modal-close" onclick="window.closeAppAlert()">✕</button>
             </div>
             <div class="modal-body">
-                <p id="appAlertMessage" class="modal-tip" style="font-size: 14px; color: #E2E8F0; line-height: 1.6; margin-top: 6px;">提示内容</p>
+                <p id="appAlertMessage" class="modal-tip fs-md text-1 mt-2">提示内容</p>
             </div>
-            <div class="modal-footer" style="margin-top: 20px;">
-                <button id="appAlertOkBtn" class="btn-primary-action" onclick="window.closeAppAlert()">我知道了</button>
+            <div class="modal-footer mt-5">
+                <button id="appAlertOkBtn" class="btn btn--primary" onclick="window.closeAppAlert()">我知道了</button>
             </div>
         </div>
     </div>
 
     <!-- 弹窗 7：在线成员与访问 IP 列表 Modal -->
-    <div id="onlineMembersModal" class="modal-overlay" style="display: none;">
-        <div class="modal-card" style="max-width: 460px;">
+    <div id="onlineMembersModal" class="modal-overlay" hidden>
+        <div class="modal-card max-w-md">
             <div class="modal-header">
                 <h3 id="onlineMembersModalTitle">👥 房间在线成员与 IP</h3>
-                <button class="modal-close" onclick="window.closeOnlineMembersModal()">✕</button>
+                <button class="btn btn--ghost btn--icon modal-close" onclick="window.closeOnlineMembersModal()">✕</button>
             </div>
             <div class="modal-body">
                 <p class="modal-tip">当前局域网房间已连接的成员列表，点击按钮可快捷复制其 IP 地址：</p>
-                <div id="onlineMembersModalList" style="margin-top: 12px; max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;">
+                <div id="onlineMembersModalList" class="mt-3 scroll-y flex-col gap-2">
                     <!-- 动态渲染成员项 -->
                 </div>
             </div>
-            <div class="modal-footer" style="margin-top: 18px;">
-                <button class="btn-secondary" onclick="window.closeOnlineMembersModal()">关闭</button>
+            <div class="modal-footer mt-4">
+                <button class="btn btn--secondary btn--sm" onclick="window.closeOnlineMembersModal()">关闭</button>
             </div>
         </div>
     </div>
 
     <!-- 聊天室图片全屏预览 Modal -->
-    <div id="chatImageModal" class="modal-overlay" style="display: none;">
-        <div class="modal-card" style="max-width: 90vw; max-height: 90vh; width: auto; background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(255, 255, 255, 0.15); display: flex; flex-direction: column; align-items: center; padding: 16px;">
-            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <span style="font-size: 14px; color: #94A3B8; font-weight: 500;">🖼️ 图片全屏预览</span>
-                <button class="modal-close" id="btnCloseChatImageModal">✕</button>
+    <div id="chatImageModal" class="modal-overlay" hidden>
+        <div class="modal-card lightbox-card">
+            <div class="row row--between w-full mb-3">
+                <span class="fs-md text-2 fw-medium">🖼️ 图片全屏预览</span>
+                <button class="btn btn--ghost btn--icon modal-close" id="btnCloseChatImageModal">✕</button>
             </div>
-            <div style="max-height: 75vh; overflow: auto; display: flex; justify-content: center; align-items: center;">
-                <img id="chatModalImage" src="" alt="预览图" style="max-width: 100%; max-height: 75vh; border-radius: 8px; object-fit: contain; box-shadow: 0 8px 32px rgba(0,0,0,0.5);">
+            <div class="max-h-75vh scroll-y center">
+                <img id="chatModalImage" src="" alt="预览图" class="lightbox-image">
             </div>
-            <div style="margin-top: 14px; display: flex; gap: 12px;">
-                <a id="chatModalDownloadBtn" href="#" download="wenbox_image.png" class="btn-primary-mini" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+            <div class="mt-3 row gap-3">
+                <a id="chatModalDownloadBtn" href="#" download="wenbox_image.png" class="btn btn--secondary btn--sm">
                     ⬇️ 下载原图
                 </a>
-                <button id="chatModalCopyBtn" class="btn-secondary-mini">📋 复制图片</button>
+                <button id="chatModalCopyBtn" class="btn btn--secondary btn--sm">📋 复制图片</button>
             </div>
         </div>
     </div>
 
     <!-- 弹窗 8：修改房间昵称 Modal -->
-    <div id="editNicknameModal" class="modal-overlay" style="display: none;">
-        <div class="modal-card" style="max-width: 400px;">
+    <div id="editNicknameModal" class="modal-overlay" hidden>
+        <div class="modal-card max-w-sm">
             <div class="modal-header">
                 <h3>✏️ 修改我的房间昵称</h3>
-                <button class="modal-close" onclick="window.closeEditNicknameModal()">✕</button>
+                <button class="btn btn--ghost btn--icon modal-close" onclick="window.closeEditNicknameModal()">✕</button>
             </div>
             <div class="modal-body">
                 <p class="modal-tip">修改后将实时同步给房间内其他所有设备，显示为「昵称 (IP)」：</p>
-                <div class="form-group" style="margin-top: 14px;">
+                <div class="form-group mt-3">
                     <label>我的昵称：</label>
                     <input type="text" id="modalInputEditNickname" class="modal-input" placeholder="输入新的昵称（如：小明、办公电脑）" maxlength="20">
                 </div>
             </div>
-            <div class="modal-footer" style="margin-top: 18px;">
-                <button class="btn-secondary" onclick="window.closeEditNicknameModal()">取消</button>
-                <button id="btnSaveNicknameModal" class="btn-primary-action">保存修改</button>
+            <div class="modal-footer mt-4">
+                <button class="btn btn--secondary btn--sm" onclick="window.closeEditNicknameModal()">取消</button>
+                <button id="btnSaveNicknameModal" class="btn btn--primary">保存修改</button>
             </div>
         </div>
     </div>
 
     <!-- 简易通知 Toast -->
-    <div id="toast" class="toast"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+    <script src="runtime.js"></script>
+    <script src="theme.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

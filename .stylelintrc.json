@@ -1,0 +1,56 @@
+{
+  "extends": "stylelint-config-standard",
+  "rules": {
+    "comment-empty-line-before": null,
+    "declaration-empty-line-before": null,
+    "custom-property-empty-line-before": null,
+    "no-descending-specificity": null,
+    "selector-class-pattern": null,
+    "keyframes-name-pattern": null,
+    "value-keyword-case": null,
+    "font-family-name-quotes": null,
+    "color-function-notation": null,
+    "alpha-value-notation": null,
+    "media-feature-range-notation": null,
+    "shorthand-property-no-redundant-values": null,
+    "declaration-block-no-redundant-longhand-properties": null,
+    "rule-empty-line-before": null,
+    "at-rule-empty-line-before": null,
+    "number-max-precision": null,
+    "color-hex-length": null,
+    "length-zero-no-unit": null,
+    "declaration-block-single-line-max-declarations": null,
+    "selector-not-notation": null,
+    "hue-degree-notation": null,
+    "property-no-vendor-prefix": null,
+    "value-no-vendor-prefix": null,
+    "media-query-no-invalid": null,
+    "no-duplicate-selectors": [
+      true,
+      {
+        "severity": "warning"
+      }
+    ],
+    "color-no-hex": [
+      true,
+      {
+        "severity": "error",
+        "message": "禁止十六进制色值，请改用 tokens.css 中定义的 design token（例如 var(--text-1)）"
+      }
+    ],
+    "declaration-property-value-disallowed-list": {
+      "font-size": [
+        "/^[0-9.]+px$/"
+      ]
+    }
+  },
+  "overrides": [
+    {
+      "files": ["app/src/main/assets/web/tokens.css"],
+      "rules": {
+        "color-no-hex": null,
+        "declaration-property-value-disallowed-list": null
+      }
+    }
+  ]
+}

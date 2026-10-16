@@ -1,11 +1,66 @@
 (function () {
     // ---------------- 全局通知 Toast ----------------
+    const { copyText, singleFlight, fetchWithTimeout, listChanged } = window.WenBox;
     const toast = document.getElementById('toast');
+    let toastTimer;
+    function setText(element, value) {
+        if (element && element.textContent !== String(value)) element.textContent = value;
+    }
+    // ---------------- 主题切换 (Phase 4) ----------------
+    function initThemeToggle() {
+        const button = document.getElementById('btnThemeToggle');
+        if (!button || !window.WenBoxTheme) return;
+        const iconUse = button.querySelector('use');
+
+        function render(preference, resolved) {
+            const isLight = resolved === 'light';
+            if (iconUse) iconUse.setAttribute('href', isLight ? '#i-moon' : '#i-sun');
+            button.setAttribute('aria-label', isLight ? '切换到深色主题' : '切换到浅色主题');
+            button.title = `主题: ${preference === 'system' ? '跟随系统' : (preference === 'light' ? '浅色' : '深色')}`;
+        }
+
+        render(window.WenBoxTheme.preference, window.WenBoxTheme.resolved);
+        window.WenBoxTheme.subscribe(render);
+        button.addEventListener('click', () => {
+            // 三态循环：跟随系统 -> 深色 -> 浅色 -> 跟随系统
+            const order = ['system', 'dark', 'light'];
+            const next = order[(order.indexOf(window.WenBoxTheme.preference) + 1) % order.length];
+            window.WenBoxTheme.set(next);
+        });
+    }
+
     function showToast(msg) {
         if (!toast) return;
         toast.textContent = msg;
         toast.classList.add('show');
-        setTimeout(() => toast.classList.remove('show'), 2500);
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+
+    async function copyWithFeedback(text, message = '已复制到剪贴板') {
+        try {
+            await copyText(text);
+            showToast(message);
+            return true;
+        } catch (_) {
+            showToast('复制未成功，请选中内容后手动复制');
+            return false;
+        }
+    }
+
+    function markCopied(btn, text) {
+        if (!btn) return;
+        if (!btn.dataset.copyOriginal) btn.dataset.copyOriginal = btn.innerHTML;
+        clearTimeout(btn._copyTimer);
+        btn.classList.add('copied');
+        btn.setAttribute('aria-label', '已复制');
+        btn.innerHTML = text;
+        btn._copyTimer = setTimeout(() => {
+            btn.classList.remove('copied');
+            btn.innerHTML = btn.dataset.copyOriginal;
+            btn.setAttribute('aria-label', btn.title || '复制');
+        }, 1500);
     }
 
     // ---------------- 顶部 Tab 导航切换 ----------------
@@ -45,10 +100,14 @@
     let roomState = {
         mode: 'client', // 'client' | 'host' | 'joined'
         token: localStorage.getItem('wenbox_room_token') || '',
+        // 服务端返回的成员 id。成员 id 与房间令牌已解耦 (BUG 文档 S2)，
+        // 判断"哪条消息/哪个成员是我"必须用 memberId，绝不能用 token。
+        memberId: localStorage.getItem('wenbox_member_id') || '',
         roomInfo: null, // 当前房间详情
         discoveredRooms: []
     };
 
+    let roomRevision = 0;
     let currentTargetBaseUrl = ''; // 默认为本端，joined 模式时为房主地址，如 "http://192.168.1.120:9527"
     let currentTargetDeviceName = '本端直连';
 
@@ -627,7 +686,7 @@
     const multiIpPills = document.getElementById('multiIpPills');
 
     function isTauriDesktop() {
-        return window.location.hostname === 'tauri.localhost' || window.location.protocol === 'tauri:';
+        return !!getTauriInvoke() || window.location.hostname === 'tauri.localhost' || window.location.protocol === 'tauri:';
     }
 
     function getApiOrigin() {
@@ -655,7 +714,6 @@
     }
 
     function detectClientPlatform() {
-        if (isTauriDesktop()) return 'Windows';
         const ua = navigator.userAgent || '';
         if (/Android/i.test(ua)) return 'Android';
         if (/iPhone|iPad|iPod/i.test(ua)) return 'iOS';
@@ -711,6 +769,7 @@
         }
 
         multiIpSelectorContainer.style.display = 'flex';
+        if (!listChanged(multiIpPills, ips, activeIp)) return;
         multiIpPills.innerHTML = ips.map(item => {
             const ipStr = typeof item === 'string' ? item : item.ip;
             const nameStr = (typeof item === 'object' && item.name) ? ` (${item.name})` : '';
@@ -756,7 +815,7 @@
         if (hostQrModal && hostQrModal.style.display !== 'none') {
             showHostQrModal();
         }
-        showToast(`已切换展示网卡 IP 为: ${ip}`);
+        showToast(`访问地址已切换为： ${ip}`);
     };
 
     function updateHostBannerDisplay() {
@@ -765,18 +824,21 @@
         const fullUrl = getReachableHostAddress(info.hostPort);
         if (hostRoomUrlDisplay) hostRoomUrlDisplay.textContent = fullUrl;
         if (phoneNameBadge) {
-            phoneNameBadge.innerHTML = `👑 房主服务中: <b style="color:#10B981;">${info.roomName || '房间'}</b> (${fullUrl})`;
+            const badgeHtml = `👑 房主服务中: <b style="color:#10B981;">${escapeHtml(info.roomName || '房间')}</b> (${fullUrl})`;
+            if (phoneNameBadge.innerHTML !== badgeHtml) phoneNameBadge.innerHTML = badgeHtml;
         }
     }
 
-    async function checkSelfServerStatus() {
+    const checkSelfServerStatus = singleFlight(checkSelfServerStatusTask);
+    async function checkSelfServerStatusTask() {
+        const fetch = fetchWithTimeout;
         const invoke = getTauriInvoke();
         if (invoke) {
             try {
                 // 与本地后台实时同步房间模式 (只有本机 Tauri UI 亲自建房 rStatus.isTauriHost 时才响应为 host)
                 const rStatus = await invoke('get_room_status_cmd');
                 if (rStatus && rStatus.isActive && rStatus.isTauriHost) {
-                    if (roomState.mode !== 'host') {
+                    if (roomState.mode === 'client') {
                         setRoomMode('host', rStatus);
                     }
                 } else if (rStatus && !rStatus.isActive && roomState.mode === 'host') {
@@ -858,16 +920,7 @@
                 directUrl += `&pin=${encodeURIComponent(info.pin)}`;
             }
             try {
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    await navigator.clipboard.writeText(directUrl);
-                } else {
-                    const input = document.createElement('input');
-                    input.value = directUrl;
-                    document.body.appendChild(input);
-                    input.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(input);
-                }
+                await copyText(directUrl);
                 showToast(`已复制入房直链: ${directUrl}`);
             } catch (e) {
                 if (typeof window.showAlertDialog === 'function') {
@@ -912,6 +965,8 @@
                 resetChatRoomHistory();
             }
         }
+        roomRevision++;
+        latestRoomMembers = [];
         roomState.mode = mode;
         if (mode === 'host') {
             roomState.roomInfo = data;
@@ -949,7 +1004,7 @@
             if (joinedRoomNameDisplay) joinedRoomNameDisplay.textContent = data.roomName || data.roomId || '--';
             if (joinedHostDeviceDisplay) joinedHostDeviceDisplay.textContent = data.hostDevice || '主机';
             if (phoneNameBadge) {
-                phoneNameBadge.innerHTML = `🔗 已入房: <b style="color:#38BDF8;">${data.roomName || data.roomId}</b>`;
+                phoneNameBadge.innerHTML = `🔗 已入房: <b style="color:#38BDF8;">${escapeHtml(data.roomName || data.roomId)}</b>`;
             }
 
             // 加入者视图：显示远程房主分享文件下载面板与向房主投送面板
@@ -997,15 +1052,11 @@
             const rId = data ? (data.roomId || data.roomName || '') : '';
             const fullJoinUrl = rId ? `${reachableUrl}/?room=${encodeURIComponent(rId)}` : reachableUrl;
             const memberCount = (latestRoomMembers && latestRoomMembers.length) || 1;
-            if (onlineBadge) onlineBadge.textContent = `👥 在线: ${memberCount} 人 (点击查看)`;
+            setText(onlineBadge, `👥 ${memberCount} 人在线 · 查看成员`);
             if (ipBadge) ipBadge.textContent = `🌐 访问地址: ${reachableUrl}`;
             if (copyBtn) {
                 copyBtn.onclick = () => {
-                    if (navigator.clipboard) {
-                        navigator.clipboard.writeText(fullJoinUrl).then(() => showToast(`已复制入房直链: ${fullJoinUrl}`));
-                    } else {
-                        showToast(`入房直链: ${fullJoinUrl}`);
-                    }
+                    copyWithFeedback(fullJoinUrl, '入房链接已复制');
                 };
             }
         } else if (mode === 'joined' && data) {
@@ -1014,21 +1065,17 @@
                 hUrl = `http://${data.hostIp}:${data.hostPort}`;
             }
             const memberCount = (latestRoomMembers && latestRoomMembers.length > 0) ? latestRoomMembers.length : 1;
-            if (onlineBadge) onlineBadge.textContent = `👥 在线: ${memberCount} 人 (点击查看)`;
+            setText(onlineBadge, `👥 ${memberCount} 人在线 · 查看成员`);
             if (ipBadge) ipBadge.textContent = `🌐 房主地址: ${hUrl || '已连接'}`;
             if (copyBtn) {
                 copyBtn.onclick = () => {
                     if (hUrl) {
-                        if (navigator.clipboard) {
-                            navigator.clipboard.writeText(hUrl).then(() => showToast(`已复制房主网址: ${hUrl}`));
-                        } else {
-                            showToast(`房主网址: ${hUrl}`);
-                        }
+                        copyWithFeedback(hUrl, '房主地址已复制');
                     }
                 };
             }
         } else {
-            if (onlineBadge) onlineBadge.textContent = '👥 未进入房间';
+            setText(onlineBadge, '👥 未进入房间');
             if (ipBadge) ipBadge.textContent = '🌐 未进入房间';
             if (copyBtn) copyBtn.onclick = null;
         }
@@ -1114,7 +1161,7 @@
             const myPlatform = detectClientPlatform();
 
             modalBtnConfirmCreateRoom.disabled = true;
-            modalBtnConfirmCreateRoom.textContent = '正在开启房间服务...';
+            modalBtnConfirmCreateRoom.textContent = '正在创建…';
 
             try {
                 const invoke = getTauriInvoke();
@@ -1162,7 +1209,7 @@
                 window.showAlertDialog('创建房间失败', err.message || err);
             } finally {
                 modalBtnConfirmCreateRoom.disabled = false;
-                modalBtnConfirmCreateRoom.textContent = '立即创建并开启服务';
+                modalBtnConfirmCreateRoom.textContent = '创建房间';
             }
         });
     }
@@ -1226,6 +1273,7 @@
     // ---------------- 发现房间轮询与卡片渲染 ----------------
     let isPollingRooms = false;
     async function pollDiscoveredRooms() {
+        const fetch = fetchWithTimeout;
         if (isPollingRooms) return;
         if (roomState.mode !== 'client') return;
         isPollingRooms = true;
@@ -1264,6 +1312,9 @@
     }
 
     function renderDiscoveredRooms(rooms) {
+        rooms = (rooms || []).slice().sort((a, b) => String(a.id || a.roomId).localeCompare(String(b.id || b.roomId)));
+        roomState.discoveredRooms = rooms;
+        if (!listChanged(discoveredRoomsContainer, rooms, currentTargetBaseUrl + roomState.mode)) return;
         roomState.discoveredRooms = rooms;
         if (discoveredRoomsCount) discoveredRoomsCount.textContent = rooms.length;
         if (!discoveredRoomsContainer) return;
@@ -1285,8 +1336,8 @@
                         <span class="room-lock-tag ${isLock ? 'locked' : 'open'}">${isLock ? '🔒 需密码' : '🟢 公开免密'}</span>
                     </div>
                     <div class="room-card-meta">
-                        <span>👑 房主: ${escapeHtml(r.hostDevice || '主机')} (${r.hostPlatform || '未知'})</span>
-                        <span style="font-family: monospace; color: #60A5FA;">${r.ip}:${r.port}</span>
+                        <span>👑 房主: ${escapeHtml(r.hostDevice || '主机')} (${escapeHtml(r.hostPlatform || '未知')})</span>
+                        <span style="font-family: monospace; color: #60A5FA;">${escapeHtml(r.ip)}:${Number(r.port)}</span>
                     </div>
                     <button class="btn-join-room-action">加入房间 ➔</button>
                 </div>
@@ -1390,9 +1441,13 @@
         });
     }
 
+    let isJoiningRoom = false;
     async function executeJoinRoom(hostUrl, pin, roomName, hostDevice, roomId, nickname) {
+        if (isJoiningRoom) return;
+        isJoiningRoom = true;
+        const fetch = fetchWithTimeout;
         try {
-            showToast('正在验证并接入房间...');
+            showToast('正在连接房间…');
             let joinRes = null;
             const myNick = nickname || localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
             const effectiveHostUrl = (hostUrl && String(hostUrl).trim()) ? String(hostUrl).trim().replace(/\/+$/, '') : (isTauriDesktop() ? 'http://127.0.0.1:9527' : window.location.origin);
@@ -1423,7 +1478,9 @@
 
             if (joinRes && joinRes.success) {
                 roomState.token = joinRes.token || '';
+                roomState.memberId = joinRes.memberId || '';
                 localStorage.setItem('wenbox_room_token', roomState.token);
+                localStorage.setItem('wenbox_member_id', roomState.memberId);
                 window.closeJoinPinModal();
                 setRoomMode('joined', {
                     hostUrl: effectiveHostUrl,
@@ -1438,6 +1495,8 @@
             }
         } catch (e) {
             window.showAlertDialog('加入房间失败', e.message || e);
+        } finally {
+            isJoiningRoom = false;
         }
     }
 
@@ -1451,7 +1510,9 @@
         else if (plat === 'Android') prefix = 'Android手机';
         else if (plat === 'iOS') prefix = 'iPhone';
         else if (plat === 'Linux') prefix = 'Linux设备';
-        return `${prefix}-${Math.floor(100 + Math.random() * 900)}`;
+        const nickname = `${prefix}-${Math.floor(100 + Math.random() * 900)}`;
+        localStorage.setItem('wenbox_nickname', nickname);
+        return nickname;
     }
 
     function updateMyNicknameDisplay(nick) {
@@ -1521,7 +1582,10 @@
     }
 
     // 房主轮询房间成员
-    async function pollRoomMembers() {
+    const pollRoomMembers = singleFlight(pollRoomMembersTask);
+    async function pollRoomMembersTask() {
+        const fetch = fetchWithTimeout;
+        const revision = roomRevision;
         if (roomState.mode !== 'host') return;
         try {
             let members = [];
@@ -1538,12 +1602,18 @@
                     const stRes = await fetch(getApiOrigin() + '/api/room/status?t=' + Date.now(), {
                         headers: savedHostToken ? { 'X-Host-Token': savedHostToken } : {}
                     });
+                    if (revision !== roomRevision) return;
                     if (stRes.ok) {
                         const st = await stRes.json();
+                        if (revision !== roomRevision) return;
                         const currentRoomId = roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : '';
                         if (!st.isActive || !st.isHost || (st.roomId && currentRoomId && st.roomId !== currentRoomId)) {
                             sessionStorage.removeItem('wenbox_host_token');
                             roomState.token = null;
+                    roomState.memberId = '';
+                    localStorage.removeItem('wenbox_member_id');
+                        roomState.memberId = '';
+                        localStorage.removeItem('wenbox_member_id');
                             showToast('房间已解散或服务端已创建新房间，已自动返回发现大厅');
                             setRoomMode('client');
                             return;
@@ -1551,6 +1621,10 @@
                     } else if (stRes.status === 401 || stRes.status === 403 || stRes.status === 404) {
                         sessionStorage.removeItem('wenbox_host_token');
                         roomState.token = null;
+                    roomState.memberId = '';
+                    localStorage.removeItem('wenbox_member_id');
+                        roomState.memberId = '';
+                        localStorage.removeItem('wenbox_member_id');
                         showToast('房间已解散，已自动返回发现大厅');
                         setRoomMode('client');
                         return;
@@ -1577,22 +1651,27 @@
                 const res = await fetch(getApiOrigin() + '/api/room/members?t=' + Date.now(), {
                     headers: savedHostToken ? { 'X-Host-Token': savedHostToken } : {}
                 });
+                if (revision !== roomRevision) return;
                 if (res.ok) {
                     const data = await res.json();
                     members = data.members || [];
                 } else if (res.status === 401 || res.status === 403 || res.status === 404) {
                     sessionStorage.removeItem('wenbox_host_token');
                     roomState.token = null;
+                    roomState.memberId = '';
+                    localStorage.removeItem('wenbox_member_id');
                     showToast('房间已解散，已自动返回发现大厅');
                     setRoomMode('client');
                     return;
                 }
             }
+            members.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+            if (revision !== roomRevision) return;
             latestRoomMembers = members;
-            if (hostMemberCount) hostMemberCount.textContent = (members.length || 1);
+            setText(hostMemberCount, (members.length || 1));
             const onlineBadge = document.getElementById('chatOnlineMemberBadge');
-            if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length || 1} 人 (点击查看)`;
-            if (hostMembersContainer) {
+            setText(onlineBadge, `👥 ${members.length || 1} 人在线 · 查看成员`);
+            if (listChanged(hostMembersContainer, members)) {
                 hostMembersContainer.innerHTML = members.map(m => {
                     const isHost = (m.name || '').includes('房主') || m.id === 'host';
                     let cleanName = (m.name || '').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim();
@@ -1610,7 +1689,10 @@
     }
 
     // 访客端轮询房间成员、心跳与在线人数
-    async function pollJoinedMembers() {
+    const pollJoinedMembers = singleFlight(pollJoinedMembersTask);
+    async function pollJoinedMembersTask() {
+        const fetch = fetchWithTimeout;
+        const revision = roomRevision;
         if (roomState.mode !== 'joined') return;
         const baseUrl = (currentTargetBaseUrl || (isTauriDesktop() ? 'http://127.0.0.1:9527' : window.location.origin)).replace(/\/+$/, '');
         if (!baseUrl) return;
@@ -1633,11 +1715,12 @@
                 });
                 if (hbRes.ok) {
                     const hbData = await hbRes.json();
+                    if (revision !== roomRevision) return;
                     if (hbData && hbData.room) {
                         const r = hbData.room;
                         const currentRoomId = roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : '';
                         if (!r.isActive || (r.roomId && currentRoomId && r.roomId !== currentRoomId)) {
-                            showToast('房间已解散或服务端已创建新房间，已自动返回客户端大厅');
+                            showToast('房间已结束，已返回发现大厅');
                             setRoomMode('client');
                             return;
                         }
@@ -1654,14 +1737,16 @@
             // 2. 拉取最新在线成员列表
             const api = baseUrl + '/api/room/members?t=' + Date.now();
             const res = await fetch(api, {
+                headers: { 'X-Room-Token': roomState.token || '' },
                 signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(3000) : undefined
             });
             if (res.ok) {
                 const data = await res.json();
                 const members = data.members || [];
+                if (revision !== roomRevision) return;
                 latestRoomMembers = members;
                 const onlineBadge = document.getElementById('chatOnlineMemberBadge');
-                if (onlineBadge) onlineBadge.textContent = `👥 在线: ${members.length} 人 (点击查看)`;
+                setText(onlineBadge, `👥 ${members.length} 人在线 · 查看成员`);
             }
         } catch (_) {}
     }
@@ -1693,7 +1778,7 @@
             let cleanName = (m.name || '局域网成员').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim();
             if (!cleanName) cleanName = m.name || '局域网成员';
             const isMe = (roomState.mode === 'host' && isHost)
-                || (roomState.token && m.id === roomState.token)
+                || (roomState.memberId && m.id === roomState.memberId)
                 || (!isHost && cleanName === myName);
             const ip = m.ip || '127.0.0.1';
             const accessIp = m.accessIp || '';
@@ -1752,13 +1837,7 @@
         if (modal) modal.style.display = 'none';
     };
 
-    window.copyMemberIp = function(ip) {
-        if (navigator.clipboard) {
-            navigator.clipboard.writeText(ip).then(() => showToast(`已复制 IP: ${ip}`));
-        } else {
-            showToast(`IP: ${ip}`);
-        }
-    };
+    window.copyMemberIp = (ip) => copyWithFeedback(ip, 'IP 地址已复制');
 
     document.getElementById('btnShowChatMembersModal')?.addEventListener('click', () => {
         window.openOnlineMembersModal();
@@ -1770,18 +1849,22 @@
     if (btnRefreshDiscoveredRooms) {
         btnRefreshDiscoveredRooms.addEventListener('click', async () => {
             await pollDiscoveredRooms();
-            showToast('已刷新局域网房间列表');
+            showToast('房间列表已刷新');
         });
     }
 
     let isLoadingFiles = false;
     async function loadFiles() {
+        const fetch = fetchWithTimeout;
+        const revision = roomRevision;
         if (isLoadingFiles) return;
         isLoadingFiles = true;
         try {
             const invoke = getTauriInvoke();
             if (invoke) {
-                currentFiles = await invoke('fetch_node_files', { baseUrl: currentTargetBaseUrl, token: roomState.token || null });
+                const files = await invoke('fetch_node_files', { baseUrl: currentTargetBaseUrl, token: roomState.token || null });
+                if (revision !== roomRevision) return;
+                currentFiles = files;
                 renderFiles();
                 return;
             }
@@ -1795,14 +1878,17 @@
             const res = await fetch(api, { headers });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
+            if (revision !== roomRevision) return;
             currentFiles = data.files || [];
             renderFiles();
         } catch (err) {
+            if (revision !== roomRevision) return;
             console.error('loadFiles error:', err);
             if (fileListContainer && currentFiles.length === 0) {
+                listChanged(fileListContainer, null, 'error');
                 fileListContainer.innerHTML = `
                     <div style="text-align:center; padding:24px; color:#EF4444; font-size:13px;">
-                        <div>⚠️ 无法拉取该设备的文件列表 (${err.message || err})</div>
+                        <div>⚠️ 无法拉取该设备的文件列表 (${escapeHtml(String(err.message || err))})</div>
                         <div style="color:#6B7280; font-size:12px; margin-top:4px;">请检查对方设备是否在线且已开启 WenBox 服务</div>
                         <button onclick="window.loadFiles()" style="margin-top:10px; padding:4px 12px; background:#2563EB; color:#fff; border:none; border-radius:4px; cursor:pointer;">点击重试</button>
                     </div>
@@ -1814,7 +1900,7 @@
     }
     window.loadFiles = loadFiles;
 
-    // 远程文件按需下载
+    // 远程文件下载
     window.downloadRemoteFile = async function(fileId, fileName) {
         const tokenQuery = roomState.token ? `?token=${encodeURIComponent(roomState.token)}` : '';
         const tauriDialog = getTauriDialog();
@@ -1855,6 +1941,8 @@
     };
 
     function renderFiles() {
+        currentFiles = (currentFiles || []).slice().sort((a, b) => String(a.id || a.roomId).localeCompare(String(b.id || b.roomId)));
+        if (!listChanged(fileListContainer, currentFiles, currentTargetBaseUrl + roomState.mode)) return;
         if (!fileCount || !fileListContainer || !emptyState) return;
         fileCount.textContent = `${currentFiles.length} 个文件`;
         if (currentFiles.length === 0) {
@@ -1881,7 +1969,7 @@
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
                         </svg>
-                        按需下载
+                        下载
                     </button>
                 </div>
             `;
@@ -1889,7 +1977,10 @@
     }
 
     // ---------------- 本机对外分享与已接收文件管理 ----------------
-    async function loadLocalSharedFiles() {
+    const loadLocalSharedFiles = singleFlight(loadLocalSharedFilesTask);
+    async function loadLocalSharedFilesTask() {
+        const fetch = fetchWithTimeout;
+        const revision = roomRevision;
         if (!localSharedFileListContainer) return;
         try {
             let files = [];
@@ -1903,6 +1994,7 @@
                     files = data.files || [];
                 }
             }
+            if (revision !== roomRevision) return;
             renderLocalSharedFiles(files);
         } catch (e) {
             console.error('loadLocalSharedFiles error:', e);
@@ -1942,6 +2034,8 @@
     }
 
     function renderLocalSharedFiles(files) {
+        files = (files || []).slice().sort((a, b) => String(a.id || a.roomId).localeCompare(String(b.id || b.roomId)));
+        if (!listChanged(localSharedFileListContainer, files, currentTargetBaseUrl + roomState.mode)) return;
         if (!localSharedFileListContainer || !localEmptyState) return;
         if (!files || files.length === 0) {
             localSharedFileListContainer.innerHTML = '';
@@ -1960,7 +2054,7 @@
                     <div class="file-info">
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
-                            <div class="file-name" title="${file.name}">${escapeHtml(file.name)}</div>
+                            <div class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
                             <div class="file-size">${size} • 本地分享路径: ${escapeHtml(formatDisplayPath(file.path || file.name))}</div>
                         </div>
                     </div>
@@ -1984,7 +2078,7 @@
         try {
             const invoke = getTauriInvoke();
             if (invoke) {
-                await invoke('remove_share_file', { fileId });
+                await invoke('remove_share_file', { id: fileId });
             } else {
                 await fetch(getApiOrigin() + `/api/files/remove?id=${encodeURIComponent(fileId)}`, { method: 'POST' });
             }
@@ -1995,7 +2089,10 @@
         }
     };
 
-    async function loadReceivedFiles() {
+    const loadReceivedFiles = singleFlight(loadReceivedFilesTask);
+    async function loadReceivedFilesTask() {
+        const fetch = fetchWithTimeout;
+        const revision = roomRevision;
         if (!receivedFileListContainer) return;
         try {
             let files = [];
@@ -2009,6 +2106,7 @@
                     files = data.files || [];
                 }
             }
+            if (revision !== roomRevision) return;
             renderReceivedFiles(files);
         } catch (e) {
             console.error('loadReceivedFiles error:', e);
@@ -2016,6 +2114,7 @@
     }
 
     function renderReceivedFiles(files) {
+        if (!listChanged(receivedFileListContainer, files, currentTargetBaseUrl + roomState.mode)) return;
         if (!receivedFileListContainer || !receivedEmptyState) return;
         if (!files || files.length === 0) {
             receivedFileListContainer.innerHTML = '';
@@ -2034,7 +2133,7 @@
                     <div class="file-info">
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
-                            <div class="file-name" title="${file.name}">${escapeHtml(file.name)}</div>
+                            <div class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
                             <div class="file-size">${size} • 保存路径: ${escapeHtml(formatDisplayPath(file.path || 'Downloads/WenBox'))}</div>
                         </div>
                     </div>
@@ -2214,7 +2313,7 @@
                     }
 
                     const sep = detectClientPlatform() === 'Windows' ? '\\' : '/';
-                    reimburseStatus.innerHTML = `✅ <b>大功告成！</b>成功将 ${successCount} 个文件直存到 <b>${selectedPath}${sep}${dateFolderName}</b> 目录下！`;
+                    reimburseStatus.innerHTML = `✅ <b>归档完成</b> 已将 ${successCount} 个文件直存到 <b>${escapeHtml(selectedPath + sep + dateFolderName)}</b> 目录下！`;
                     showToast(`已成功直存 ${successCount} 个文件！`);
                 } catch (tErr) {
                     reimburseStatus.style.display = 'block';
@@ -2258,7 +2357,7 @@
                         }
                     }
 
-                    reimburseStatus.innerHTML = `✅ <b>大功告成！</b>成功将 ${successCount} 个文件直存到 <b>${rootDirHandle.name}/${dateFolderName}</b> 目录下，无需解压！`;
+                    reimburseStatus.innerHTML = `✅ <b>归档完成</b> 已将 ${successCount} 个文件直存到 <b>${escapeHtml(rootDirHandle.name + "/" + dateFolderName)}</b> 目录下，无需解压！`;
                     showToast(`已成功直存 ${successCount} 个文件！`);
                 } catch (err) {
                     if (err.name !== 'AbortError') {
@@ -2549,23 +2648,23 @@
 
     setInterval(() => {
         if (roomState.mode === 'host') {
-            if (currentActiveTab === 'tab-transfer') {
+            if (!document.hidden && currentActiveTab === 'tab-transfer') {
                 loadLocalSharedFiles();
                 loadReceivedFiles();
             }
             pollRoomMembers();
         } else if (roomState.mode === 'joined') {
-            if (currentActiveTab === 'tab-transfer') {
+            if (!document.hidden && currentActiveTab === 'tab-transfer') {
                 loadFiles();
             }
             pollJoinedMembers();
         } else {
-            if (currentActiveTab === 'tab-transfer') {
+            if (!document.hidden && currentActiveTab === 'tab-transfer') {
                 pollDiscoveredRooms();
             }
         }
     }, 2500);
-    setInterval(checkSelfServerStatus, 6000);
+    setInterval(() => { if (!document.hidden) checkSelfServerStatus(); }, 6000);
 
 
     // ---------------- 模块二：局域网双向即时互发消息 / 聊天室 (需创建或加入房间后才可发送) ----------------
@@ -2650,7 +2749,7 @@
                 }
             }
             if (chatRoomSubinfo) {
-                chatRoomSubinfo.textContent = `您已作为房主开启房间，同局域网成员加入后可在此秒发富文本、代码、截图与文件`;
+                chatRoomSubinfo.textContent = `同一局域网的成员加入后，即可互发消息、代码、图片和文件。`;
             }
             pollChatMessages();
         } else if (mode === 'joined') {
@@ -2696,6 +2795,8 @@
         if (isPollingChat) return;
         if (roomState.mode === 'client') return;
         isPollingChat = true;
+        const revision = roomRevision;
+        const fetch = fetchWithTimeout;
         try {
             let messages = [];
             const invoke = getTauriInvoke();
@@ -2703,12 +2804,12 @@
                 messages = await invoke('fetch_node_messages', {
                     baseUrl: currentTargetBaseUrl,
                     token: roomState.token || null,
-                    since: lastKnownMessageTimestamp > 0 ? lastKnownMessageTimestamp : null
+                    since: lastKnownMessageTimestamp > 0 ? lastKnownMessageTimestamp - 1 : null
                 });
             } else {
                 const effectiveToken = roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
                 const tokenParam = effectiveToken ? `&token=${encodeURIComponent(effectiveToken)}` : '';
-                const sinceParam = lastKnownMessageTimestamp > 0 ? `&since=${lastKnownMessageTimestamp}` : '';
+                const sinceParam = lastKnownMessageTimestamp > 0 ? `&since=${lastKnownMessageTimestamp - 1}` : '';
                 const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/messages?t=' + Date.now() + tokenParam + sinceParam;
                 const headers = { 'Accept': 'application/json' };
                 if (effectiveToken) {
@@ -2719,6 +2820,7 @@
                     headers,
                     signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(2000) : undefined
                 });
+                if (revision !== roomRevision) return;
                 if (!res.ok) {
                     if (res.status === 401 || res.status === 403 || (roomState.mode === 'joined' && (res.status === 404 || res.status === 502))) {
                         joinedDisconnectCount++;
@@ -2726,6 +2828,10 @@
                             joinedDisconnectCount = 0;
                             sessionStorage.removeItem('wenbox_host_token');
                             roomState.token = null;
+                    roomState.memberId = '';
+                    localStorage.removeItem('wenbox_member_id');
+                        roomState.memberId = '';
+                        localStorage.removeItem('wenbox_member_id');
                             showToast('房间已解散或权限已失效，已自动返回客户端大厅');
                             setRoomMode('client');
                             return;
@@ -2734,11 +2840,14 @@
                     return;
                 }
                 const data = await res.json();
+                if (revision !== roomRevision) return;
                 // 房间一致性校验：若服务端活跃房间 ID 与当前界面所处的房间 ID 不一致，说明服务端已重置或新建房间！
                 const currentRoomId = roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : '';
                 if (data.roomId && currentRoomId && data.roomId !== currentRoomId) {
                     sessionStorage.removeItem('wenbox_host_token');
                     roomState.token = null;
+                    roomState.memberId = '';
+                    localStorage.removeItem('wenbox_member_id');
                     showToast('原房间已结束，服务端已创建新房间，已自动返回发现大厅');
                     setRoomMode('client');
                     return;
@@ -2746,13 +2855,17 @@
                 messages = data.messages || [];
             }
 
+            if (revision !== roomRevision) return;
             joinedDisconnectCount = 0;
 
+            const nearBottom = !webChatMessages || webChatMessages.scrollHeight - webChatMessages.scrollTop - webChatMessages.clientHeight < 80;
+            const firstLoad = knownMessageIds.size === 0;
+            const batch = document.createDocumentFragment();
             let hasNew = false;
             messages.forEach(msg => {
                 if (!knownMessageIds.has(msg.id)) {
                     knownMessageIds.add(msg.id);
-                    renderChatMessage(msg);
+                    renderChatMessage(msg, batch);
                     hasNew = true;
                     if (msg.timestamp > lastKnownMessageTimestamp) {
                         lastKnownMessageTimestamp = msg.timestamp;
@@ -2761,14 +2874,15 @@
             });
 
             if (hasNew && webChatMessages) {
-                webChatMessages.scrollTop = webChatMessages.scrollHeight;
+                webChatMessages.appendChild(batch);
+                if (firstLoad || nearBottom) webChatMessages.scrollTop = webChatMessages.scrollHeight;
             }
         } catch (e) {
-            if (roomState.mode === 'joined') {
+            if (revision === roomRevision && roomState.mode === 'joined') {
                 joinedDisconnectCount++;
                 if (joinedDisconnectCount >= 3) {
                     joinedDisconnectCount = 0;
-                    showToast('房主已解散房间或网络中断，已自动返回客户端大厅');
+                    showToast('连接已断开，已返回发现大厅，可重新加入');
                     setRoomMode('client');
                 }
             }
@@ -2785,18 +2899,29 @@
         return `${h}:${m}:${s}`;
     }
 
-    function escapeHtml(text) {
-        if (!text) return '';
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
-    }
+    // escapeHtml 统一定义在文件上部（此处原有一份重复实现，已删除）
 
     function getEffectiveRoomToken() {
         return roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
+    }
+
+    // 聊天图片只允许 data:image/、本房间的 /api/download/ 或当前房主 origin 下的图片。
+    // 否则访客可以塞入任意 http(s) 地址，借别人的浏览器对内网地址发起 GET (轻度 SSRF/追踪)。
+    function isSafeChatImageUrl(rawUrl) {
+        if (!rawUrl) return false;
+        const value = String(rawUrl).trim();
+        if (/^data:image\//i.test(value)) return true;
+        if (value.startsWith('/api/')) return true;
+        if (!/^https?:\/\//i.test(value)) return false;
+        try {
+            const url = new URL(value);
+            const base = currentTargetBaseUrl ? new URL(currentTargetBaseUrl) : null;
+            if (base && url.host === base.host) return true;
+            const own = new URL(getApiOrigin(), window.location.href);
+            return url.host === own.host;
+        } catch (_) {
+            return false;
+        }
     }
 
     function resolveChatUrl(url) {
@@ -2828,7 +2953,7 @@
     }
 
     // 格式化渲染富文本消息流 (融合 fagedongxi.com / internal-chat 极简流式排版与 WenBox 富媒体)
-    function renderChatMessage(msg) {
+    function renderChatMessage(msg, target = webChatMessages) {
         if (!webChatMessages) return;
         if (webEmptyChat) webEmptyChat.style.display = 'none';
 
@@ -2874,7 +2999,13 @@
         const content = msg.content || '';
 
         // 1. 判断是否为图片消息
-        const isImage = (content.startsWith('[image:') && content.endsWith(']'))
+        const rawImagePayload = (content.startsWith('[image:') && content.endsWith(']'))
+            ? content.slice(7, -1)
+            : content;
+        const imageAllowed = (content.startsWith('[image:') && content.endsWith(']'))
+            ? isSafeChatImageUrl(rawImagePayload)
+            : true;
+        const isImage = imageAllowed && (content.startsWith('[image:') && content.endsWith(']'))
             || content.startsWith('data:image/')
             || (/^https?:\/\/[^\s]+\.(png|jpe?g|gif|webp|bmp|svg)(\?[^\s]*)?$/i.test(content));
 
@@ -2955,40 +3086,38 @@
         }
         // 3. 普通文本消息：格式化 Markdown 代码块、行内代码与链接识别，并置于 pre 中
         else {
-            const preEl = document.createElement('pre');
+            const preEl = document.createElement('div');
             preEl.className = 'chat-text';
 
             // 代码块占位替换，防止与普通标签冲突
             const codeBlocks = [];
             let processed = content.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (match, lang, code) => {
                 const idx = codeBlocks.length;
-                codeBlocks.push({ lang: lang || 'CODE', code: code.trim() });
+                codeBlocks.push({ lang: lang || 'CODE', code: code.replace(/\n$/, '') });
                 return `__CODE_BLOCK_${idx}__`;
             });
 
             // HTML 转义
             processed = escapeHtml(processed);
 
-            // 还原并渲染代码块
-            codeBlocks.forEach((itemBlock, idx) => {
-                const placeholder = `__CODE_BLOCK_${idx}__`;
-                const escapedCode = escapeHtml(itemBlock.code);
-                const blockHtml = `
-                    <div class="chat-code-block">
-                        <div class="chat-code-header">
-                            <span>${escapeHtml(itemBlock.lang.toUpperCase())}</span>
-                            <button class="chat-code-copy-btn" onclick="window.copyChatCode(this)">📋 复制代码</button>
-                        </div>
-                        <pre class="chat-code-content"><code>${escapedCode}</code></pre>
-                    </div>`;
-                processed = processed.replace(placeholder, blockHtml);
-            });
-
             // 行内代码识别 `code`
             processed = processed.replace(/`([^`\n]+)`/g, '<code class="chat-inline-code">$1</code>');
 
             // URL 超链接自动识别
-            processed = processed.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" class="chat-link">$1 ↗</a>');
+            // referrerpolicy="no-referrer"：房间令牌可能出现在 /api/ 链接里，
+            // 不能让 Referer 把它带到外部站点或浏览器历史。
+            processed = processed.replace(
+                /(https?:\/\/[^\s<]+)/g,
+                '<a href="$1" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" class="chat-link">$1 ↗</a>'
+            );
+
+            // 还原并渲染代码块
+            codeBlocks.forEach((itemBlock, idx) => {
+                const placeholder = `__CODE_BLOCK_${idx}__`;
+                const escapedCode = escapeHtml(itemBlock.code);
+                const blockHtml = `<div class="chat-code-block"><div class="chat-code-header"><span>${escapeHtml(itemBlock.lang.toUpperCase())}</span><button type="button" class="chat-code-copy-btn" onclick="window.copyChatCode(this)">复制代码</button></div><pre class="chat-code-content"><code>${escapedCode}</code></pre></div>`;
+                processed = processed.replace(placeholder, blockHtml);
+            });
 
             preEl.innerHTML = processed;
             contentWrap.appendChild(preEl);
@@ -2999,6 +3128,7 @@
         copyBtn.type = 'button';
         copyBtn.className = 'copy-btn';
         copyBtn.title = '复制消息内容';
+        copyBtn.setAttribute('aria-label', '复制消息内容');
         copyBtn.innerHTML = `
             <svg viewBox="0 0 24 24" width="17" height="17">
                 <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" fill="currentColor"></path>
@@ -3012,11 +3142,11 @@
 
         item.appendChild(userHeader);
         item.appendChild(contentWrap);
-        webChatMessages.appendChild(item);
+        target.appendChild(item);
     }
 
     // 全局复制消息辅助函数
-    window.copyChatMessage = function(text, btn) {
+    window.copyChatMessage = async function(text, btn) {
         if (!text) return;
         let copyText = text;
         if (text.startsWith('[file:') && text.endsWith(']')) {
@@ -3030,39 +3160,21 @@
             copyText = resolveChatUrl(rawUrl);
         }
 
-        navigator.clipboard.writeText(copyText).then(() => {
-            showToast('已复制该条消息');
-            if (btn) {
-                btn.classList.add('copied');
-                const origHtml = btn.innerHTML;
-                btn.innerHTML = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
-                setTimeout(() => {
-                    btn.classList.remove('copied');
-                    btn.innerHTML = origHtml;
-                }, 1500);
-            }
-        }).catch(() => {
-            showToast('复制失败');
-        });
+        if (await copyWithFeedback(copyText, '消息已复制')) {
+            markCopied(btn, '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>');
+        }
     };
 
-    // 全局复制代码辅助函数
-    window.copyChatCode = function(btn) {
-        const block = btn.closest('.chat-code-block');
-        if (!block) return;
-        const codeEl = block.querySelector('code');
-        if (!codeEl) return;
-        navigator.clipboard.writeText(codeEl.textContent).then(() => {
-            const originalText = btn.textContent;
-            btn.textContent = '✅ 已复制';
-            setTimeout(() => { btn.textContent = originalText; }, 1500);
-            showToast('代码已复制到剪贴板');
-        });
+    window.copyChatCode = async function(btn) {
+        const codeEl = btn.closest('.chat-code-block')?.querySelector('code');
+        if (codeEl && await copyWithFeedback(codeEl.textContent, '代码已复制')) {
+            markCopied(btn, '已复制');
+        }
     };
 
     // 底层通用发送消息函数
     async function sendChatMessageDirect(text) {
-        if (!text || !text.trim()) return;
+        if (!text || !text.trim() || roomState.mode === 'client') return false;
         const content = text.trim();
         const myName = getClientSenderName();
         const isHost = roomState.mode === 'host';
@@ -3080,7 +3192,7 @@
                     senderIp: myIp
                 });
                 pollChatMessages();
-                return;
+                return true;
             }
 
             const effectiveToken = roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
@@ -3105,6 +3217,7 @@
             });
             if (resp.ok) {
                 pollChatMessages();
+                return true;
             } else {
                 if (resp.status === 401 || resp.status === 403) {
                     showToast('发送失败：房间未授权或已重置');
@@ -3113,19 +3226,34 @@
                 }
             }
         } catch (e) {
-            showToast('网络连接失败');
+            showToast('发送失败，请检查连接后重试');
         }
     }
 
     // 发送输入框中的消息
+    let isSendingChat = false;
     async function sendChatMessage() {
-        if (!webChatMessageInput) return;
-        const text = webChatMessageInput.value.trim();
-        if (!text) return;
-
-        webChatMessageInput.value = '';
-        webChatMessageInput.style.height = 'auto';
-        await sendChatMessageDirect(text);
+        if (!webChatMessageInput || isSendingChat) return;
+        const draft = webChatMessageInput.value;
+        if (!draft.trim()) return;
+        isSendingChat = true;
+        if (webBtnSendMessage) {
+            webBtnSendMessage.disabled = true;
+            webBtnSendMessage.setAttribute('aria-busy', 'true');
+        }
+        try {
+            const sent = await sendChatMessageDirect(draft);
+            if (sent && webChatMessageInput.value === draft) {
+                webChatMessageInput.value = '';
+                webChatMessageInput.style.height = 'auto';
+            }
+        } finally {
+            isSendingChat = false;
+            if (webBtnSendMessage) {
+                webBtnSendMessage.disabled = false;
+                webBtnSendMessage.removeAttribute('aria-busy');
+            }
+        }
     }
 
     // 发送图片文件 (截图或选择的图片)
@@ -3133,8 +3261,9 @@
         if (!file) return;
         showToast('正在发送图片...');
 
-        // 若小于 400KB，直接使用 Base64 Data URL 发送，秒级直达全平台
-        if (file.size < 400 * 1024) {
+        // 128KB 以下才走 Base64 内联：400KB 文件 base64 后约 533KB 会进入消息历史，
+        // 每个客户端首轮全量拉取时都要传一遍，代价过高。
+        if (file.size < 128 * 1024) {
             const reader = new FileReader();
             reader.onload = async () => {
                 const dataUrl = reader.result;
@@ -3273,7 +3402,7 @@
     // 输入框按键监听：Enter 发送，Shift+Enter 换行
     if (webChatMessageInput) {
         webChatMessageInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
                 if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
                     e.preventDefault();
                     sendChatMessage();
@@ -3366,7 +3495,13 @@
 
     // 启动轮询获取最新消息
     pollChatMessages();
-    setInterval(pollChatMessages, 2000);
+    setInterval(() => { if (!document.hidden && currentActiveTab === 'tab-chat') pollChatMessages(); }, 2000);
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            checkSelfServerStatus();
+            if (currentActiveTab === 'tab-chat') pollChatMessages();
+        }
+    });
 
 
     // ---------------- 模块三：JSON 格式化与校验 ----------------
@@ -3446,9 +3581,7 @@
     if (webBtnCopyJson) {
         webBtnCopyJson.addEventListener('click', () => {
             if (webJsonInput && webJsonInput.value) {
-                navigator.clipboard.writeText(webJsonInput.value).then(() => {
-                    showToast('已复制 JSON 内容');
-                });
+                copyWithFeedback(webJsonInput.value, '已复制 JSON 内容');
             }
         });
     }
@@ -3599,9 +3732,7 @@
             const targetId = btn.getAttribute('data-target');
             const targetInput = document.getElementById(targetId);
             if (targetInput && targetInput.value) {
-                navigator.clipboard.writeText(targetInput.value).then(() => {
-                    showToast('已复制内容');
-                });
+                copyWithFeedback(targetInput.value, '已复制内容');
             }
         });
     });
@@ -3886,28 +4017,86 @@
 
     if (webCronPresetSelect) {
         webCronPresetSelect.addEventListener('change', (e) => {
+            clearTimeout(cronInputTimer);
             if (webCronInput) webCronInput.value = e.target.value;
             updateCronUI(e.target.value);
         });
     }
 
+    let cronInputTimer;
     if (webCronInput) {
         webCronInput.addEventListener('input', (e) => {
-            updateCronUI(e.target.value);
+            clearTimeout(cronInputTimer);
+            const value = e.target.value;
+            cronInputTimer = setTimeout(() => updateCronUI(value), 180);
         });
     }
 
     if (webBtnCopyCron) {
         webBtnCopyCron.addEventListener('click', () => {
             if (webCronInput) {
-                navigator.clipboard.writeText(webCronInput.value).then(() => {
-                    showToast('Cron 表达式已复制');
-                });
+                copyWithFeedback(webCronInput.value, 'Cron 表达式已复制');
             }
         });
     }
 
     if (webCronInput) {
         updateCronUI(webCronInput.value);
+    }
+    const modalFocus = new WeakMap();
+    const visibleModal = () => Array.from(document.querySelectorAll('.modal-overlay'))
+        .reverse().find(modal => modal.style.display !== 'none');
+    const focusable = modal => Array.from(modal.querySelectorAll('button, input, textarea, select, a[href], [tabindex="0"]'))
+        .filter(element => !element.disabled && element.getClientRects().length);
+    document.querySelectorAll('.modal-overlay').forEach(modal => {
+        modal.setAttribute('role', 'dialog');
+        modal.setAttribute('aria-modal', 'true');
+        const title = modal.querySelector('.modal-header h3, .modal-header h2');
+        if (title) {
+            if (!title.id) title.id = `${modal.id}Title`;
+            modal.setAttribute('aria-labelledby', title.id);
+        }
+        new MutationObserver(() => {
+            if (modal.style.display !== 'none') {
+                if (!modalFocus.has(modal)) modalFocus.set(modal, document.activeElement);
+                if (!modal.contains(document.activeElement)) (focusable(modal)[0] || modal).focus();
+            } else {
+                const previous = modalFocus.get(modal);
+                modalFocus.delete(modal);
+                if (previous?.isConnected) previous.focus({ preventScroll: true });
+            }
+        }).observe(modal, { attributes: true, attributeFilter: ['style'] });
+    });
+    document.addEventListener('keydown', event => {
+        const modal = visibleModal();
+        if (!modal || event.isComposing) return;
+        if (event.key === 'Escape') {
+            modal.querySelector('.modal-close')?.click();
+        } else if (event.key === 'Tab') {
+            const controls = focusable(modal);
+            const first = controls[0], last = controls[controls.length - 1];
+            if (!first) return;
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault(); last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault(); first.focus();
+            }
+        }
+    });
+    [document.getElementById('chatOnlineMemberBadge'), dropZone].filter(Boolean).forEach(element => {
+        element.setAttribute('role', 'button');
+        element.tabIndex = 0;
+        element.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault(); element.click();
+            }
+        });
+    });
+
+    // 主题切换按钮在 DOM 就绪后初始化
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initThemeToggle);
+    } else {
+        initThemeToggle();
     }
 })();
