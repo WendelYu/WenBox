@@ -28,6 +28,14 @@ jobs:
         with:
           node-version: 18
 
+      - name: Verify shared web runtime
+        run: |
+          node --check app/src/main/assets/web/app.js
+          npm test
+
+      - name: Test desktop backend
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
       - name: Build Tauri Windows EXE
         run: npx @tauri-apps/cli@1.5 build
 

@@ -264,6 +264,24 @@ WenBox/
 
 ---
 
+## 开发验证
+
+共享 Web 界面的回归检查无需安装 npm 依赖：
+
+```bash
+npm test
+node --check app/src/main/assets/web/app.js
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+```
+
+剪贴板适配按 Tauri 原生接口、Electron 隔离桥接、浏览器接口、选中文本回退的顺序处理。打包时需同时包含 `runtime.js`；Electron 打包还需包含 `preload.js`。Tauri 仅开启文本写入剪贴板权限。
+
+桌面网络和文件命令在后台执行；HTTP 状态请求与文件传输使用独立的工作队列。上传文件采用流式读写，空文件可正常接收，同名文件会另存为新名称，避免覆盖已有文件。
+
+发布前在 macOS 和 Windows 原生应用中分别检查消息、代码、链接、JSON 和 Cron 的复制，再用局域网 HTTP 浏览器检查复制回退。多设备互传时检查心跳、窗口操作和断网重连；Windows 的实际流畅度需要在目标机器上验证。
+
+---
+
 ## 🔒 安全与隐私声明
 
 - **100% 局域网传输**：WenBox 所有数据传输与通讯均在设备所在局域网内直接点对点进行；
