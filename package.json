@@ -4,14 +4,18 @@
   "description": "WenBox - 工控现场与工程师百宝箱",
   "main": "main.js",
   "scripts": {
+    "test": "node --test tests/*.test.js",
     "start": "electron .",
-    "dist:win": "electron-builder --win --x64 -p never"
+    "dist:win": "electron-builder --win --x64 -p never",
+    "lint:css": "stylelint \"app/src/main/assets/web/*.css\""
   },
   "author": "Wendel",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^28.2.0",
-    "electron-builder": "^24.9.1"
+    "electron": "=28.3.3",
+    "electron-builder": "=24.13.3",
+    "stylelint": "=16.11.0",
+    "stylelint-config-standard": "=36.0.1"
   },
   "build": {
     "appId": "com.wendel.wenbox",
@@ -23,11 +27,15 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -37,6 +45,7 @@
     },
     "files": [
       "main.js",
+      "preload.js",
       "app/src/main/assets/web/**/*"
     ]
   }

@@ -13,17 +13,31 @@
   "tauri": {
     "allowlist": {
       "all": false,
+      "clipboard": {
+        "writeText": true
+      },
       "shell": {
         "all": false,
         "open": true
       },
       "dialog": {
         "all": true,
-        "open": true
+        "open": true,
+        "save": true
       },
       "fs": {
-        "all": true,
-        "scope": ["**"]
+        "all": false,
+        "readFile": true,
+        "writeFile": true,
+        "createDir": true,
+        "exists": true,
+        "scope": [
+          "$DOWNLOAD/**",
+          "$DESKTOP/**",
+          "$DOCUMENT/**",
+          "$HOME/**",
+          "$TEMP/**"
+        ]
       },
       "path": {
         "all": true
@@ -43,7 +57,7 @@
       ]
     },
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' data: blob: http: https:; connect-src 'self' http: https: ipc: https://ipc.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; form-action 'none'"
     },
     "windows": [
       {
