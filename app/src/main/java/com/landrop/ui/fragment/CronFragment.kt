@@ -13,11 +13,18 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.landrop.cron.CronHelper
 import com.landrop.databinding.FragmentCronBinding
 
 class CronFragment : Fragment() {
 
+    private var analysisJob: Job? = null
     private var _binding: FragmentCronBinding? = null
     private val binding get() = _binding!!
 
@@ -87,19 +94,21 @@ class CronFragment : Fragment() {
     }
 
     private fun updateCronAnalysis(cron: String) {
-        val meaning = CronHelper.explainCron(cron)
-        binding.tvCronMeaning.text = meaning
-
-        val times = CronHelper.predictNextExecutionTimes(cron, 5)
-        val sb = StringBuilder()
-        times.forEachIndexed { index, t ->
-            sb.append("${index + 1}.  $t\n")
+        analysisJob?.cancel()
+        analysisJob = viewLifecycleOwner.lifecycleScope.launch {
+            delay(180)
+            val (meaning, times) = withContext(Dispatchers.Default) {
+                CronHelper.explainCron(cron) to CronHelper.predictNextExecutionTimes(cron, 5)
+            }
+            _binding?.tvCronMeaning?.text = meaning
+            _binding?.tvNextTimes?.text = times.mapIndexed { index, time -> "${index + 1}.  $time" }.joinToString("\n")
         }
-        binding.tvNextTimes.text = sb.toString().trimEnd()
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
+        analysisJob?.cancel()
+        analysisJob = null
         _binding = null
     }
 }

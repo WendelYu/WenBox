@@ -18,7 +18,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Cron 表达式工作台"
+            android:text="@string/label_cron"
             android:textColor="@color/text_primary"
             android:textSize="22sp"
             android:textStyle="bold" />
@@ -27,7 +27,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="定时任务表达式生成、中文反解与未来时刻预演"
+            android:text="@string/label_zh_08f783eb"
             android:textColor="@color/text_secondary"
             android:textSize="13sp" />
 
@@ -50,7 +50,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="常用调度模板快捷套用："
+                    android:text="@string/label_zh_2992e843"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:textStyle="bold" />
@@ -85,7 +85,7 @@
                 <com.google.android.material.textfield.TextInputLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:hint="Cron 表达式 (秒 分 时 日 月 周 [年])"
+                    android:hint="@string/label_cron_2"
                     app:boxStrokeColor="@color/accent">
 
                     <com.google.android.material.textfield.TextInputEditText
@@ -96,7 +96,7 @@
                         android:textColor="@color/text_primary"
                         android:textSize="16sp"
                         android:textStyle="bold"
-                        android:text="0 */5 * * * ?" />
+                        android:text="@string/label_0_5" />
                 </com.google.android.material.textfield.TextInputLayout>
 
                 <LinearLayout
@@ -110,7 +110,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="语义中文解析："
+                        android:text="@string/label_zh_a69a75d9"
                         android:textColor="@color/text_secondary"
                         android:textSize="12sp" />
 
@@ -119,7 +119,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="每隔 5 分钟执行"
+                        android:text="@string/label_5"
                         android:textColor="@color/accent"
                         android:textSize="15sp"
                         android:textStyle="bold" />
@@ -132,7 +132,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="44dp"
                     android:layout_marginTop="10dp"
-                    android:text="复制 Cron 表达式"
+                    android:text="@string/label_cron_3"
                     android:textSize="13sp"
                     app:cornerRadius="8dp" />
 
@@ -158,7 +158,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="📅 接下来 5 次预计触发时刻："
+                    android:text="@string/label_5_2"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:textStyle="bold" />

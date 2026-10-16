@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 间距 / 圆角 / 尺寸 token：与 tokens.css 的 sp-* / r-* / control-h 一一对应 -->
+<resources>
+    <!-- 4px 基准间距 -->
+    <dimen name="sp_1">4dp</dimen>
+    <dimen name="sp_2">8dp</dimen>
+    <dimen name="sp_3">12dp</dimen>
+    <dimen name="sp_4">16dp</dimen>
+    <dimen name="sp_5">20dp</dimen>
+    <dimen name="sp_6">24dp</dimen>
+    <dimen name="sp_8">32dp</dimen>
+    <dimen name="sp_10">40dp</dimen>
+
+    <!-- 圆角 -->
+    <dimen name="r_sm">6dp</dimen>
+    <dimen name="r_md">10dp</dimen>
+    <dimen name="r_lg">14dp</dimen>
+
+    <!-- 控件尺寸 -->
+    <dimen name="control_h">40dp</dimen>
+    <dimen name="control_h_lg">48dp</dimen>
+    <dimen name="touch_min">48dp</dimen>
+    <dimen name="icon_sm">16dp</dimen>
+    <dimen name="icon_md">20dp</dimen>
+    <dimen name="icon_lg">24dp</dimen>
+
+    <!-- 字号（与 tokens.css 的 6 档一致） -->
+    <dimen name="fs_xs">12sp</dimen>
+    <dimen name="fs_sm">13sp</dimen>
+    <dimen name="fs_md">14sp</dimen>
+    <dimen name="fs_lg">16sp</dimen>
+    <dimen name="fs_xl">20sp</dimen>
+    <dimen name="fs_2xl">28sp</dimen>
+</resources>

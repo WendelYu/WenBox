@@ -3,20 +3,20 @@
     <item
         android:id="@+id/nav_transfer"
         android:icon="@drawable/ic_nav_transfer"
-        android:title="文件快传" />
+        android:title="@string/nav_transfer" />
 
     <item
         android:id="@+id/nav_json"
         android:icon="@drawable/ic_nav_json"
-        android:title="JSON 工具" />
+        android:title="@string/nav_json" />
 
     <item
         android:id="@+id/nav_converter"
         android:icon="@drawable/ic_nav_converter"
-        android:title="进制转换" />
+        android:title="@string/nav_converter" />
 
     <item
         android:id="@+id/nav_cron"
         android:icon="@drawable/ic_nav_cron"
-        android:title="Cron 工作台" />
+        android:title="@string/nav_cron" />
 </menu>

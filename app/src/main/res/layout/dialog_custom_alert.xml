@@ -10,7 +10,7 @@
         android:id="@+id/tvAlertTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="ℹ️ 提示"
+        android:text="@string/label_zh_fc247c7a"
         android:textColor="@color/text_primary"
         android:textSize="18sp"
         android:textStyle="bold" />
@@ -21,7 +21,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
         android:lineSpacingExtra="3dp"
-        android:text="提示内容"
+        android:text="@string/label_zh_380a3675"
         android:textColor="@color/text_secondary"
         android:textSize="14sp" />
 
@@ -38,7 +38,7 @@
             android:layout_height="42dp"
             android:background="@drawable/bg_btn_primary"
             android:paddingHorizontal="24dp"
-            android:text="我知道了"
+            android:text="@string/action_got_it"
             android:textColor="#FFFFFF"
             android:textSize="14sp"
             android:textStyle="bold" />

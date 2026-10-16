@@ -69,7 +69,7 @@
             android:id="@+id/btnJoinRoom"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="加入"
+            android:text="@string/action_join"
             android:textSize="13sp"
             app:cornerRadius="8dp"
             app:backgroundTint="@color/primary" />

@@ -51,4 +51,13 @@ dependencies {
 
     // 协程
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+
+    // 单元测试（转换逻辑等纯函数）
+    testImplementation 'junit:junit:4.13.2'
+
+    // ViewModel / StateFlow：状态从 Fragment 字段迁出，重建后不丢失
+    implementation 'androidx.activity:activity-ktx:1.8.2'
+    implementation 'androidx.fragment:fragment-ktx:1.6.2'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.2'
 }

@@ -51,7 +51,7 @@
                     android:textColor="@color/accent"
                     android:textSize="11sp"
                     android:visibility="gone"
-                    android:text="[当前二维码]" />
+                    android:text="@string/cd_current_qr" />
 
             </LinearLayout>
 
@@ -73,7 +73,7 @@
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:paddingHorizontal="10dp"
-            android:text="复制"
+            android:text="@string/action_copy"
             android:textSize="12sp"
             app:cornerRadius="8dp" />
 

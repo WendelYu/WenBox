@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- API 31+ 的备份/换机规则：排除保存 PIN 的偏好文件 (P2) -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="root" />
+        <exclude domain="sharedpref" path="wenbox_prefs.xml" />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" />
+        <exclude domain="database" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="root" />
+        <exclude domain="sharedpref" path="wenbox_prefs.xml" />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" />
+        <exclude domain="database" />
     </device-transfer>
 </data-extraction-rules>

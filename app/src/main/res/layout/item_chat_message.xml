@@ -47,7 +47,7 @@
             android:src="@drawable/ic_copy"
             app:tint="@color/chat_text_muted"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="复制内容" />
+            android:contentDescription="@string/cd_copy_content" />
 
     </LinearLayout>
 
@@ -88,7 +88,7 @@
                 android:maxWidth="280dp"
                 android:maxHeight="260dp"
                 android:scaleType="fitCenter"
-                android:contentDescription="聊天图片" />
+                android:contentDescription="@string/cd_chat_image" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -98,7 +98,7 @@
                 android:background="#B3000000"
                 android:paddingHorizontal="6dp"
                 android:paddingVertical="2dp"
-                android:text="🔍 查看原图"
+                android:text="@string/cd_view_original"
                 android:textColor="#E0E0E0"
                 android:textSize="10sp" />
         </FrameLayout>

@@ -10,7 +10,7 @@
         android:id="@+id/tvEditNicknameTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="✏️ 修改房间昵称"
+        android:text="@string/label_zh_0e6f6e53"
         android:textColor="@color/text_primary"
         android:textSize="18sp"
         android:textStyle="bold" />
@@ -20,7 +20,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="修改后将实时同步给房间内其他所有设备，显示为「昵称 (IP)」"
+        android:text="@string/label_ip"
         android:textColor="@color/text_secondary"
         android:textSize="12sp" />
 
@@ -28,7 +28,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="14dp"
-        android:text="我的新昵称"
+        android:text="@string/label_zh_6c2ac6c9"
         android:textColor="@color/text_primary"
         android:textSize="13sp"
         android:textStyle="bold" />
@@ -39,7 +39,7 @@
         android:layout_height="44dp"
         android:layout_marginTop="6dp"
         android:background="@drawable/bg_input_field"
-        android:hint="例如: 小明 / 办公手机"
+        android:hint="@string/label_zh_fbf6f328"
         android:textColor="@color/text_primary"
         android:textColorHint="@color/text_secondary"
         android:textSize="14sp"
@@ -60,7 +60,7 @@
             android:layout_height="42dp"
             android:background="@drawable/bg_btn_secondary"
             android:paddingHorizontal="18dp"
-            android:text="取消"
+            android:text="@string/dialog_cancel"
             android:textColor="@color/text_primary"
             android:textSize="14sp" />
 
@@ -71,7 +71,7 @@
             android:layout_marginStart="12dp"
             android:background="@drawable/bg_btn_primary"
             android:paddingHorizontal="22dp"
-            android:text="保存修改"
+            android:text="@string/label_zh_809aa784"
             android:textColor="#FFFFFF"
             android:textSize="14sp"
             android:textStyle="bold" />

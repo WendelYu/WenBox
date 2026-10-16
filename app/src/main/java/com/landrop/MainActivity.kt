@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.os.IBinder
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
@@ -21,6 +22,7 @@ import com.landrop.databinding.ActivityMainBinding
 import com.landrop.server.FileManager
 import com.landrop.server.RoomManager
 import com.landrop.service.TransferService
+import com.landrop.ui.MainViewModel
 import com.landrop.ui.fragment.ConverterFragment
 import com.landrop.ui.fragment.CronFragment
 import com.landrop.ui.fragment.JsonFragment
@@ -31,14 +33,11 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
 
+    private val mainViewModel: MainViewModel by viewModels()
+
     var transferService: TransferService? = null
         private set
     private var isBound = false
-
-    private val transferFragment = TransferFragment()
-    private val jsonFragment = JsonFragment()
-    private val converterFragment = ConverterFragment()
-    private val cronFragment = CronFragment()
 
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -48,22 +47,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 保存文件到相册/下载目录所需的存储权限 (API 26-28) */
+    private val requestLegacyStorageLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as TransferService.LocalBinder
-            transferService = binder.getService()
+            val svc = binder.getService()
+            transferService = svc
             isBound = true
 
-            transferService?.onStatusChanged = { running ->
-                runOnUiThread {
-                    transferFragment.updateServerUi(running)
-                }
+            svc.onStatusChanged = { running ->
+                // 不再直接调用 Fragment 的方法：服务状态通过 StateFlow 暴露给所有订阅者 (A4)
+                mainViewModel.updateServiceState(running, svc.currentPort, bound = true)
             }
+            mainViewModel.updateServiceState(svc.isRunning, svc.currentPort, bound = true)
 
             // 打开软件即自动开启服务并创建免密房间:
             // 局域网内其他设备通过 IP 访问后无需任何操作即可直接加入互传
-            val svc = transferService
-            if (svc != null && RoomManager.currentRoom?.isActive != true) {
+            if (RoomManager.currentRoom?.isActive != true) {
                 if (!svc.isRunning) {
                     svc.startServer(9527)
                 }
@@ -78,13 +82,13 @@ class MainActivity : AppCompatActivity() {
                     hostPort = 9527
                 )
             }
-
-            transferFragment.onServiceConnected()
+            mainViewModel.updateServiceState(svc.isRunning, svc.currentPort, bound = true)
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
             transferService = null
             isBound = false
+            mainViewModel.updateUnbound()
         }
     }
 
@@ -106,11 +110,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupViewPager() {
-        val fragments = listOf(transferFragment, jsonFragment, converterFragment, cronFragment)
-
         binding.viewPager.adapter = object : FragmentStateAdapter(this) {
-            override fun getItemCount(): Int = fragments.size
-            override fun createFragment(position: Int): Fragment = fragments[position]
+            override fun getItemCount(): Int = NAV_ITEM_COUNT
+
+            // 每次都由 FragmentManager 创建新实例，Activity 不再持有 Fragment 引用，
+            // 重建后回调不会指向已经销毁的 Fragment (A4)
+            override fun createFragment(position: Int): Fragment = when (position) {
+                0 -> TransferFragment()
+                1 -> JsonFragment()
+                2 -> ConverterFragment()
+                else -> CronFragment()
+            }
         }
 
         binding.viewPager.isUserInputEnabled = false // 禁止滑动切换，通过底栏点击切换保证各工具操作时不误触
@@ -168,6 +178,14 @@ class MainActivity : AppCompatActivity() {
                 requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
+        // API 26-28 保存图片/接收上传需要写外部存储；后台接收上传无法弹框，
+        // 因此首次启动服务时就申请，拒绝时业务侧退回应用私有目录 (A7)
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+                requestLegacyStorageLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+        }
     }
 
     private fun handleIncomingShareIntent(intent: Intent) {
@@ -203,5 +221,9 @@ class MainActivity : AppCompatActivity() {
             isBound = false
         }
         super.onDestroy()
+    }
+
+    companion object {
+        private const val NAV_ITEM_COUNT = 4
     }
 }

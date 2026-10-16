@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 常用房间 PIN 等敏感配置不得进入备份 (P2) -->
 <full-backup-content>
     <exclude domain="root" />
+    <exclude domain="sharedpref" path="wenbox_prefs.xml" />
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="file" />
+    <exclude domain="database" />
 </full-backup-content>

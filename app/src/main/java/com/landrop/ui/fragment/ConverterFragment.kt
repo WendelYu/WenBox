@@ -12,7 +12,7 @@ import android.view.ViewGroup
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import com.landrop.databinding.FragmentConverterBinding
-import java.math.BigInteger
+import com.landrop.industrial.RadixConverter
 
 class ConverterFragment : Fragment() {
 
@@ -40,68 +40,25 @@ class ConverterFragment : Fragment() {
     }
 
     private fun setupListeners() {
-        binding.etHex.addTextChangedListener(createWatcher { text ->
-            val clean = text.replace("0x", "", ignoreCase = true).replace("\\s+".toRegex(), "")
-            if (clean.isNotBlank()) {
-                try {
-                    val num = BigInteger(clean, 16)
-                    updateFromNumber(num, skipHex = true)
-                } catch (_: Exception) {}
-            } else {
-                clearOtherFields(skipHex = true)
-            }
-        })
-
-        binding.etDec.addTextChangedListener(createWatcher { text ->
-            val clean = text.trim()
-            if (clean.isNotBlank()) {
-                try {
-                    val num = BigInteger(clean, 10)
-                    updateFromNumber(num, skipDec = true)
-                } catch (_: Exception) {}
-            } else {
-                clearOtherFields(skipDec = true)
-            }
-        })
-
-        binding.etBin.addTextChangedListener(createWatcher { text ->
-            val clean = text.replace("\\s+".toRegex(), "")
-            if (clean.isNotBlank()) {
-                try {
-                    val num = BigInteger(clean, 2)
-                    updateFromNumber(num, skipBin = true)
-                } catch (_: Exception) {}
-            } else {
-                clearOtherFields(skipBin = true)
-            }
-        })
-
-        binding.etOct.addTextChangedListener(createWatcher { text ->
-            val clean = text.trim()
-            if (clean.isNotBlank()) {
-                try {
-                    val num = BigInteger(clean, 8)
-                    updateFromNumber(num, skipOct = true)
-                } catch (_: Exception) {}
-            } else {
-                clearOtherFields(skipOct = true)
-            }
-        })
+        // 所有输入都走同一个纯函数实现，负数与前导零的行为保持一致
+        bindRadixField(binding.etHex, 16, Field.HEX)
+        bindRadixField(binding.etDec, 10, Field.DEC)
+        bindRadixField(binding.etBin, 2, Field.BIN)
+        bindRadixField(binding.etOct, 8, Field.OCT)
 
         binding.etAscii.addTextChangedListener(createWatcher { text ->
-            if (text.isNotEmpty()) {
-                val hexSb = StringBuilder()
-                val bytes = text.toByteArray(Charsets.UTF_8)
-                for (b in bytes) {
-                    hexSb.append(String.format("%02X", b))
-                }
-                val hexStr = hexSb.toString()
-                try {
-                    val num = BigInteger(hexStr, 16)
-                    updateFromNumber(num, skipAscii = true)
-                } catch (_: Exception) {}
+            if (text.isEmpty()) {
+                clearOtherFields(Field.ASCII)
+                return@createWatcher
+            }
+            // 文本 -> 字节 -> 数值：按 UTF-8 字节计算，不经过有符号 BigInteger
+            val bytes = text.toByteArray(Charsets.UTF_8)
+            val hex = bytes.joinToString("") { String.format("%02X", it) }
+            val num = RadixConverter.parseUnsigned(hex, 16)
+            if (num == null) {
+                showError("输入内容无法转换为数值")
             } else {
-                clearOtherFields(skipAscii = true)
+                applyConversion(RadixConverter.fromNumber(num), Field.ASCII)
             }
         })
 
@@ -113,63 +70,74 @@ class ConverterFragment : Fragment() {
             binding.etOct.setText("")
             binding.etAscii.setText("")
             isUpdating = false
+            clearError()
         }
     }
 
-    private fun updateFromNumber(
-        num: BigInteger,
-        skipHex: Boolean = false,
-        skipDec: Boolean = false,
-        skipBin: Boolean = false,
-        skipOct: Boolean = false,
-        skipAscii: Boolean = false
-    ) {
-        isUpdating = true
+    private enum class Field { HEX, DEC, BIN, OCT, ASCII }
 
-        val hexStr = num.toString(16).uppercase()
-        if (!skipHex) {
-            // 两位一组格式化
-            binding.etHex.setText(hexStr.padStart(if (hexStr.length % 2 != 0) hexStr.length + 1 else hexStr.length, '0').chunked(2).joinToString(" "))
-        }
-        if (!skipDec) {
-            binding.etDec.setText(num.toString(10))
-        }
-        if (!skipBin) {
-            val rawBin = num.toString(2)
-            val paddedBin = rawBin.padStart((Math.ceil(rawBin.length / 4.0).toInt() * 4).coerceAtLeast(4), '0')
-            binding.etBin.setText(paddedBin.chunked(4).joinToString(" "))
-        }
-        if (!skipOct) {
-            binding.etOct.setText(num.toString(8))
-        }
-        if (!skipAscii) {
-            try {
-                val bytes = num.toByteArray()
-                // 去掉 BigInteger 可能带的符号位 0 字节
-                val trimmedBytes = if (bytes.isNotEmpty() && bytes[0] == 0.toByte()) bytes.copyOfRange(1, bytes.size) else bytes
-                binding.etAscii.setText(String(trimmedBytes, Charsets.UTF_8))
-            } catch (_: Exception) {
-                binding.etAscii.setText("")
+    private fun bindRadixField(
+        view: android.widget.EditText,
+        radix: Int,
+        field: Field
+    ) {
+        view.addTextChangedListener(createWatcher { text ->
+            if (text.isBlank()) {
+                clearOtherFields(field)
+                return@createWatcher
             }
-        }
+            // 负数与非法输入都给出明确提示，而不是静默算错
+            if (text.trim().startsWith("-")) {
+                showError("不支持负数，请输入非负整数")
+                return@createWatcher
+            }
+            val num = RadixConverter.parseUnsigned(text, radix)
+            if (num == null) {
+                showError("「${text.trim()}」不是合法的 ${radixName(radix)} 数值")
+            } else {
+                clearError()
+                applyConversion(RadixConverter.fromNumber(num), field)
+            }
+        })
+    }
 
+    private fun radixName(radix: Int): String = when (radix) {
+        16 -> "16 进制"
+        10 -> "10 进制"
+        2 -> "2 进制"
+        8 -> "8 进制"
+        else -> "$radix 进制"
+    }
+
+    private fun applyConversion(result: RadixConverter.Conversion, source: Field) {
+        isUpdating = true
+        if (source != Field.HEX) binding.etHex.setText(result.hex)
+        if (source != Field.DEC) binding.etDec.setText(result.dec)
+        if (source != Field.BIN) binding.etBin.setText(result.bin)
+        if (source != Field.OCT) binding.etOct.setText(result.oct)
+        if (source != Field.ASCII) binding.etAscii.setText(result.ascii)
         isUpdating = false
     }
 
-    private fun clearOtherFields(
-        skipHex: Boolean = false,
-        skipDec: Boolean = false,
-        skipBin: Boolean = false,
-        skipOct: Boolean = false,
-        skipAscii: Boolean = false
-    ) {
+    private fun showError(message: String) {
+        val banner = _binding?.tvConverterError ?: return
+        banner.text = message
+        banner.visibility = View.VISIBLE
+    }
+
+    private fun clearError() {
+        _binding?.tvConverterError?.visibility = View.GONE
+    }
+
+    private fun clearOtherFields(source: Field) {
         isUpdating = true
-        if (!skipHex) binding.etHex.setText("")
-        if (!skipDec) binding.etDec.setText("")
-        if (!skipBin) binding.etBin.setText("")
-        if (!skipOct) binding.etOct.setText("")
-        if (!skipAscii) binding.etAscii.setText("")
+        if (source != Field.HEX) binding.etHex.setText("")
+        if (source != Field.DEC) binding.etDec.setText("")
+        if (source != Field.BIN) binding.etBin.setText("")
+        if (source != Field.OCT) binding.etOct.setText("")
+        if (source != Field.ASCII) binding.etAscii.setText("")
         isUpdating = false
+        clearError()
     }
 
     private fun createWatcher(onText: (String) -> Unit): TextWatcher {

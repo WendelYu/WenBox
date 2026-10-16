@@ -1,21 +1,39 @@
 package com.landrop.server
 
 import com.landrop.model.ChatMessage
+import java.util.ArrayDeque
 import java.util.UUID
-import java.util.concurrent.CopyOnWriteArrayList
 
 object MessageManager {
 
-    private val messages = CopyOnWriteArrayList<ChatMessage>()
+    /** 单房间保留的最大消息条数，避免历史无界增长 (S4) */
+    private const val MAX_MESSAGES = 500
+
+    // ArrayDeque + 显式加锁：CopyOnWriteArrayList 每次写入都要整表复制，消息多时开销很大
+    private val messages = ArrayDeque<ChatMessage>()
+    private val lock = Any()
 
     var onMessageReceivedListener: ((ChatMessage) -> Unit)? = null
 
     fun getMessages(sinceTimestamp: Long = 0L): List<ChatMessage> {
-        return if (sinceTimestamp <= 0L) {
-            messages.toList()
-        } else {
-            messages.filter { it.timestamp > sinceTimestamp }
+        return synchronized(lock) {
+            if (sinceTimestamp <= 0L) {
+                messages.toList()
+            } else {
+                messages.filter { it.timestamp > sinceTimestamp }
+            }
         }
+    }
+
+    private fun append(msg: ChatMessage) {
+        synchronized(lock) {
+            if (messages.any { it.id == msg.id }) return
+            messages.addLast(msg)
+            while (messages.size > MAX_MESSAGES) {
+                messages.removeFirst()
+            }
+        }
+        onMessageReceivedListener?.invoke(msg)
     }
 
     fun addPhoneMessage(content: String, senderName: String = "本机", senderIp: String = "", clientId: String = ""): ChatMessage {
@@ -28,8 +46,7 @@ object MessageManager {
             senderIp = senderIp,
             clientId = clientId
         )
-        messages.add(msg)
-        onMessageReceivedListener?.invoke(msg)
+        append(msg)
         return msg
     }
 
@@ -43,8 +60,7 @@ object MessageManager {
             senderIp = senderIp,
             clientId = clientId
         )
-        messages.add(msg)
-        onMessageReceivedListener?.invoke(msg)
+        append(msg)
         return msg
     }
 
@@ -57,7 +73,10 @@ object MessageManager {
         isFromPhone: Boolean = false,
         clientId: String = ""
     ): ChatMessage? {
-        if (messages.any { it.id == id }) return null
+        // append 内部会做去重，这里不再单独扫描一遍
+        synchronized(lock) {
+            if (messages.any { it.id == id }) return null
+        }
         val msg = ChatMessage(
             id = id,
             senderName = senderName,
@@ -67,12 +86,11 @@ object MessageManager {
             senderIp = senderIp,
             clientId = clientId
         )
-        messages.add(msg)
-        onMessageReceivedListener?.invoke(msg)
+        append(msg)
         return msg
     }
 
     fun clearAll() {
-        messages.clear()
+        synchronized(lock) { messages.clear() }
     }
 }

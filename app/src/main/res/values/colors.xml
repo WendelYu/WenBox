@@ -1,26 +1,64 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  WenBox Design Tokens (Android, 浅色为默认值) — 与 assets/web/tokens.css 一一对应。
+  深色值在 values-night/colors.xml，两处名字必须完全一致。
+  正文/标题文字与 surfaces 的对比度均 ≥ 4.5:1（text_disabled 仅用于禁用态）。
+-->
 <resources>
-    <color name="primary">#2563EB</color>
-    <color name="primary_light">#60A5FA</color>
-    <color name="primary_dark">#1D4ED8</color>
-    <color name="accent">#10B981</color>
-    <color name="bg_dark">#0F172A</color>
-    <color name="card_bg">#1E293B</color>
-    <color name="text_primary">#F8FAFC</color>
-    <color name="text_secondary">#94A3B8</color>
-    <color name="border_color">#334155</color>
-    <color name="danger">#EF4444</color>
+    <!-- ==== 表面 ==== -->
+    <color name="bg">#F5F6F8</color>
+    <color name="surface_1">#FFFFFF</color>
+    <color name="surface_2">#F0F2F5</color>
+    <color name="surface_3">#E6E9EE</color>
+    <color name="border">#E2E5EA</color>
+    <color name="border_strong">#CBD0D8</color>
 
-    <!-- internal-chat / fagedongxi.com 风格配色 -->
-    <color name="chat_bg">#242424</color>
-    <color name="chat_card_bg">#2A2A2A</color>
-    <color name="chat_card_hover">#323232</color>
-    <color name="chat_border">#363636</color>
-    <color name="chat_accent_blue">#64B5F6</color>
-    <color name="chat_accent_blue_hover">#42A5F5</color>
-    <color name="chat_accent_green">#81C784</color>
-    <color name="chat_text_main">#E0E0E0</color>
-    <color name="chat_text_muted">#8B949E</color>
-    <color name="chat_text_subtle">#757575</color>
-    <color name="chat_system_amber">#FFA726</color>
+    <!-- ==== 文字 ==== -->
+    <color name="text_1">#15181D</color>
+    <color name="text_2">#5B6372</color>
+    <color name="text_3">#6B7280</color>
+    <color name="text_disabled">#A3AAB8</color>
+
+    <!-- ==== 语义 ==== -->
+    <color name="primary">#2563EB</color>
+    <color name="primary_hover">#1D4ED8</color>
+    <color name="primary_fg">#1D4ED8</color>
+    <color name="primary_soft">#1F2563EB</color>
+    <color name="success">#047857</color>
+    <color name="success_fg">#047857</color>
+    <color name="success_soft">#1F047857</color>
+    <color name="warning_fg">#B45309</color>
+    <color name="warning_soft">#1FB45309</color>
+    <color name="danger">#B91C1C</color>
+    <color name="danger_fg">#B91C1C</color>
+    <color name="danger_soft">#1FB91C1C</color>
+    <color name="info">#0E7490</color>
+    <color name="chat_accent_purple">#6D28D9</color>
+
+    <!-- ==== 兼容别名：旧代码继续引用旧名字，逐步迁移 ==== -->
+    <color name="bg_dark">@color/bg</color>
+    <color name="card_bg">@color/surface_1</color>
+    <color name="card_hover">@color/surface_2</color>
+    <color name="text_primary">@color/text_1</color>
+    <color name="text_secondary">@color/text_2</color>
+    <color name="text_muted">@color/text_2</color>
+    <color name="text_subtle">@color/text_3</color>
+    <color name="border_color">@color/border</color>
+    <color name="primary_light">@color/primary_fg</color>
+    <color name="primary_dark">@color/primary_hover</color>
+
+    <!-- 聊天区统一到同一套调色板，不再单独维护灰色系 -->
+    <color name="chat_bg">@color/bg</color>
+    <color name="chat_card_bg">@color/surface_1</color>
+    <color name="chat_card_hover">@color/surface_2</color>
+    <color name="chat_border">@color/border</color>
+    <color name="chat_accent_blue">@color/primary_fg</color>
+    <color name="chat_accent_blue_hover">@color/primary_hover</color>
+    <color name="chat_accent_green">@color/success_fg</color>
+    <color name="chat_text_main">@color/text_1</color>
+    <color name="chat_text_muted">@color/text_2</color>
+    <color name="chat_text_subtle">@color/text_3</color>
+    <color name="chat_system_amber">@color/warning_fg</color>
+    <color name="accent">@color/success_fg</color>
+    <color name="accent_blue">@color/primary_fg</color>
 </resources>

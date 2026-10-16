@@ -10,7 +10,7 @@
         android:id="@+id/tvJoinRoomTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="📱 加入房间"
+        android:text="@string/label_zh_48347e7d"
         android:textColor="@color/text_primary"
         android:textSize="18sp"
         android:textStyle="bold" />
@@ -20,7 +20,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="设置进入房间后显示的昵称，加入后将显示为「昵称 (IP)」"
+        android:text="@string/label_ip_2"
         android:textColor="@color/text_secondary"
         android:textSize="12sp" />
 
@@ -28,7 +28,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="14dp"
-        android:text="您的昵称"
+        android:text="@string/label_zh_07454e8d"
         android:textColor="@color/text_primary"
         android:textSize="13sp"
         android:textStyle="bold" />
@@ -39,7 +39,7 @@
         android:layout_height="44dp"
         android:layout_marginTop="6dp"
         android:background="@drawable/bg_input_field"
-        android:hint="例如: 我的手机 / 小王"
+        android:hint="@string/label_zh_5c512f9a"
         android:textColor="@color/text_primary"
         android:textColorHint="@color/text_secondary"
         android:textSize="14sp"
@@ -56,7 +56,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="房间密码 (PIN)"
+            android:text="@string/label_pin_2"
             android:textColor="@color/text_primary"
             android:textSize="13sp"
             android:textStyle="bold" />
@@ -67,7 +67,7 @@
             android:layout_height="44dp"
             android:layout_marginTop="6dp"
             android:background="@drawable/bg_input_field"
-            android:hint="请输入房间 PIN 码"
+            android:hint="@string/label_pin_3"
             android:textColor="@color/text_primary"
             android:textColorHint="@color/text_secondary"
             android:textSize="14sp"
@@ -89,7 +89,7 @@
             android:layout_height="42dp"
             android:background="@drawable/bg_btn_secondary"
             android:paddingHorizontal="18dp"
-            android:text="取消"
+            android:text="@string/dialog_cancel"
             android:textColor="@color/text_primary"
             android:textSize="14sp" />
 
@@ -100,7 +100,7 @@
             android:layout_marginStart="12dp"
             android:background="@drawable/bg_btn_primary"
             android:paddingHorizontal="22dp"
-            android:text="立即加入"
+            android:text="@string/label_zh_9e72714f"
             android:textColor="#FFFFFF"
             android:textSize="14sp"
             android:textStyle="bold" />

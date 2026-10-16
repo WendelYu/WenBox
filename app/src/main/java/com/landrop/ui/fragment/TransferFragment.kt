@@ -1,17 +1,28 @@
 package com.landrop.ui.fragment
 
+import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.provider.OpenableColumns
+import android.text.format.Formatter
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -19,48 +30,37 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.fragment.app.activityViewModels
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
-import android.app.Dialog
-import android.graphics.drawable.ColorDrawable
-import java.util.UUID
-import android.view.Gravity
-import android.view.Window
 import com.landrop.MainActivity
 import com.landrop.R
 import com.landrop.databinding.DialogCreateRoomBinding
-import com.landrop.databinding.DialogJoinPinBinding
-import com.landrop.databinding.DialogEditNicknameBinding
 import com.landrop.databinding.DialogCustomAlertBinding
 import com.landrop.databinding.DialogCustomConfirmBinding
+import com.landrop.databinding.DialogEditNicknameBinding
+import com.landrop.databinding.DialogJoinPinBinding
 import com.landrop.databinding.FragmentTransferBinding
 import com.landrop.databinding.ItemChatMessageBinding
 import com.landrop.databinding.ItemDiscoveredRoomBinding
 import com.landrop.databinding.ItemIpAddressBinding
 import com.landrop.model.ChatMessage
 import com.landrop.model.DiscoveredRoom
-import com.landrop.model.RoomConfig
+import com.landrop.service.TransferService
+import com.landrop.ui.MainViewModel
+import com.landrop.ui.RoomMode
+import com.landrop.ui.TransferViewModel
 import com.landrop.server.FileManager
 import com.landrop.server.MessageManager
 import com.landrop.server.RoomManager
-import com.landrop.service.TransferService
 import com.landrop.ui.FileAdapter
-import com.landrop.utils.HttpHelper
 import com.landrop.utils.NetworkUtils
 import com.landrop.utils.QrCodeUtils
 import com.landrop.utils.UdpDiscoveryManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.os.Environment
-import android.provider.MediaStore
-import android.provider.OpenableColumns
-import android.text.format.Formatter
-import android.content.ContentValues
-import android.widget.ImageView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -75,26 +75,25 @@ import java.util.Locale
 
 class TransferFragment : Fragment() {
 
-    enum class RoomMode {
-        CLIENT,  // 默认客户端发现大厅
-        HOST,    // 房主服务中
-        JOINED   // 已加入他人房间
-    }
-
     private var _binding: FragmentTransferBinding? = null
     private val binding get() = _binding!!
+
+    private val transferViewModel: TransferViewModel by activityViewModels()
+    private val mainViewModel: MainViewModel by activityViewModels()
 
     private lateinit var fileAdapter: FileAdapter
     private var selectedIpUrl: String? = null
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     private var currentRoomMode = RoomMode.CLIENT
-    private var joinedRoom: DiscoveredRoom? = null
-    private var joinedToken: String? = null
     private var joinedRoomMembers = mutableListOf<Pair<String, String>>()
-    private var clientPollJob: Job? = null
+    private var observerJob: Job? = null
 
-    private val bitmapCache = android.util.LruCache<String, Bitmap>(24)
+    private val openDialogs = mutableListOf<Dialog>()
+
+    private val bitmapCache = object : android.util.LruCache<String, Bitmap>(12 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
+    }
 
     private val selectFilesLauncher = registerForActivityResult(
         ActivityResultContracts.GetMultipleContents()
@@ -104,55 +103,39 @@ class TransferFragment : Fragment() {
             uris.forEach { uri ->
                 FileManager.addFile(ctx, uri)
             }
-            Toast.makeText(ctx, "已添加 ${uris.size} 个待发文件", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, getString(R.string.toast_added_files, uris.size), Toast.LENGTH_SHORT).show()
         }
     }
 
     private val chatImagePickerLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        if (uri != null) {
-            val ctx = context ?: return@registerForActivityResult
-            Toast.makeText(ctx, "正在处理并发送图片...", Toast.LENGTH_SHORT).show()
-            lifecycleScope.launch(Dispatchers.IO) {
-                try {
-                    val cr = ctx.contentResolver
-                    val inStream = cr.openInputStream(uri) ?: return@launch
-                    val bmp = BitmapFactory.decodeStream(inStream)
-                    inStream.close()
-                    if (bmp == null) {
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(ctx, "无法读取图片", Toast.LENGTH_SHORT).show()
-                        }
-                        return@launch
-                    }
-
-                    // 缩放到最大 1280 边长，保持高质量与轻量级传输
-                    val maxDim = 1280
-                    val width = bmp.width
-                    val height = bmp.height
-                    val scaled = if (width > maxDim || height > maxDim) {
-                        val ratio = if (width > height) maxDim.toFloat() / width else maxDim.toFloat() / height
-                        Bitmap.createScaledBitmap(bmp, (width * ratio).toInt(), (height * ratio).toInt(), true)
-                    } else {
-                        bmp
-                    }
-
-                    val baos = ByteArrayOutputStream()
-                    scaled.compress(Bitmap.CompressFormat.JPEG, 82, baos)
-                    val bytes = baos.toByteArray()
-                    val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                    val imgMsg = "[image:data:image/jpeg;base64,$base64]"
-
-                    withContext(Dispatchers.Main) {
-                        sendChatContent(imgMsg)
-                        Toast.makeText(ctx, "图片已发送", Toast.LENGTH_SHORT).show()
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(ctx, "发送图片失败: ${e.message}", Toast.LENGTH_SHORT).show()
-                    }
+        if (uri == null) return@registerForActivityResult
+        val ctx = context ?: return@registerForActivityResult
+        // 发送逻辑在 ViewModel 作用域内执行，切页/重建都不会中断 (A8)
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val cr = ctx.contentResolver
+                val bmp = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+                if (bmp == null) {
+                    transferViewModel.toast("无法读取图片")
+                    return@launch
                 }
+                val maxDim = 1280
+                val width = bmp.width
+                val height = bmp.height
+                val scaled = if (width > maxDim || height > maxDim) {
+                    val ratio = if (width > height) maxDim.toFloat() / width else maxDim.toFloat() / height
+                    Bitmap.createScaledBitmap(bmp, (width * ratio).toInt(), (height * ratio).toInt(), true)
+                } else {
+                    bmp
+                }
+                val baos = ByteArrayOutputStream()
+                scaled.compress(Bitmap.CompressFormat.JPEG, 82, baos)
+                val base64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
+                transferViewModel.sendMessage("[image:data:image/jpeg;base64,$base64]")
+            } catch (e: Exception) {
+                transferViewModel.toast("发送图片失败: ${e.message}")
             }
         }
     }
@@ -160,67 +143,33 @@ class TransferFragment : Fragment() {
     private val chatFilePickerLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        if (uri != null) {
-            val ctx = context ?: return@registerForActivityResult
-            lifecycleScope.launch(Dispatchers.IO) {
-                try {
-                    val cr = ctx.contentResolver
-                    var fileName = "file_${System.currentTimeMillis()}"
-                    var fileSize: Long = 0
-                    cr.query(uri, null, null, null, null)?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                            val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
-                            if (nameIdx != -1) {
-                                val n = cursor.getString(nameIdx)
-                                if (!n.isNullOrBlank()) fileName = n
-                            }
-                            if (sizeIdx != -1) fileSize = cursor.getLong(sizeIdx)
+        if (uri == null) return@registerForActivityResult
+        val ctx = context ?: return@registerForActivityResult
+        lifecycleScope.launch(Dispatchers.IO) {
+            var fileName = "file_${System.currentTimeMillis()}"
+            var fileSize: Long = 0
+            runCatching {
+                ctx.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (nameIdx != -1) {
+                            val n = cursor.getString(nameIdx)
+                            if (!n.isNullOrBlank()) fileName = n
                         }
-                    }
-
-                    val sizeStr = Formatter.formatFileSize(ctx, fileSize)
-
-                    if (currentRoomMode == RoomMode.HOST) {
-                        val sf = FileManager.addFile(ctx, uri)
-                        val dlUrl = "/api/download/${sf.id}"
-                        val msg = "[file:$fileName|$sizeStr|$dlUrl]"
-                        withContext(Dispatchers.Main) {
-                            sendChatContent(msg)
-                            Toast.makeText(ctx, "文件「$fileName」已共享到聊天室", Toast.LENGTH_SHORT).show()
-                        }
-                    } else if (currentRoomMode == RoomMode.JOINED) {
-                        val r = joinedRoom ?: return@launch
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(ctx, "正在上传发送「$fileName」...", Toast.LENGTH_SHORT).show()
-                        }
-                        val uploadUrl = "http://${r.ip}:${r.port}/api/upload"
-                        val headers = mutableMapOf<String, String>()
-                        joinedToken?.let { headers["X-Room-Token"] = it }
-
-                        cr.openInputStream(uri)?.use { inStream ->
-                            val (uCode, uRes) = HttpHelper.uploadFile(uploadUrl, fileName, inStream, headers)
-                            if (uCode in 200..299) {
-                                val uJson = JSONObject(uRes)
-                                val fileId = uJson.optString("fileId", "")
-                                val dlUrl = if (fileId.isNotBlank()) "/api/download/$fileId" else "/api/download/${URLEncoder.encode(fileName, "UTF-8")}"
-                                val msg = "[file:$fileName|$sizeStr|$dlUrl]"
-                                withContext(Dispatchers.Main) {
-                                    sendChatContent(msg)
-                                    Toast.makeText(ctx, "文件「$fileName」发送成功", Toast.LENGTH_SHORT).show()
-                                }
-                            } else {
-                                withContext(Dispatchers.Main) {
-                                    Toast.makeText(ctx, "上传文件失败 (code: $uCode)", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(ctx, "发送文件出错: ${e.message}", Toast.LENGTH_SHORT).show()
+                        if (sizeIdx != -1) fileSize = cursor.getLong(sizeIdx)
                     }
                 }
+            }
+            val sizeStr = Formatter.formatFileSize(ctx, fileSize)
+
+            when (transferViewModel.state.value.mode) {
+                RoomMode.HOST -> {
+                    val sf = FileManager.addFile(ctx, uri)
+                    transferViewModel.sendMessage("[file:$fileName|$sizeStr|/api/download/${sf.id}]")
+                }
+                RoomMode.JOINED -> transferViewModel.sendFileToJoinedRoom(ctx.contentResolver, uri, fileName, sizeStr)
+                RoomMode.CLIENT -> transferViewModel.toast("请先创建或加入房间后再发送文件")
             }
         }
     }
@@ -239,10 +188,120 @@ class TransferFragment : Fragment() {
         initViews()
         initChatUi()
         initRoomEvents()
+        observeState()
     }
 
     private fun getTransferService(): TransferService? {
         return (activity as? MainActivity)?.transferService
+    }
+
+    // ---------------- 状态订阅 ----------------
+
+    private fun observeState() {
+        observerJob?.cancel()
+        observerJob = viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    transferViewModel.state.collect { state ->
+                        if (_binding == null) return@collect
+                        renderState(state)
+                    }
+                }
+                launch {
+                    mainViewModel.serviceState.collect { service ->
+                        if (_binding == null) return@collect
+                        transferViewModel.updateServiceRunning(service.isRunning)
+                        if (service.isRunning && RoomManager.currentRoom?.isActive == true) {
+                            renderNetworkInterfaces(service.port)
+                        }
+                    }
+                }
+                launch {
+                    transferViewModel.toasts.collect { message ->
+                        val ctx = context ?: return@collect
+                        Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+        // 按当前进程状态恢复界面，View 重建后不会丢 JOINED (A5)
+        transferViewModel.syncFromManagers(getTransferService()?.isRunning == true)
+    }
+
+    private fun renderState(state: com.landrop.ui.TransferUiState) {
+        currentRoomMode = state.mode
+        val ctx = context ?: return
+
+        when (state.mode) {
+            RoomMode.CLIENT -> {
+                binding.tvRoomModeBadge.text = getString(R.string.room_badge_client)
+                binding.tvRoomModeBadge.setTextColor(ContextCompat.getColor(ctx, R.color.accent_blue))
+                binding.tvRoomModeBadge.backgroundTintList =
+                    android.content.res.ColorStateList.valueOf(ContextCompat.getColor(ctx, R.color.card_bg))
+                binding.tvRoomDetails.text = getString(R.string.room_details_client)
+
+                binding.btnCreateRoom.visibility = View.VISIBLE
+                binding.btnCloseRoom.visibility = View.GONE
+                binding.btnLeaveRoom.visibility = View.GONE
+                binding.btnChangeNicknameJoined.visibility = View.GONE
+                binding.cardDiscoveredRooms.visibility = View.VISIBLE
+                binding.llHostDetails.visibility = View.GONE
+                binding.cardChatSection.visibility = View.GONE
+                renderDiscoveredRooms(UdpDiscoveryManager.getRooms())
+            }
+
+            RoomMode.HOST -> {
+                val cfg = state.room ?: RoomManager.currentRoom
+                binding.btnCreateRoom.visibility = View.GONE
+                binding.btnCloseRoom.visibility = View.VISIBLE
+                binding.btnLeaveRoom.visibility = View.GONE
+                binding.btnChangeNicknameJoined.visibility = View.GONE
+                binding.cardDiscoveredRooms.visibility = View.GONE
+                binding.llHostDetails.visibility = View.VISIBLE
+                binding.cardChatSection.visibility = View.VISIBLE
+                binding.tvChatSectionTitle.text = getString(R.string.chat_title_host)
+                updateHostHeader(cfg)
+
+                val port = getTransferService()?.currentPort ?: 9527
+                renderNetworkInterfaces(port)
+            }
+
+            RoomMode.JOINED -> {
+                val room = state.joinedRoom ?: return
+                binding.tvRoomModeBadge.text = getString(R.string.room_badge_joined, room.roomName)
+                binding.tvRoomModeBadge.setTextColor(ContextCompat.getColor(ctx, R.color.chat_accent_purple))
+                binding.tvRoomModeBadge.backgroundTintList =
+                    android.content.res.ColorStateList.valueOf(ContextCompat.getColor(ctx, R.color.card_bg))
+                binding.tvRoomDetails.text = getString(R.string.room_details_joined, room.hostDevice, "${room.ip}:${room.port}")
+
+                binding.btnCreateRoom.visibility = View.GONE
+                binding.btnCloseRoom.visibility = View.GONE
+                binding.btnLeaveRoom.visibility = View.VISIBLE
+                binding.btnChangeNicknameJoined.visibility = View.VISIBLE
+                binding.cardDiscoveredRooms.visibility = View.GONE
+                binding.llHostDetails.visibility = View.GONE
+                binding.cardChatSection.visibility = View.VISIBLE
+                binding.tvChatSectionTitle.text = getString(R.string.chat_title_joined, room.roomName)
+                binding.tvChatOnlineCount.text = getString(R.string.online_count, state.onlineCount)
+                binding.tvChatRoomUrl.text = getString(R.string.visit_url_joined, "${room.ip}:${room.port}")
+                // JOINED 的消息只来自 ViewModel，绝不写进本机 MessageManager (A3)
+                renderJoinedMessages(state.joinedMessages)
+            }
+        }
+        updateNicknameButtonDisplay()
+    }
+
+    /** 只刷新房间名/IP/在线数：不重建网卡列表，避免 setHostIp -> listener 递归 (A1) */
+    private fun updateHostHeader(cfg: com.landrop.model.RoomConfig?) {
+        val ctx = context ?: return
+        val pinHint = if (cfg?.needPassword == true) " • PIN: ${cfg.pin}" else " • 免密"
+        binding.tvRoomModeBadge.text = getString(R.string.room_badge_host, cfg?.roomName ?: "")
+        binding.tvRoomModeBadge.setTextColor(ContextCompat.getColor(ctx, R.color.success_fg))
+        binding.tvRoomModeBadge.backgroundTintList =
+            android.content.res.ColorStateList.valueOf(ContextCompat.getColor(ctx, R.color.card_bg))
+        binding.tvRoomDetails.text =
+            "您已变身服务端房主$pinHint！局域网内的电脑和其他手机可自动搜索发现您的房间，也可扫码或在电脑浏览器访问下方地址直连。"
+        binding.tvChatOnlineCount.text = getString(R.string.online_count, cfg?.let { RoomManager.getMembers().size } ?: 1)
     }
 
     private fun initViews() {
@@ -301,11 +360,12 @@ class TransferFragment : Fragment() {
         binding.btnRefreshRooms.setOnClickListener {
             UdpDiscoveryManager.sendSearchProbe()
             renderDiscoveredRooms(UdpDiscoveryManager.getRooms())
-            Toast.makeText(ctx, "正在搜索局域网房间...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, getString(R.string.toast_searching), Toast.LENGTH_SHORT).show()
         }
 
         binding.tvChatRoomUrl.setOnClickListener {
-            val text = binding.tvChatRoomUrl.text.toString().removePrefix("🌐 访问: ").trim()
+            val text = binding.tvChatRoomUrl.text.toString()
+                .removePrefix("访问: ").removePrefix("🌐 访问: ").trim()
             if (text.isNotBlank()) {
                 copyToClipboard(text)
             }
@@ -325,116 +385,30 @@ class TransferFragment : Fragment() {
             }
         }
         renderDiscoveredRooms(UdpDiscoveryManager.getRooms())
-
-        // 恢复已有房间状态
-        val activeRoom = RoomManager.currentRoom
-        if (activeRoom != null && activeRoom.isActive) {
-            setRoomMode(RoomMode.HOST, activeRoom)
-        } else {
-            setRoomMode(RoomMode.CLIENT)
-        }
     }
 
     private fun initRoomEvents() {
         RoomManager.onRoomStateChangedListener = { cfg ->
             activity?.runOnUiThread {
+                if (_binding == null) return@runOnUiThread
                 if (cfg != null && cfg.isActive) {
-                    setRoomMode(RoomMode.HOST, cfg)
-                } else {
-                    if (currentRoomMode == RoomMode.HOST) {
-                        setRoomMode(RoomMode.CLIENT)
+                    // 已经是房主时只刷新状态条，绝不重新进入 setRoomMode，
+                    // 否则 renderNetworkInterfaces -> setHostIp -> listener 会无限递归 (A1)
+                    if (transferViewModel.state.value.mode == RoomMode.HOST) {
+                        transferViewModel.updateHostRoom(cfg)
+                    } else {
+                        transferViewModel.setHostMode(cfg)
                     }
+                } else if (transferViewModel.state.value.mode == RoomMode.HOST) {
+                    transferViewModel.setClientMode()
                 }
             }
         }
         RoomManager.onMembersChangedListener = { members ->
             activity?.runOnUiThread {
-                if (_binding != null && currentRoomMode == RoomMode.HOST) {
-                    binding.tvChatOnlineCount.text = "👥 在线: ${members.size} 人"
-                }
+                transferViewModel.updateOnlineCount(members.size)
             }
         }
-    }
-
-    private fun setRoomMode(mode: RoomMode, roomCfg: RoomConfig? = null) {
-        currentRoomMode = mode
-        if (_binding == null) return
-        val ctx = context ?: return
-
-        MessageManager.clearAll()
-        refreshChatUi()
-
-        when (mode) {
-            RoomMode.CLIENT -> {
-                clientPollJob?.cancel()
-                clientPollJob = null
-                joinedRoom = null
-                joinedToken = null
-
-                binding.tvRoomModeBadge.text = "🔍 客户端模式（搜索房间中）"
-                binding.tvRoomModeBadge.setTextColor(Color.parseColor("#38BDF8"))
-                binding.tvRoomModeBadge.setBackgroundColor(Color.parseColor("#1E293B"))
-                binding.tvRoomDetails.text = "当前处于客户端发现大厅，系统正在自动搜索局域网房间。点击下方房间可一键加入；若需别人连接您，请点击「创建房间」。"
-
-                binding.btnCreateRoom.visibility = View.VISIBLE
-                binding.btnCloseRoom.visibility = View.GONE
-                binding.btnLeaveRoom.visibility = View.GONE
-                binding.btnChangeNicknameJoined.visibility = View.GONE
-                binding.cardDiscoveredRooms.visibility = View.VISIBLE
-                binding.llHostDetails.visibility = View.GONE
-                binding.cardChatSection.visibility = View.GONE
-                renderDiscoveredRooms(UdpDiscoveryManager.getRooms())
-            }
-
-            RoomMode.HOST -> {
-                clientPollJob?.cancel()
-                clientPollJob = null
-                val cfg = roomCfg ?: RoomManager.currentRoom
-
-                val pinHint = if (cfg?.needPassword == true) " • PIN: ${cfg.pin}" else " • 免密"
-                binding.tvRoomModeBadge.text = "👑 房主服务中: ${cfg?.roomName ?: "未命名"}"
-                binding.tvRoomModeBadge.setTextColor(Color.parseColor("#34D399"))
-                binding.tvRoomModeBadge.setBackgroundColor(Color.parseColor("#064E3B"))
-                binding.tvRoomDetails.text = "您已变身服务端房主$pinHint！局域网内的电脑和其他手机可自动搜索发现您的房间，也可扫码或在电脑浏览器访问下方地址直连。"
-
-                binding.btnCreateRoom.visibility = View.GONE
-                binding.btnCloseRoom.visibility = View.VISIBLE
-                binding.btnLeaveRoom.visibility = View.GONE
-                binding.btnChangeNicknameJoined.visibility = View.GONE
-                binding.cardDiscoveredRooms.visibility = View.GONE
-                binding.llHostDetails.visibility = View.VISIBLE
-                binding.cardChatSection.visibility = View.VISIBLE
-                binding.tvChatSectionTitle.text = "💬 局域网即时互发消息 (房主服务中)"
-
-                val port = getTransferService()?.currentPort ?: 9527
-                val primaryIp = NetworkUtils.getAllLocalIpAddresses(ctx).firstOrNull()?.ip ?: "127.0.0.1"
-                binding.tvChatOnlineCount.text = "👥 在线: ${RoomManager.getMembers().size} 人"
-                binding.tvChatRoomUrl.text = "🌐 访问: http://$primaryIp:$port"
-                renderNetworkInterfaces(port)
-            }
-
-            RoomMode.JOINED -> {
-                val r = joinedRoom ?: return
-                binding.tvRoomModeBadge.text = "📱 已加入房间: ${r.roomName}"
-                binding.tvRoomModeBadge.setTextColor(Color.parseColor("#A78BFA"))
-                binding.tvRoomModeBadge.setBackgroundColor(Color.parseColor("#3B0764"))
-                binding.tvRoomDetails.text = "已直连房主设备「${r.hostDevice}」(http://${r.ip}:${r.port})。双方已打通双向通道，可在下方即时互发消息和共享文件！"
-
-                binding.btnCreateRoom.visibility = View.GONE
-                binding.btnCloseRoom.visibility = View.GONE
-                binding.btnLeaveRoom.visibility = View.VISIBLE
-                binding.btnChangeNicknameJoined.visibility = View.VISIBLE
-                binding.cardDiscoveredRooms.visibility = View.GONE
-                binding.llHostDetails.visibility = View.GONE
-                binding.cardChatSection.visibility = View.VISIBLE
-                binding.tvChatSectionTitle.text = "💬 局域网即时互发消息 (已加入: ${r.roomName})"
-                binding.tvChatOnlineCount.text = "👥 在线: 2 人"
-                binding.tvChatRoomUrl.text = "🌐 访问: http://${r.ip}:${r.port}"
-
-                startJoinedRoomPolling(r)
-            }
-        }
-        updateNicknameButtonDisplay()
     }
 
     private fun showCustomConfirmDialog(
@@ -449,15 +423,7 @@ class TransferFragment : Fragment() {
         dialogBinding.tvConfirmMessage.text = message
         dialogBinding.btnConfirmOk.text = okText
 
-        val dialog = Dialog(ctx).apply {
-            requestWindowFeature(Window.FEATURE_NO_TITLE)
-            setContentView(dialogBinding.root)
-            window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            window?.setLayout(
-                (resources.displayMetrics.widthPixels * 0.88).toInt(),
-                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
+        val dialog = trackDialog(createStyledDialog(ctx, dialogBinding.root))
 
         dialogBinding.btnConfirmCancel.setOnClickListener {
             dialog.dismiss()
@@ -480,35 +446,36 @@ class TransferFragment : Fragment() {
         dialogBinding.tvAlertMessage.text = message
         dialogBinding.btnAlertOk.text = btnText
 
-        val dialog = Dialog(ctx).apply {
-            requestWindowFeature(Window.FEATURE_NO_TITLE)
-            setContentView(dialogBinding.root)
-            window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            window?.setLayout(
-                (resources.displayMetrics.widthPixels * 0.88).toInt(),
-                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-
+        val dialog = trackDialog(createStyledDialog(ctx, dialogBinding.root))
         dialogBinding.btnAlertOk.setOnClickListener {
             dialog.dismiss()
         }
         dialog.show()
     }
 
-    private fun showCreateRoomDialog() {
-        val ctx = context ?: return
-        val dialogBinding = DialogCreateRoomBinding.inflate(LayoutInflater.from(ctx))
-
-        val dialog = Dialog(ctx).apply {
+    /** 所有自定义弹窗统一走这里，确保 View 销毁时能被关闭，避免 WindowLeaked (P2) */
+    private fun createStyledDialog(ctx: Context, content: View): Dialog {
+        return Dialog(ctx).apply {
             requestWindowFeature(Window.FEATURE_NO_TITLE)
-            setContentView(dialogBinding.root)
+            setContentView(content)
             window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             window?.setLayout(
                 (resources.displayMetrics.widthPixels * 0.9).toInt(),
-                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
+    }
+
+    private fun trackDialog(dialog: Dialog): Dialog {
+        openDialogs.add(dialog)
+        dialog.setOnDismissListener { openDialogs.remove(dialog) }
+        return dialog
+    }
+
+    private fun showCreateRoomDialog() {
+        val ctx = context ?: return
+        val dialogBinding = DialogCreateRoomBinding.inflate(LayoutInflater.from(ctx))
+        val dialog = trackDialog(createStyledDialog(ctx, dialogBinding.root))
 
         renderRoomProfiles(dialogBinding)
 
@@ -529,7 +496,7 @@ class TransferFragment : Fragment() {
             if (service?.isRunning != true) {
                 val ok = service?.startServer(9527) ?: false
                 if (!ok) {
-                    Toast.makeText(ctx, "服务启动失败，请检查端口", Toast.LENGTH_LONG).show()
+                    Toast.makeText(ctx, getString(R.string.toast_service_start_failed), Toast.LENGTH_LONG).show()
                     dialog.dismiss()
                     return@setOnClickListener
                 }
@@ -544,9 +511,9 @@ class TransferFragment : Fragment() {
                 hostIp = primaryIp,
                 hostPort = 9527
             )
-            setRoomMode(RoomMode.HOST, cfg)
+            transferViewModel.setHostMode(cfg)
             dialog.dismiss()
-            Toast.makeText(ctx, "🎉 房间「${cfg.roomName}」已创建，本机已变身服务端！", Toast.LENGTH_LONG).show()
+            Toast.makeText(ctx, getString(R.string.toast_room_created, cfg.roomName), Toast.LENGTH_LONG).show()
         }
 
         dialog.show()
@@ -554,11 +521,11 @@ class TransferFragment : Fragment() {
 
     // ---------------- 常用密码房配置 (保存 / 一键填入 / 长按删除) ----------------
 
+    private fun prefs() = requireContext().getSharedPreferences(TransferViewModel.PREFS, Context.MODE_PRIVATE)
+
     private fun getRoomProfiles(): MutableList<JSONObject> {
-        val ctx = context ?: return mutableListOf()
-        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
         return try {
-            val arr = JSONArray(sp.getString("room_profiles", "[]") ?: "[]")
+            val arr = JSONArray(prefs().getString("room_profiles", "[]") ?: "[]")
             (0 until arr.length()).mapTo(mutableListOf()) { arr.getJSONObject(it) }
         } catch (_: Exception) {
             mutableListOf()
@@ -566,9 +533,7 @@ class TransferFragment : Fragment() {
     }
 
     private fun persistRoomProfiles(profiles: List<JSONObject>) {
-        val ctx = context ?: return
-        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
-        sp.edit().putString("room_profiles", JSONArray(profiles).toString()).apply()
+        prefs().edit().putString("room_profiles", JSONArray(profiles).toString()).apply()
     }
 
     private fun saveRoomProfile(name: String, pin: String) {
@@ -580,6 +545,7 @@ class TransferFragment : Fragment() {
     }
 
     private fun renderRoomProfiles(dialogBinding: DialogCreateRoomBinding) {
+        val ctx = context ?: return
         val profiles = getRoomProfiles()
         val container = dialogBinding.llRoomProfiles
         container.removeAllViews()
@@ -589,9 +555,9 @@ class TransferFragment : Fragment() {
         }
         container.visibility = View.VISIBLE
 
-        val hint = TextView(requireContext()).apply {
-            text = "📌 常用密码房 (点击填入，长按删除)："
-            setTextColor(ContextCompat.getColor(requireContext(), R.color.text_secondary))
+        val hint = TextView(ctx).apply {
+            text = getString(R.string.room_profiles_hint)
+            setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary))
             textSize = 12f
         }
         container.addView(hint)
@@ -599,11 +565,12 @@ class TransferFragment : Fragment() {
         profiles.forEach { profile ->
             val name = profile.optString("name", "未命名房间")
             val pin = profile.optString("pin", "")
-            val row = TextView(requireContext()).apply {
+            val row = TextView(ctx).apply {
                 text = "▸ $name${if (pin.isNotBlank()) " (PIN: $pin)" else " (免密)"}"
-                setTextColor(Color.parseColor("#60A5FA"))
+                setTextColor(ContextCompat.getColor(ctx, R.color.accent_blue))
                 textSize = 13f
-                setPadding(0, (8 * resources.displayMetrics.density).toInt(), 0, (8 * resources.displayMetrics.density).toInt())
+                val pad = (8 * resources.displayMetrics.density).toInt()
+                setPadding(0, pad, 0, pad)
                 setOnClickListener {
                     dialogBinding.etRoomName.setText(name)
                     dialogBinding.etRoomPin.setText(pin)
@@ -622,31 +589,28 @@ class TransferFragment : Fragment() {
 
     private fun confirmCloseRoom() {
         showCustomConfirmDialog(
-            title = "⏹️ 解散房间",
+            title = "解散房间",
             message = "确定要解散当前房间吗？解散后本机将恢复为客户端发现大厅，所有连入成员将被断开。",
             okText = "确认解散"
         ) {
             val ctx = context
             RoomManager.closeRoom()
             getTransferService()?.stopServer()
-            setRoomMode(RoomMode.CLIENT)
+            transferViewModel.setClientMode()
             if (ctx != null) {
-                Toast.makeText(ctx, "房间已解散，已切换回客户端发现大厅", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, getString(R.string.toast_room_closed), Toast.LENGTH_SHORT).show()
             }
         }
     }
 
     private fun confirmLeaveRoom() {
         showCustomConfirmDialog(
-            title = "🚪 退出房间",
+            title = "退出房间",
             message = "确定要退出当前房间吗？",
             okText = "确认退出"
         ) {
-            val ctx = context
-            setRoomMode(RoomMode.CLIENT)
-            if (ctx != null) {
-                Toast.makeText(ctx, "已退出房间", Toast.LENGTH_SHORT).show()
-            }
+            // 先通知房主，成员列表即时更新，不必等 15 秒超时
+            transferViewModel.leaveJoinedRoom()
         }
     }
 
@@ -654,7 +618,7 @@ class TransferFragment : Fragment() {
         if (_binding == null) return
         val ctx = context ?: return
 
-        binding.tvDiscoveredRoomsTitle.text = "📡 局域网已发现房间 (${rooms.size})"
+        binding.tvDiscoveredRoomsTitle.text = getString(R.string.discovered_rooms_title, rooms.size)
         binding.llDiscoveredRoomsContainer.removeAllViews()
 
         if (rooms.isEmpty()) {
@@ -672,19 +636,23 @@ class TransferFragment : Fragment() {
 
             itemBinding.tvRoomName.text = room.roomName
             val memberStr = if (room.memberCount > 0) " • 成员: ${room.memberCount}" else ""
-            itemBinding.tvRoomHostInfo.text = "房主: ${room.hostDevice} (${room.ip}:${room.port})$memberStr"
+            itemBinding.tvRoomHostInfo.text = getString(R.string.room_host_info, room.hostDevice, "${room.ip}:${room.port}")
 
             if (room.needPassword) {
-                itemBinding.tvRoomLockBadge.text = "🔒 需密码"
-                itemBinding.tvRoomLockBadge.setTextColor(Color.parseColor("#FBBF24"))
-                itemBinding.tvRoomLockBadge.setBackgroundColor(Color.parseColor("#78350F"))
+                itemBinding.tvRoomLockBadge.text = getString(R.string.room_lock_required)
+                itemBinding.tvRoomLockBadge.setTextColor(ContextCompat.getColor(ctx, R.color.warning_fg))
             } else {
-                itemBinding.tvRoomLockBadge.text = "🟢 免密进入"
-                itemBinding.tvRoomLockBadge.setTextColor(Color.parseColor("#34D399"))
-                itemBinding.tvRoomLockBadge.setBackgroundColor(Color.parseColor("#064E3B"))
+                itemBinding.tvRoomLockBadge.text = getString(R.string.room_lock_open)
+                itemBinding.tvRoomLockBadge.setTextColor(ContextCompat.getColor(ctx, R.color.success_fg))
             }
+            itemBinding.tvRoomLockBadge.backgroundTintList = android.content.res.ColorStateList.valueOf(
+                ContextCompat.getColor(ctx, R.color.card_bg)
+            )
 
+            itemBinding.btnJoinRoom.isEnabled = !transferViewModel.state.value.sending
             itemBinding.btnJoinRoom.setOnClickListener {
+                // 请求期间禁用按钮，避免重复点击产生孤儿状态 (A6)
+                if (transferViewModel.state.value.sending) return@setOnClickListener
                 showJoinRoomDialog(room)
             }
 
@@ -693,30 +661,19 @@ class TransferFragment : Fragment() {
     }
 
     private fun updateNicknameButtonDisplay() {
-        val ctx = context ?: return
-        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
-        val myNick = sp.getString("user_nickname", null) ?: "${Build.BRAND}手机"
-        _binding?.btnChangeNicknameJoined?.text = "✏️ 昵称: $myNick"
-        _binding?.btnChangeNicknameChat?.text = "✏️ 昵称: $myNick"
+        val nick = transferViewModel.nickname()
+        _binding?.btnChangeNicknameJoined?.text = getString(R.string.nickname_label, nick)
+        _binding?.btnChangeNicknameChat?.text = getString(R.string.nickname_label, nick)
     }
 
     private fun showEditNicknameDialog() {
         val ctx = context ?: return
         val dialogBinding = DialogEditNicknameBinding.inflate(LayoutInflater.from(ctx))
-        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
-        val currentNick = sp.getString("user_nickname", null) ?: "${Build.BRAND}手机"
+        val currentNick = transferViewModel.nickname()
         dialogBinding.etEditNickname.setText(currentNick)
         dialogBinding.etEditNickname.selectAll()
 
-        val dialog = Dialog(ctx).apply {
-            requestWindowFeature(Window.FEATURE_NO_TITLE)
-            setContentView(dialogBinding.root)
-            window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            window?.setLayout(
-                (resources.displayMetrics.widthPixels * 0.9).toInt(),
-                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
+        val dialog = trackDialog(createStyledDialog(ctx, dialogBinding.root))
 
         dialogBinding.btnCancelEditNickname.setOnClickListener {
             dialog.dismiss()
@@ -725,34 +682,13 @@ class TransferFragment : Fragment() {
         dialogBinding.btnConfirmEditNickname.setOnClickListener {
             val newNick = dialogBinding.etEditNickname.text.toString().trim()
             if (newNick.isBlank()) {
-                Toast.makeText(ctx, "请输入有效的昵称", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, getString(R.string.toast_nickname_invalid), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            sp.edit().putString("user_nickname", newNick).apply()
+            transferViewModel.setNickname(newNick)
             updateNicknameButtonDisplay()
             dialog.dismiss()
-            Toast.makeText(ctx, "昵称已修改为「$newNick」", Toast.LENGTH_SHORT).show()
-
-            if (currentRoomMode == RoomMode.JOINED) {
-                val r = joinedRoom
-                if (r != null) {
-                    lifecycleScope.launch(Dispatchers.IO) {
-                        try {
-                            val hbUrl = "http://${r.ip}:${r.port}/api/room/heartbeat"
-                            val hbBody = JSONObject().apply {
-                                put("name", "📱 $newNick")
-                                put("platform", "Mobile")
-                                put("roomId", r.roomId)
-                                if (!joinedToken.isNullOrBlank()) {
-                                    put("token", joinedToken)
-                                }
-                            }
-                            val headers = if (!joinedToken.isNullOrBlank()) mapOf("X-Room-Token" to joinedToken!!) else emptyMap()
-                            HttpHelper.postJson(hbUrl, hbBody, headers)
-                        } catch (_: Exception) {}
-                    }
-                }
-            }
+            Toast.makeText(ctx, getString(R.string.toast_nickname_changed, newNick), Toast.LENGTH_SHORT).show()
         }
 
         dialog.show()
@@ -761,27 +697,12 @@ class TransferFragment : Fragment() {
     private fun showJoinRoomDialog(room: DiscoveredRoom) {
         val ctx = context ?: return
         val dialogBinding = DialogJoinPinBinding.inflate(LayoutInflater.from(ctx))
-        dialogBinding.tvJoinRoomTitle.text = "📱 加入「${room.roomName}」"
+        dialogBinding.tvJoinRoomTitle.text = getString(R.string.join_room_title, room.roomName)
+        dialogBinding.etJoinNickname.setText(transferViewModel.nickname())
 
-        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
-        val defaultNick = sp.getString("user_nickname", null) ?: "${Build.BRAND}手机"
-        dialogBinding.etJoinNickname.setText(defaultNick)
+        dialogBinding.llPinSection.visibility = if (room.needPassword) View.VISIBLE else View.GONE
 
-        if (room.needPassword) {
-            dialogBinding.llPinSection.visibility = View.VISIBLE
-        } else {
-            dialogBinding.llPinSection.visibility = View.GONE
-        }
-
-        val dialog = Dialog(ctx).apply {
-            requestWindowFeature(Window.FEATURE_NO_TITLE)
-            setContentView(dialogBinding.root)
-            window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            window?.setLayout(
-                (resources.displayMetrics.widthPixels * 0.9).toInt(),
-                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
+        val dialog = trackDialog(createStyledDialog(ctx, dialogBinding.root))
 
         dialogBinding.btnCancelJoinRoom.setOnClickListener {
             dialog.dismiss()
@@ -789,238 +710,34 @@ class TransferFragment : Fragment() {
 
         dialogBinding.btnConfirmJoinRoom.setOnClickListener {
             val nick = dialogBinding.etJoinNickname.text.toString().trim().ifBlank { "${Build.BRAND}手机" }
-            sp.edit().putString("user_nickname", nick).apply()
+            transferViewModel.setNickname(nick)
             updateNicknameButtonDisplay()
             val pin = if (room.needPassword) dialogBinding.etJoinPin.text.toString().trim() else ""
+            // 整个入房流程在 ViewModel 中完成：即使 View 被销毁也不会产生孤儿状态 (A6)
+            transferViewModel.joinRemoteRoom(room, pin, nick)
             dialog.dismiss()
-            joinRemoteRoom(room, pin, nick)
         }
 
         dialog.show()
     }
 
-    private fun joinRemoteRoom(room: DiscoveredRoom, pin: String, nickname: String) {
-        val ctx = context ?: return
-        Toast.makeText(ctx, "正在接入「${room.roomName}」...", Toast.LENGTH_SHORT).show()
-
-        lifecycleScope.launch {
-            try {
-                val url = "http://${room.ip}:${room.port}/api/room/join"
-                val body = JSONObject().apply {
-                    put("pin", pin)
-                    put("name", nickname)
-                    put("platform", "Android")
-                }
-                val (code, resText) = HttpHelper.postJson(url, body)
-                if (code == 200) {
-                    val json = JSONObject(resText)
-                    if (json.optBoolean("success", false)) {
-                        joinedRoom = room
-                        joinedToken = json.optString("token", "")
-                        setRoomMode(RoomMode.JOINED)
-                        Toast.makeText(ctx, "🎉 成功加入房间！已与「${room.hostDevice}」建立直连", Toast.LENGTH_LONG).show()
-                    } else {
-                        val msg = json.optString("message", "入房密码不正确")
-                        Toast.makeText(ctx, "加入失败: $msg", Toast.LENGTH_LONG).show()
-                    }
-                } else {
-                    Toast.makeText(ctx, "连接房主失败: HTTP $code", Toast.LENGTH_SHORT).show()
-                }
-            } catch (e: Exception) {
-                Toast.makeText(ctx, "网络连接异常: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun startJoinedRoomPolling(room: DiscoveredRoom) {
-        clientPollJob?.cancel()
-        clientPollJob = lifecycleScope.launch {
-            val knownJoinedMsgIds = mutableSetOf<String>()
-            var lastMsgTs = 0L
-            var failCount = 0
-            while (isActive && currentRoomMode == RoomMode.JOINED) {
-                var cycleSuccess = false
-                try {
-                    // 1. 发送心跳向房主注册本客户端身份，并拉取最新房间状态
-                    val hbUrl = "http://${room.ip}:${room.port}/api/room/heartbeat"
-                    val ctx = context
-                    val sp = ctx?.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
-                    val myNick = sp?.getString("user_nickname", null) ?: "${Build.BRAND}手机"
-                    val hbBody = JSONObject().apply {
-                        put("name", "📱 $myNick")
-                        put("platform", "Mobile")
-                        put("roomId", room.roomId)
-                        if (!joinedToken.isNullOrBlank()) {
-                            put("token", joinedToken)
-                        }
-                    }
-                    val hbHeaders = if (!joinedToken.isNullOrBlank()) mapOf("X-Room-Token" to joinedToken!!) else emptyMap()
-                    val (hbCode, hbRes) = HttpHelper.postJson(hbUrl, hbBody, hbHeaders)
-                    if (hbCode == 200) {
-                        cycleSuccess = true
-                        val hbJson = JSONObject(hbRes)
-                        val roomObj = hbJson.optJSONObject("room")
-                        if (roomObj != null) {
-                            val isActiveRoom = roomObj.optBoolean("isActive", true)
-                            if (!isActiveRoom) {
-                                withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, "房主已关闭房间", Toast.LENGTH_SHORT).show()
-                                    setRoomMode(RoomMode.CLIENT)
-                                }
-                                break
-                            }
-                            val newRoomId = roomObj.optString("roomId", "")
-                            val newRoomName = roomObj.optString("roomName", "")
-                            if (newRoomId.isNotBlank() && (newRoomId != joinedRoom?.roomId || (newRoomName.isNotBlank() && newRoomName != joinedRoom?.roomName))) {
-                                val updated = room.copy(roomId = newRoomId, roomName = newRoomName.ifBlank { room.roomName })
-                                joinedRoom = updated
-                                withContext(Dispatchers.Main) {
-                                    _binding?.tvRoomModeBadge?.text = "🔗 已连接房间: ${updated.roomName} (#$newRoomId)"
-                                    _binding?.tvRoomDetails?.text = "已自动同步并连入房主重开的房间「${updated.roomName}」(#$newRoomId)"
-                                }
-                            }
-                        }
-                    } else if (hbCode == 401) {
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "房间需要密码或凭证已失效，请重新加入", Toast.LENGTH_SHORT).show()
-                            setRoomMode(RoomMode.CLIENT)
-                        }
-                        break
-                    }
-
-                    // 2. 拉取成员列表
-                    val memUrl = "http://${room.ip}:${room.port}/api/room/members"
-                    val (mCode, mRes) = HttpHelper.getJson(memUrl)
-                    if (mCode == 200) {
-                        cycleSuccess = true
-                        val mJson = JSONObject(mRes)
-                        val mArr = mJson.optJSONArray("members")
-                        val count = mArr?.length() ?: 1
-                        _binding?.tvChatOnlineCount?.text = "👥 在线: $count 人"
-                        val list = mutableListOf<Pair<String, String>>()
-                        if (mArr != null) {
-                            for (i in 0 until mArr.length()) {
-                                val mObj = mArr.getJSONObject(i)
-                                val mName = mObj.optString("name", "成员")
-                                val mIp = mObj.optString("ip", "")
-                                list.add(mName to mIp)
-                            }
-                        }
-                        joinedRoomMembers = list
-                    }
-
-                    // 3. 拉取房间聊天消息 (since 增量，避免每次全量拉取历史大图)
-                    val msgUrl = buildString {
-                        append("http://${room.ip}:${room.port}/api/messages")
-                        if (lastMsgTs > 0) append("?since=$lastMsgTs")
-                    }
-                    val msgHeaders = mutableMapOf<String, String>()
-                    joinedToken?.let { msgHeaders["X-Room-Token"] = it }
-                    val (code, res) = HttpHelper.getJson(msgUrl, msgHeaders)
-                    if (code == 200) {
-                        cycleSuccess = true
-                        val json = JSONObject(res)
-                        val arr = json.optJSONArray("messages")
-                        if (arr != null) {
-                            for (i in 0 until arr.length()) {
-                                val item = arr.getJSONObject(i)
-                                val msgId = item.optString("id", "")
-                                val sender = item.optString("senderName", "成员")
-                                val content = item.optString("content", "")
-                                val ts = item.optLong("timestamp", System.currentTimeMillis())
-                                val isFromPhone = item.optBoolean("isFromPhone", false)
-                                val senderIp = item.optString("senderIp", "")
-
-                                if (msgId.isNotBlank()) {
-                                    if (!knownJoinedMsgIds.contains(msgId)) {
-                                        knownJoinedMsgIds.add(msgId)
-                                        if (!isFromPhone) {
-                                            MessageManager.addReceivedMessage(msgId, content, sender, ts, senderIp, false)
-                                        }
-                                    }
-                                } else {
-                                    val exists = MessageManager.getMessages().any { it.content == content && Math.abs(it.timestamp - ts) < 2000 }
-                                    if (!exists && !isFromPhone) {
-                                        MessageManager.addClientMessage(content, sender, senderIp)
-                                    }
-                                }
-                                if (ts > lastMsgTs) lastMsgTs = ts
-                            }
-                        }
-                    }
-                } catch (_: Exception) {}
-
-                if (cycleSuccess) {
-                    failCount = 0
-                } else {
-                    failCount++
-                }
-
-                if (failCount >= 5) {
-                    context?.let { ctx ->
-                        Toast.makeText(ctx, "房主已解散房间或网络中断，已返回大厅", Toast.LENGTH_SHORT).show()
-                    }
-                    setRoomMode(RoomMode.CLIENT)
-                    break
-                }
-
-                delay(3000)
-            }
-        }
-    }
-
-    private val phoneClientId: String by lazy { "android_" + UUID.randomUUID().toString().take(8) }
-
-    private fun sendChatContent(text: String) {
-        val ctx = context ?: return
-        val sp = ctx.getSharedPreferences("wenbox_prefs", Context.MODE_PRIVATE)
-        val myNick = sp.getString("user_nickname", null) ?: "${Build.BRAND}手机"
-        val myIp = selectedIpUrl?.removePrefix("http://")?.substringBefore(":")?.ifBlank { null }
-            ?: NetworkUtils.getAllLocalIpAddresses(ctx).firstOrNull()?.ip ?: ""
-        MessageManager.addPhoneMessage(text, myNick, myIp, phoneClientId)
-
-        // 如果处于 JOINED 模式，向房主服务端发送此条消息
-        if (currentRoomMode == RoomMode.JOINED) {
-            val r = joinedRoom
-            if (r != null) {
-                lifecycleScope.launch {
-                    try {
-                        val sendUrl = "http://${r.ip}:${r.port}/api/messages"
-                        val body = JSONObject().apply {
-                            put("content", text)
-                            put("senderName", myNick)
-                            put("senderIp", myIp)
-                            put("clientId", phoneClientId)
-                        }
-                        val headers = mutableMapOf<String, String>()
-                        joinedToken?.let { headers["X-Room-Token"] = it }
-                        HttpHelper.postJson(sendUrl, body, headers)
-                    } catch (_: Exception) {}
-                }
-            }
-        }
-    }
+    // ---------------- 聊天 ----------------
 
     private fun initChatUi() {
-        MessageManager.onMessageReceivedListener = { msg ->
-            activity?.runOnUiThread {
-                appendChatMessageView(msg)
-            }
-        }
-
-        refreshChatUi()
-
         binding.btnSendMessage.setOnClickListener {
-            val text = binding.etChatMessage.text.toString().trim()
-            if (text.isNotBlank()) {
-                binding.etChatMessage.setText("")
-                sendChatContent(text)
+            val draft = binding.etChatMessage.text.toString()
+            if (draft.isBlank()) return@setOnClickListener
+            if (currentRoomMode == RoomMode.CLIENT) {
+                Toast.makeText(context, getString(R.string.toast_need_room_message), Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
             }
+            transferViewModel.sendMessage(draft.trim())
+            binding.etChatMessage.setText("")
         }
 
         binding.btnChatSendImage.setOnClickListener {
             if (currentRoomMode == RoomMode.CLIENT) {
-                Toast.makeText(context, "请先创建或加入房间后再发送图片", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, getString(R.string.toast_need_room_image), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             chatImagePickerLauncher.launch("image/*")
@@ -1028,29 +745,32 @@ class TransferFragment : Fragment() {
 
         binding.btnChatSendFile.setOnClickListener {
             if (currentRoomMode == RoomMode.CLIENT) {
-                Toast.makeText(context, "请先创建或加入房间后再发送文件", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, getString(R.string.toast_need_room_file), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             chatFilePickerLauncher.launch("*/*")
         }
 
         binding.btnClearChat.setOnClickListener {
-            MessageManager.clearAll()
-            refreshChatUi()
-            Toast.makeText(context, "聊天记录已清空", Toast.LENGTH_SHORT).show()
+            if (currentRoomMode == RoomMode.HOST) {
+                MessageManager.clearAll()
+            } else {
+                transferViewModel.clearJoinedMessages()
+            }
+            Toast.makeText(context, getString(R.string.toast_chat_cleared), Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun refreshChatUi() {
+    /** JOINED 模式的会话流完全由 ViewModel 提供，不再读写本机 MessageManager (A3) */
+    private fun renderJoinedMessages(messages: List<ChatMessage>) {
         if (_binding == null) return
         binding.llChatMessages.removeAllViews()
-        val list = MessageManager.getMessages()
-        if (list.isEmpty()) {
+        if (messages.isEmpty()) {
             binding.tvEmptyChat.visibility = View.VISIBLE
             binding.llChatMessages.addView(binding.tvEmptyChat)
         } else {
             binding.tvEmptyChat.visibility = View.GONE
-            list.forEach { appendChatMessageView(it) }
+            messages.forEach { appendChatMessageView(it) }
         }
     }
 
@@ -1062,9 +782,9 @@ class TransferFragment : Fragment() {
         val itemBinding = ItemChatMessageBinding.inflate(LayoutInflater.from(ctx), binding.llChatMessages, false)
         val timeStr = timeFormat.format(Date(msg.timestamp))
 
-        val cleanName = msg.senderName.replace(Regex("^[📱💻👑\\s]+"), "").trim().ifBlank { "成员" }
+        val cleanName = msg.senderName.replace(Regex("^[\\s\\uD83C-\\uDBFF\\uDC00-\\uDFFF]+"), "").trim().ifBlank { "成员" }
         val ipTag = if (msg.senderIp.isNotBlank()) " (${msg.senderIp})" else ""
-        val isMe = (msg.clientId.isNotBlank() && msg.clientId == phoneClientId) || msg.isFromPhone
+        val isMe = (msg.clientId.isNotBlank() && msg.clientId == transferViewModel.phoneClientId) || msg.isFromPhone
         if (isMe) {
             itemBinding.tvSenderInfo.text = "（我）$cleanName$ipTag"
             itemBinding.tvSenderInfo.setTextColor(ContextCompat.getColor(ctx, R.color.chat_accent_blue))
@@ -1089,12 +809,7 @@ class TransferFragment : Fragment() {
                 content
             }
             val resolvedUrl = if (rawImgPayload.startsWith("/api/")) {
-                val host = if (currentRoomMode == RoomMode.HOST) {
-                    "http://127.0.0.1:9527"
-                } else {
-                    joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
-                }
-                appendRoomToken("$host$rawImgPayload")
+                appendRoomToken("${roomApiOrigin()}$rawImgPayload")
             } else {
                 rawImgPayload
             }
@@ -1107,12 +822,12 @@ class TransferFragment : Fragment() {
             if (cachedBmp != null) {
                 itemBinding.ivMessageImage.setImageBitmap(cachedBmp)
             } else {
-                lifecycleScope.launch(Dispatchers.IO) {
+                viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
                     val decodedBmp = decodeImagePayload(resolvedUrl)
                     if (decodedBmp != null) {
                         bitmapCache.put(resolvedUrl, decodedBmp)
                         withContext(Dispatchers.Main) {
-                            itemBinding.ivMessageImage.setImageBitmap(decodedBmp)
+                            if (_binding != null) itemBinding.ivMessageImage.setImageBitmap(decodedBmp)
                         }
                     }
                 }
@@ -1128,16 +843,10 @@ class TransferFragment : Fragment() {
             val parts = inner.split("|")
             val fileName = parts.getOrNull(0) ?: "文件"
             val fileSize = parts.getOrNull(1) ?: ""
-            itemBinding.tvMessageContent.text = "📎 [文件快传] $fileName ($fileSize)\n点击打开下载"
+            itemBinding.tvMessageContent.text = getString(R.string.chat_file_card, fileName, fileSize)
             if (parts.size >= 3) {
                 val fileUrl = parts[2]
-                val host = if (currentRoomMode == RoomMode.HOST) {
-                    val myIp = NetworkUtils.getAllLocalIpAddresses(ctx).firstOrNull()?.ip ?: "127.0.0.1"
-                    "http://$myIp:9527"
-                } else {
-                    joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
-                }
-                val finalUrl = appendRoomToken(if (fileUrl.startsWith("http")) fileUrl else "$host$fileUrl")
+                val finalUrl = appendRoomToken(if (fileUrl.startsWith("http")) fileUrl else "${roomApiOrigin()}$fileUrl")
                 textToCopy = "$fileName - $finalUrl"
                 itemBinding.tvMessageContent.setOnClickListener {
                     try {
@@ -1166,10 +875,23 @@ class TransferFragment : Fragment() {
         }
     }
 
+    /** 端口随服务变化，不再写死 127.0.0.1:9527 */
+    private fun roomApiOrigin(): String {
+        val port = getTransferService()?.currentPort ?: 9527
+        return when (currentRoomMode) {
+            RoomMode.HOST -> {
+                val ip = NetworkUtils.getAllLocalIpAddresses(requireContext()).firstOrNull()?.ip ?: "127.0.0.1"
+                "http://$ip:$port"
+            }
+            RoomMode.JOINED -> transferViewModel.state.value.joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
+            RoomMode.CLIENT -> ""
+        }
+    }
+
     private fun appendRoomToken(url: String): String {
         val token = when (currentRoomMode) {
             RoomMode.HOST -> RoomManager.currentHostToken
-            RoomMode.JOINED -> joinedToken
+            RoomMode.JOINED -> transferViewModel.state.value.joinedToken
             else -> null
         }
         if (token.isNullOrBlank() || !url.contains("/api/")) return url
@@ -1181,34 +903,38 @@ class TransferFragment : Fragment() {
         }
     }
 
-    private fun decodeImagePayload(payload: String): Bitmap? {
+    private fun decodeImagePayload(payload: String, reqWidth: Int = 600, reqHeight: Int = 600): Bitmap? {
         return try {
-            if (payload.startsWith("data:image/")) {
-                val base64Data = payload.substringAfter("base64,")
-                val bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
-                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-                opts.inSampleSize = calculateInSampleSize(opts, 600, 600)
-                opts.inJustDecodeBounds = false
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-            } else if (payload.startsWith("http://") || payload.startsWith("https://")) {
-                val url = URL(payload)
-                val conn = url.openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 8000
-                conn.readTimeout = 15000
-                val bytes = conn.inputStream.use { it.readBytes() }
-                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-                opts.inSampleSize = calculateInSampleSize(opts, 600, 600)
-                opts.inJustDecodeBounds = false
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-            } else {
-                null
+            when {
+                payload.startsWith("data:image/") -> {
+                    val bytes = android.util.Base64.decode(payload.substringAfter("base64,"), android.util.Base64.DEFAULT)
+                    decodeSampled(bytes, reqWidth, reqHeight)
+                }
+                payload.startsWith("http://") || payload.startsWith("https://") -> {
+                    val conn = URL(payload).openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 8000
+                    conn.readTimeout = 20000
+                    try {
+                        val bytes = conn.inputStream.use { it.readBytes() }
+                        decodeSampled(bytes, reqWidth, reqHeight)
+                    } finally {
+                        conn.disconnect()
+                    }
+                }
+                else -> null
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (t: Throwable) {
+            t.printStackTrace()
             null
         }
+    }
+
+    private fun decodeSampled(bytes: ByteArray, reqWidth: Int, reqHeight: Int): Bitmap? {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+        opts.inSampleSize = calculateInSampleSize(opts, reqWidth, reqHeight)
+        opts.inJustDecodeBounds = false
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
     }
 
     private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
@@ -1226,7 +952,7 @@ class TransferFragment : Fragment() {
 
     private fun showImageLightboxDialog(payload: String) {
         val ctx = context ?: return
-        val dialog = Dialog(ctx, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val dialog = trackDialog(Dialog(ctx, android.R.style.Theme_Black_NoTitleBar_Fullscreen))
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#E6000000"))
@@ -1246,7 +972,7 @@ class TransferFragment : Fragment() {
         }
 
         val btnClose = Button(ctx).apply {
-            text = "✕ 关闭"
+            text = getString(R.string.dialog_close)
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.TRANSPARENT)
             textSize = 14f
@@ -1258,8 +984,8 @@ class TransferFragment : Fragment() {
         }
 
         val btnSave = Button(ctx).apply {
-            text = "💾 保存到相册"
-            setTextColor(Color.parseColor("#38BDF8"))
+            text = getString(R.string.save_to_gallery)
+            setTextColor(ContextCompat.getColor(ctx, R.color.accent_blue))
             setBackgroundColor(Color.TRANSPARENT)
             textSize = 14f
         }
@@ -1282,36 +1008,24 @@ class TransferFragment : Fragment() {
 
         var fullBmp: Bitmap? = null
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val bmp = if (payload.startsWith("data:image/")) {
-                    val base64Data = payload.substringAfter("base64,")
-                    val bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                } else if (payload.startsWith("http://") || payload.startsWith("https://")) {
-                    val url = URL(payload)
-                    val conn = url.openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 8000
-                    conn.readTimeout = 20000
-                    val bytes = conn.inputStream.use { it.readBytes() }
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                } else null
-
-                fullBmp = bmp
-                withContext(Dispatchers.Main) {
-                    if (bmp != null) {
-                        imageView.setImageBitmap(bmp)
-                    } else {
-                        Toast.makeText(ctx, "图片加载失败", Toast.LENGTH_SHORT).show()
-                    }
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            // 按屏幕尺寸采样解码，避免全尺寸解码大图 OOM (A9)
+            val metrics = resources.displayMetrics
+            val bmp = decodeImagePayload(payload, metrics.widthPixels, metrics.heightPixels)
+            fullBmp = bmp
+            withContext(Dispatchers.Main) {
+                if (bmp != null) {
+                    imageView.setImageBitmap(bmp)
+                } else {
+                    Toast.makeText(ctx, getString(R.string.toast_image_load_failed), Toast.LENGTH_SHORT).show()
                 }
-            } catch (_: Exception) {}
+            }
         }
 
         btnSave.setOnClickListener {
             val bmp = fullBmp
             if (bmp == null) {
-                Toast.makeText(ctx, "图片未加载完成，请稍候", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, getString(R.string.toast_image_not_ready), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             saveBitmapToGallery(ctx, bmp)
@@ -1322,11 +1036,11 @@ class TransferFragment : Fragment() {
     }
 
     private fun saveBitmapToGallery(ctx: Context, bmp: Bitmap) {
-        lifecycleScope.launch(Dispatchers.IO) {
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val fileName = "WenBox_IMG_${System.currentTimeMillis()}.jpg"
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val values = ContentValues().apply {
+                    val values = android.content.ContentValues().apply {
                         put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
                         put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
                         put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/WenBox")
@@ -1334,32 +1048,51 @@ class TransferFragment : Fragment() {
                     }
                     val resolver = ctx.contentResolver
                     val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                    if (uri != null) {
+                    if (uri == null) {
+                        withContext(Dispatchers.Main) { Toast.makeText(ctx, getString(R.string.toast_image_save_creating_failed), Toast.LENGTH_SHORT).show() }
+                        return@launch
+                    }
+                    try {
                         resolver.openOutputStream(uri)?.use { out ->
                             bmp.compress(Bitmap.CompressFormat.JPEG, 95, out)
-                        }
+                        } ?: throw IllegalStateException("无法写入")
                         values.clear()
                         values.put(MediaStore.Images.Media.IS_PENDING, 0)
                         resolver.update(uri, values, null, null)
                         withContext(Dispatchers.Main) {
-                            Toast.makeText(ctx, "图片已成功保存到系统相册", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, getString(R.string.toast_image_saved_gallery), Toast.LENGTH_SHORT).show()
                         }
+                    } catch (e: Exception) {
+                        // 写入失败必须删掉 IS_PENDING 残留
+                        runCatching { resolver.delete(uri, null, null) }
+                        throw e
                     }
                 } else {
-                    val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "WenBox")
-                    if (!dir.exists()) dir.mkdirs()
-                    val f = File(dir, fileName)
+                    // API 26-28 需要写外部存储权限，无权限时退回应用私有目录 (A7)
+                    val targetDir = if (Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED &&
+                        ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+                        android.content.pm.PackageManager.PERMISSION_GRANTED
+                    ) {
+                        File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "WenBox")
+                    } else {
+                        ctx.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: ctx.filesDir
+                    }
+                    if (!targetDir.exists()) targetDir.mkdirs()
+                    val f = File(targetDir, fileName)
                     java.io.FileOutputStream(f).use { out ->
                         bmp.compress(Bitmap.CompressFormat.JPEG, 95, out)
                     }
-                    ctx.sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(f)))
+                    if (Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED) {
+                        ctx.sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(f)))
+                    }
+                    val label = if (targetDir.absolutePath.contains("Pictures")) "Pictures/WenBox" else targetDir.absolutePath
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(ctx, "图片已保存至: Pictures/WenBox", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(ctx, getString(R.string.toast_image_saved_to, label), Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(ctx, "保存图片失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(ctx, getString(R.string.toast_image_save_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -1373,10 +1106,10 @@ class TransferFragment : Fragment() {
             joinedRoomMembers.toList()
         }
 
-        val dialog = Dialog(ctx).apply {
+        val dialog = trackDialog(Dialog(ctx).apply {
             requestWindowFeature(Window.FEATURE_NO_TITLE)
             window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        }
+        })
 
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -1386,7 +1119,7 @@ class TransferFragment : Fragment() {
         }
 
         val title = TextView(ctx).apply {
-            text = "👥 在线成员与访问 IP (${membersList.size})"
+            text = getString(R.string.members_title, membersList.size)
             setTextColor(ContextCompat.getColor(ctx, R.color.text_primary))
             textSize = 17f
             typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -1394,7 +1127,7 @@ class TransferFragment : Fragment() {
         root.addView(title)
 
         val sub = TextView(ctx).apply {
-            text = "点击可复制局域网内成员的 IP 地址"
+            text = getString(R.string.members_subtitle)
             setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary))
             textSize = 12f
             setPadding(0, (4 * resources.displayMetrics.density).toInt(), 0, (12 * resources.displayMetrics.density).toInt())
@@ -1413,7 +1146,7 @@ class TransferFragment : Fragment() {
 
         if (membersList.isEmpty()) {
             val emptyTv = TextView(ctx).apply {
-                text = "暂无其他在线成员"
+                text = getString(R.string.members_empty)
                 setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary))
                 textSize = 14f
                 setPadding(0, (16 * resources.displayMetrics.density).toInt(), 0, (16 * resources.displayMetrics.density).toInt())
@@ -1438,7 +1171,7 @@ class TransferFragment : Fragment() {
                 }
                 val ipTv = TextView(ctx).apply {
                     text = "IP: $ip"
-                    setTextColor(Color.parseColor("#38BDF8"))
+                    setTextColor(ContextCompat.getColor(ctx, R.color.accent_blue))
                     textSize = 12f
                 }
                 infoCol.addView(nameTv)
@@ -1446,7 +1179,7 @@ class TransferFragment : Fragment() {
                 row.addView(infoCol)
 
                 val copyBtn = Button(ctx).apply {
-                    text = "复制 IP"
+                    text = getString(R.string.members_copy_ip)
                     textSize = 12f
                     setTextColor(Color.WHITE)
                     setBackgroundResource(R.drawable.bg_btn_primary)
@@ -1454,11 +1187,14 @@ class TransferFragment : Fragment() {
                         copyToClipboard(ip)
                     }
                     val btnPadH = (12 * resources.displayMetrics.density).toInt()
-                    val btnPadV = (4 * resources.displayMetrics.density).toInt()
+                    val btnPadV = (8 * resources.displayMetrics.density).toInt()
+                    // 触控目标不小于 48dp
                     setPadding(btnPadH, btnPadV, btnPadH, btnPadV)
+                    minHeight = (48 * resources.displayMetrics.density).toInt()
+                    minWidth = (48 * resources.displayMetrics.density).toInt()
                     layoutParams = LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
-                        (36 * resources.displayMetrics.density).toInt()
+                        (48 * resources.displayMetrics.density).toInt()
                     )
                 }
                 row.addView(copyBtn)
@@ -1469,17 +1205,16 @@ class TransferFragment : Fragment() {
         root.addView(scroll)
 
         val closeBtn = Button(ctx).apply {
-            text = "关闭"
+            text = getString(R.string.dialog_close)
             setTextColor(ContextCompat.getColor(ctx, R.color.text_primary))
             setBackgroundResource(R.drawable.bg_btn_secondary)
             textSize = 14f
-            val lp = LinearLayout.LayoutParams(
+            layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                (42 * resources.displayMetrics.density).toInt()
+                (48 * resources.displayMetrics.density).toInt()
             ).apply {
                 topMargin = (16 * resources.displayMetrics.density).toInt()
             }
-            layoutParams = lp
             setOnClickListener { dialog.dismiss() }
         }
         root.addView(closeBtn)
@@ -1487,7 +1222,7 @@ class TransferFragment : Fragment() {
         dialog.setContentView(root)
         dialog.window?.setLayout(
             (resources.displayMetrics.widthPixels * 0.9).toInt(),
-            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            ViewGroup.LayoutParams.WRAP_CONTENT
         )
         dialog.show()
     }
@@ -1495,34 +1230,18 @@ class TransferFragment : Fragment() {
     override fun onResume() {
         super.onResume()
         val service = getTransferService()
-        if (service?.isRunning == true && currentRoomMode == RoomMode.HOST) {
+        if (service?.isRunning == true && transferViewModel.state.value.mode == RoomMode.HOST) {
             renderNetworkInterfaces(service.currentPort)
-        } else if (currentRoomMode == RoomMode.CLIENT) {
+        } else if (transferViewModel.state.value.mode == RoomMode.CLIENT) {
             UdpDiscoveryManager.sendSearchProbe()
             renderDiscoveredRooms(UdpDiscoveryManager.getRooms())
         }
     }
 
-    fun onServiceConnected() {
-        val running = getTransferService()?.isRunning == true
-        if (running && RoomManager.currentRoom?.isActive == true) {
-            setRoomMode(RoomMode.HOST)
-        } else if (currentRoomMode != RoomMode.JOINED) {
-            setRoomMode(RoomMode.CLIENT)
-        }
-    }
-
-    fun updateServerUi(isRunning: Boolean) {
-        if (!isAdded || _binding == null) return
-        if (isRunning && RoomManager.currentRoom?.isActive == true) {
-            setRoomMode(RoomMode.HOST)
-        } else if (!isRunning && currentRoomMode == RoomMode.HOST) {
-            setRoomMode(RoomMode.CLIENT)
-        }
-    }
-
+    /** 网卡列表刷新入口：只重绘列表与二维码，不做任何房间状态写入 (A1) */
     private fun renderNetworkInterfaces(port: Int) {
         val ctx = context ?: return
+        if (_binding == null) return
         val interfaces = NetworkUtils.getAllLocalIpAddresses(ctx)
         binding.llIpContainer.removeAllViews()
 
@@ -1536,24 +1255,22 @@ class TransferFragment : Fragment() {
         binding.llIpSection.visibility = View.VISIBLE
         val itemBindings = mutableListOf<Pair<ItemIpAddressBinding, String>>()
 
-        interfaces.forEachIndexed { _, info ->
+        interfaces.forEach { info ->
             val itemBinding = ItemIpAddressBinding.inflate(LayoutInflater.from(ctx), binding.llIpContainer, false)
             val url = "http://${info.ip}:$port"
 
             itemBinding.tvInterfaceBadge.text = info.displayName
             itemBinding.tvIpUrl.text = url
 
-            if (info.isEthernet) {
-                itemBinding.tvInterfaceBadge.setBackgroundColor(Color.parseColor("#065F46"))
-                itemBinding.tvInterfaceBadge.setTextColor(Color.parseColor("#34D399"))
-            } else if (info.isHotspot) {
-                itemBinding.tvInterfaceBadge.setBackgroundColor(Color.parseColor("#7C2D12"))
-                itemBinding.tvInterfaceBadge.setTextColor(Color.parseColor("#FDBA74"))
+            val badgeColor = when {
+                info.isEthernet -> R.color.success_fg
+                info.isHotspot -> R.color.warning_fg
+                else -> R.color.text_secondary
             }
+            itemBinding.tvInterfaceBadge.setTextColor(ContextCompat.getColor(ctx, badgeColor))
 
             itemBinding.btnCopyIp.setOnClickListener {
                 copyToClipboard(url)
-                selectIpForQr(url, info.displayName, itemBinding, itemBindings)
             }
 
             itemBinding.cardIpItem.setOnClickListener {
@@ -1582,8 +1299,10 @@ class TransferFragment : Fragment() {
         val ctx = context ?: return
         selectedIpUrl = url
         val selectedIp = url.removePrefix("http://").substringBefore(":")
+        // RoomManager.setHostIp 内部已做去重：IP 未变化时不会再回调监听器，
+        // 因此这条调用链不会形成递归 (A1)
         RoomManager.setHostIp(selectedIp)
-        binding.tvChatRoomUrl.text = "🌐 访问: $url"
+        binding.tvChatRoomUrl.text = "访问: $url"
 
         allBindings.forEach { (b, itemUrl) ->
             if (itemUrl == url) {
@@ -1611,7 +1330,7 @@ class TransferFragment : Fragment() {
         val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = ClipData.newPlainText("WenBox URL", text)
         clipboard.setPrimaryClip(clip)
-        Toast.makeText(ctx, "已复制: $text", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, getString(R.string.toast_copied, text), Toast.LENGTH_SHORT).show()
     }
 
     private fun refreshFileListUi() {
@@ -1634,16 +1353,21 @@ class TransferFragment : Fragment() {
         val port = getTransferService()?.currentPort ?: 9527
         val activeHotspot = NetworkUtils.getDynamicHotspotAddress(ctx)
 
-        val dialog = Dialog(ctx).apply {
-            requestWindowFeature(Window.FEATURE_NO_TITLE)
-            window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        }
-
         val dialogBinding = DialogCustomConfirmBinding.inflate(LayoutInflater.from(ctx))
+        val dialog = trackDialog(Dialog(ctx).apply {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            setContentView(dialogBinding.root)
+            window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            window?.setLayout(
+                (resources.displayMetrics.widthPixels * 0.9).toInt(),
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        })
+
         if (activeHotspot != null) {
             val realHotspotUrl = "http://${activeHotspot.ip}:$port"
-            dialogBinding.tvConfirmTitle.text = "📡 手机热点已在运行"
-            dialogBinding.tvConfirmMessage.text = "【动态捕获的热点真实直连地址】\n$realHotspotUrl\n\n【检测到的网卡】\n${activeHotspot.displayName}\n\n【电脑端操作】\n电脑连接此热点后，在浏览器直接打开上述地址即可！\n\n💡 提示：纯局域网点对点通信，完全不消耗手机蜂窝移动流量！"
+            dialogBinding.tvConfirmTitle.text = "手机热点已在运行"
+            dialogBinding.tvConfirmMessage.text = "【动态捕获的热点真实直连地址】\n$realHotspotUrl\n\n【检测到的网卡】\n${activeHotspot.displayName}\n\n【电脑端操作】\n电脑连接此热点后，在浏览器直接打开上述地址即可！\n\n提示：纯局域网点对点通信，完全不消耗手机蜂窝移动流量！"
             dialogBinding.btnConfirmCancel.text = "系统热点设置"
             dialogBinding.btnConfirmCancel.setOnClickListener {
                 dialog.dismiss()
@@ -1656,8 +1380,8 @@ class TransferFragment : Fragment() {
                 copyToClipboard(realHotspotUrl)
             }
         } else {
-            dialogBinding.tvConfirmTitle.text = "📡 手机个人热点未开启"
-            dialogBinding.tvConfirmMessage.text = "当前尚未检测到开启的热点网卡。\n\n【使用指引】\n1. 点击下方【打开系统热点】按钮开启热点。\n2. 开启后返回本应用，程序将【自动动态捕获系统底层分配的真实 IP 地址】并生成二维码，无需手动配置！\n\n💡 提示：电脑连热点传输不消耗任何手机移动流量。"
+            dialogBinding.tvConfirmTitle.text = "手机个人热点未开启"
+            dialogBinding.tvConfirmMessage.text = "当前尚未检测到开启的热点网卡。\n\n【使用指引】\n1. 点击下方【打开系统热点】按钮开启热点。\n2. 开启后返回本应用，程序将【自动动态捕获系统底层分配的真实 IP 地址】并生成二维码，无需手动配置！\n\n提示：电脑连热点传输不消耗任何手机移动流量。"
             dialogBinding.btnConfirmCancel.text = "取消"
             dialogBinding.btnConfirmCancel.setOnClickListener {
                 dialog.dismiss()
@@ -1670,32 +1394,40 @@ class TransferFragment : Fragment() {
             }
         }
 
-        dialog.setContentView(dialogBinding.root)
-        dialog.window?.setLayout(
-            (resources.displayMetrics.widthPixels * 0.9).toInt(),
-            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-        )
         dialog.show()
     }
 
     private fun openHotspotSettings() {
-        val intent = Intent()
-        intent.action = "android.settings.TETHER_SETTINGS"
-        try {
-            startActivity(intent)
-        } catch (_: Exception) {
+        // 定制 ROM 上可能没有该设置页，逐级退回并兜底 toast (P2)
+        val candidates = listOf(
+            "android.settings.TETHER_SETTINGS",
+            android.provider.Settings.ACTION_WIRELESS_SETTINGS,
+            android.provider.Settings.ACTION_SETTINGS
+        )
+        for (action in candidates) {
             try {
-                startActivity(Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS))
+                startActivity(Intent(action))
+                return
             } catch (_: Exception) {
-                startActivity(Intent(android.provider.Settings.ACTION_SETTINGS))
+                // 尝试下一个
             }
         }
+        Toast.makeText(context, getString(R.string.toast_hotspot_settings_missing), Toast.LENGTH_SHORT).show()
     }
 
     override fun onDestroyView() {
-        super.onDestroyView()
-        clientPollJob?.cancel()
-        clientPollJob = null
+        observerJob?.cancel()
+        observerJob = null
+        openDialogs.toList().forEach { runCatching { it.dismiss() } }
+        openDialogs.clear()
+        // 单例监听器持有 Fragment 会导致内存泄漏，必须在 onDestroyView 解绑 (P2)
+        FileManager.onFilesChangedListener = null
+        RoomManager.onRoomStateChangedListener = null
+        RoomManager.onMembersChangedListener = null
+        MessageManager.onMessageReceivedListener = null
+        UdpDiscoveryManager.onRoomsChangedListener = null
+        bitmapCache.evictAll()
         _binding = null
+        super.onDestroyView()
     }
 }

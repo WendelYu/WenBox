@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  夜间（深色）主题的 design token。与 values/colors.xml 中的语义名一一对应。
+  系统处于深色模式时 Android 自动选用本文件；浅色值定义在 values/colors.xml。
+  两处必须保持同一组名字，切换主题时不会出现缺失颜色。
+-->
+<resources>
+    <!-- 表面 -->
+    <color name="bg">#111317</color>
+    <color name="surface_1">#181B21</color>
+    <color name="surface_2">#20242C</color>
+    <color name="surface_3">#2A2F39</color>
+    <color name="border">#2A2F39</color>
+    <color name="border_strong">#3A4150</color>
+
+    <!-- 文字 -->
+    <color name="text_1">#ECEEF2</color>
+    <color name="text_2">#A3AAB8</color>
+    <color name="text_3">#8A92A2</color>
+    <color name="text_disabled">#5B6372</color>
+
+    <!-- 语义 -->
+    <color name="primary">#2563EB</color>
+    <color name="primary_hover">#1D4ED8</color>
+    <color name="primary_fg">#6EA8FE</color>
+    <color name="primary_soft">#292563EB</color>
+    <color name="success">#047857</color>
+    <color name="success_fg">#34D399</color>
+    <color name="success_soft">#2434D399</color>
+    <color name="warning_fg">#FBBF24</color>
+    <color name="warning_soft">#24FBBF24</color>
+    <color name="danger">#B91C1C</color>
+    <color name="danger_fg">#F87171</color>
+    <color name="danger_soft">#24F87171</color>
+    <color name="info">#06B6D4</color>
+    <color name="chat_accent_purple">#A78BFA</color>
+</resources>
