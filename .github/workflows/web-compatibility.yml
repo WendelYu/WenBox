@@ -1,0 +1,33 @@
+name: Web engine compatibility
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser-regression:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [chromium, webkit, firefox]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm install --no-save --package-lock=false playwright@1.62.1
+      - run: npx playwright install ${{ matrix.engine }}
+      - run: node scripts/check-web-ui.cjs
+        env:
+          BROWSER_ENGINE: ${{ matrix.engine }}
+          UI_SCREEN_DIR: dist/compatibility/${{ matrix.engine }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: compatibility-${{ matrix.engine }}
+          path: dist/compatibility/
+          retention-days: 7

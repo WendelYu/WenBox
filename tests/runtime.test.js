@@ -229,9 +229,10 @@ test('scheduler pauses polling while the tab is hidden', async () => {
     clock.advance(10);
     await clock.timers[before - 1]();
     assert.equal(runs, 1, '后台标签页不应继续轮询');
-    assert.ok(clock.timers.length > before, '隐藏时仍应保持定时器以便恢复');
+    assert.equal(clock.timers.length, before, '隐藏时不再安排定时器');
 
     hidden = false;
+    scheduler.runNow();
     clock.advance(10);
     await clock.timers[clock.timers.length - 1]();
     assert.equal(runs, 2, '回到前台后应恢复轮询');

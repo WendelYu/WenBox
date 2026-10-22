@@ -1,10 +1,13 @@
 const { app, BrowserWindow, Menu, ipcMain, clipboard, shell } = require('electron');
 const path = require('path');
-const { pathToFileURL } = require('url');
-const indexPath = path.join(__dirname, 'app/src/main/assets/web/index.html');
+const { startDesktopServer } = require('./desktop-server');
+let desktopServer;
+function isAppPage(value) {
+  try { const url = new URL(value); return url.origin === desktopServer?.origin && ['/', '/index.html'].includes(url.pathname) && !url.username && !url.password; } catch (_) { return false; }
+}
 
 ipcMain.handle('wenbox:copy-text', (event, text) => {
-  if (event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== pathToFileURL(indexPath).href) {
+  if (event.senderFrame !== event.sender.mainFrame || !isAppPage(event.senderFrame.url)) {
     throw new Error('无效的剪贴板请求来源');
   }
   if (typeof text !== 'string') throw new TypeError('剪贴板内容必须是文本');
@@ -38,7 +41,7 @@ function createWindow() {
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (event, url) => {
-    if (url !== pathToFileURL(indexPath).href) {
+    if (!isAppPage(url)) {
       event.preventDefault();
       if (/^https?:\/\//i.test(url)) {
         void shell.openExternal(url);
@@ -48,10 +51,11 @@ function createWindow() {
   win.webContents.on('will-attach-webview', (event) => event.preventDefault());
 
   // 载入现有的纯 Web 界面（报销直存、聊天、JSON、进制转换、Cron）
-  win.loadFile(indexPath);
+  void win.loadURL(desktopServer.origin);
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  desktopServer = await startDesktopServer();
   createWindow();
 
   app.on('activate', () => {
@@ -66,3 +70,5 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+
+app.on('before-quit', () => { void desktopServer?.close(); });

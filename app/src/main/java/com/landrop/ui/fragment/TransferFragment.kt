@@ -35,6 +35,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.android.material.tabs.TabLayout
 import com.landrop.MainActivity
 import com.landrop.R
 import com.landrop.databinding.DialogCreateRoomBinding
@@ -55,20 +56,24 @@ import com.landrop.ui.TransferViewModel
 import com.landrop.server.FileManager
 import com.landrop.server.MessageManager
 import com.landrop.server.RoomManager
+import com.landrop.ui.ChatAdapter
+import com.landrop.security.RoomProfileStore
+import com.landrop.security.RoomResource
+import com.landrop.security.RoomDownloadClient
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import com.landrop.ui.FileAdapter
 import com.landrop.utils.NetworkUtils
+import com.landrop.utils.ImageSampling
 import com.landrop.utils.QrCodeUtils
 import com.landrop.utils.UdpDiscoveryManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.net.URL
-import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -82,9 +87,12 @@ class TransferFragment : Fragment() {
     private val mainViewModel: MainViewModel by activityViewModels()
 
     private lateinit var fileAdapter: FileAdapter
+    private lateinit var chatAdapter: ChatAdapter
     private var selectedIpUrl: String? = null
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
+    private var selectedRoomTab = 0
+    private var connectionDetailsExpanded = false
     private var currentRoomMode = RoomMode.CLIENT
     private var joinedRoomMembers = mutableListOf<Pair<String, String>>()
     private var observerJob: Job? = null
@@ -116,7 +124,11 @@ class TransferFragment : Fragment() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val cr = ctx.contentResolver
-                val bmp = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+                options.inSampleSize = ImageSampling.sampleSize(options.outWidth, options.outHeight, 1280, 1280)
+                options.inJustDecodeBounds = false
+                val bmp = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
                 if (bmp == null) {
                     transferViewModel.toast("无法读取图片")
                     return@launch
@@ -185,6 +197,8 @@ class TransferFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        selectedRoomTab = savedInstanceState?.getInt("room_tab") ?: selectedRoomTab
+        connectionDetailsExpanded = savedInstanceState?.getBoolean("connection_details") ?: connectionDetailsExpanded
         initViews()
         initChatUi()
         initRoomEvents()
@@ -214,6 +228,11 @@ class TransferFragment : Fragment() {
                         if (service.isRunning && RoomManager.currentRoom?.isActive == true) {
                             renderNetworkInterfaces(service.port)
                         }
+                    }
+                }
+                launch {
+                    MessageManager.messageFlow.collect { messages ->
+                        if (_binding != null && currentRoomMode == RoomMode.HOST) renderMessages(messages)
                     }
                 }
                 launch {
@@ -257,10 +276,11 @@ class TransferFragment : Fragment() {
                 binding.btnLeaveRoom.visibility = View.GONE
                 binding.btnChangeNicknameJoined.visibility = View.GONE
                 binding.cardDiscoveredRooms.visibility = View.GONE
-                binding.llHostDetails.visibility = View.VISIBLE
+                binding.llHostDetails.visibility = if (connectionDetailsExpanded) View.VISIBLE else View.GONE
                 binding.cardChatSection.visibility = View.VISIBLE
                 binding.tvChatSectionTitle.text = getString(R.string.chat_title_host)
                 updateHostHeader(cfg)
+                renderMessages(MessageManager.messageFlow.value)
 
                 val port = getTransferService()?.currentPort ?: 9527
                 renderNetworkInterfaces(port)
@@ -285,10 +305,27 @@ class TransferFragment : Fragment() {
                 binding.tvChatOnlineCount.text = getString(R.string.online_count, state.onlineCount)
                 binding.tvChatRoomUrl.text = getString(R.string.visit_url_joined, "${room.ip}:${room.port}")
                 // JOINED 的消息只来自 ViewModel，绝不写进本机 MessageManager (A3)
-                renderJoinedMessages(state.joinedMessages)
+                renderMessages(state.joinedMessages)
             }
         }
+        binding.llChatStatus.visibility = if (state.mode == RoomMode.CLIENT) View.GONE else View.VISIBLE
+        binding.roomTabs.visibility = if (state.mode == RoomMode.CLIENT) View.GONE else View.VISIBLE
+        binding.btnConnectionDetails.visibility = if (state.mode == RoomMode.HOST) View.VISIBLE else View.GONE
+        renderRoomTab()
         updateNicknameButtonDisplay()
+    }
+
+    private fun renderRoomTab() {
+        val inRoom = currentRoomMode != RoomMode.CLIENT
+        binding.discoveryScroll.visibility = if (inRoom) View.GONE else View.VISIBLE
+        binding.fileContent.visibility = if (inRoom && selectedRoomTab == 1) View.VISIBLE else View.GONE
+        binding.cardChatSection.visibility = if (inRoom && selectedRoomTab == 0) View.VISIBLE else View.GONE
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("room_tab", selectedRoomTab)
+        outState.putBoolean("connection_details", connectionDetailsExpanded)
+        super.onSaveInstanceState(outState)
     }
 
     /** 只刷新房间名/IP/在线数：不重建网卡列表，避免 setHostIp -> listener 递归 (A1) */
@@ -306,6 +343,21 @@ class TransferFragment : Fragment() {
 
     private fun initViews() {
         val ctx = requireContext()
+
+        binding.roomTabs.apply {
+            addTab(newTab().setText(R.string.room_tab_chat))
+            addTab(newTab().setText(R.string.room_tab_files))
+            getTabAt(selectedRoomTab)?.select()
+            addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+                override fun onTabSelected(tab: TabLayout.Tab) { selectedRoomTab = tab.position; renderRoomTab() }
+                override fun onTabUnselected(tab: TabLayout.Tab) = Unit
+                override fun onTabReselected(tab: TabLayout.Tab) = Unit
+            })
+        }
+        binding.btnConnectionDetails.setOnClickListener {
+            connectionDetailsExpanded = !connectionDetailsExpanded
+            binding.llHostDetails.visibility = if (connectionDetailsExpanded) View.VISIBLE else View.GONE
+        }
 
         // 初始化待发文件 RecyclerView
         fileAdapter = FileAdapter(emptyList()) { file ->
@@ -326,7 +378,7 @@ class TransferFragment : Fragment() {
         }
 
         binding.btnClearFiles.setOnClickListener {
-            FileManager.clearAll()
+            FileManager.clearSharedOnly()
         }
 
         // 开启/查看热点
@@ -521,69 +573,60 @@ class TransferFragment : Fragment() {
 
     // ---------------- 常用密码房配置 (保存 / 一键填入 / 长按删除) ----------------
 
-    private fun prefs() = requireContext().getSharedPreferences(TransferViewModel.PREFS, Context.MODE_PRIVATE)
-
-    private fun getRoomProfiles(): MutableList<JSONObject> {
-        return try {
-            val arr = JSONArray(prefs().getString("room_profiles", "[]") ?: "[]")
-            (0 until arr.length()).mapTo(mutableListOf()) { arr.getJSONObject(it) }
-        } catch (_: Exception) {
-            mutableListOf()
-        }
-    }
-
-    private fun persistRoomProfiles(profiles: List<JSONObject>) {
-        prefs().edit().putString("room_profiles", JSONArray(profiles).toString()).apply()
-    }
-
-    private fun saveRoomProfile(name: String, pin: String) {
-        val profiles = getRoomProfiles()
-        profiles.removeAll { it.optString("name") == name }
-        profiles.add(0, JSONObject().put("name", name).put("pin", pin))
-        while (profiles.size > 10) profiles.removeAt(profiles.size - 1)
-        persistRoomProfiles(profiles)
-    }
+    private fun saveRoomProfile(name: String, pin: String) = transferViewModel.saveRoomProfile(name, pin)
 
     private fun renderRoomProfiles(dialogBinding: DialogCreateRoomBinding) {
         val ctx = context ?: return
-        val profiles = getRoomProfiles()
-        val container = dialogBinding.llRoomProfiles
-        container.removeAllViews()
-        if (profiles.isEmpty()) {
-            container.visibility = View.GONE
-            return
-        }
-        container.visibility = View.VISIBLE
-
-        val hint = TextView(ctx).apply {
-            text = getString(R.string.room_profiles_hint)
-            setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary))
-            textSize = 12f
-        }
-        container.addView(hint)
-
-        profiles.forEach { profile ->
-            val name = profile.optString("name", "未命名房间")
-            val pin = profile.optString("pin", "")
-            val row = TextView(ctx).apply {
-                text = "▸ $name${if (pin.isNotBlank()) " (PIN: $pin)" else " (免密)"}"
-                setTextColor(ContextCompat.getColor(ctx, R.color.accent_blue))
-                textSize = 13f
-                val pad = (8 * resources.displayMetrics.density).toInt()
-                setPadding(0, pad, 0, pad)
-                setOnClickListener {
-                    dialogBinding.etRoomName.setText(name)
-                    dialogBinding.etRoomPin.setText(pin)
+        viewLifecycleOwner.lifecycleScope.launch {
+            val store = RoomProfileStore(ctx)
+            val profiles = try { store.load() }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) {
+                    dialogBinding.llRoomProfiles.apply {
+                        removeAllViews(); visibility = View.VISIBLE
+                        addView(Button(ctx).apply {
+                            setText(R.string.profiles_reset)
+                            setOnClickListener {
+                                showCustomConfirmDialog(getString(R.string.profiles_reset), getString(R.string.profiles_reset_message), getString(R.string.profiles_reset)) {
+                                    viewLifecycleOwner.lifecycleScope.launch {
+                                        try { store.reset(); renderRoomProfiles(dialogBinding) }
+                                        catch (e: CancellationException) { throw e }
+                                        catch (_: Exception) { transferViewModel.toast(getString(R.string.profiles_save_failed)) }
+                                    }
+                                }
+                            }
+                        })
+                    }
+                    transferViewModel.toast(getString(R.string.profiles_unavailable)); return@launch
                 }
-                setOnLongClickListener {
-                    val remaining = getRoomProfiles().filter { it.optString("name") != name }
-                    persistRoomProfiles(remaining)
-                    renderRoomProfiles(dialogBinding)
-                    Toast.makeText(context, "已删除常用房间「$name」", Toast.LENGTH_SHORT).show()
-                    true
-                }
+            val container = dialogBinding.llRoomProfiles
+            container.removeAllViews()
+            container.visibility = if (profiles.isEmpty()) View.GONE else View.VISIBLE
+            if (profiles.isEmpty()) return@launch
+            container.addView(TextView(ctx).apply {
+                text = getString(R.string.room_profiles_hint)
+                setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary)); textSize = 12f
+            })
+            profiles.forEach { profile ->
+                container.addView(TextView(ctx).apply {
+                    text = getString(R.string.saved_room_label, profile.name)
+                    setTextColor(ContextCompat.getColor(ctx, R.color.primary_fg)); textSize = 13f
+                    minHeight = (48 * resources.displayMetrics.density).toInt()
+                    gravity = Gravity.CENTER_VERTICAL
+                    setOnClickListener {
+                        dialogBinding.etRoomName.setText(profile.name)
+                        dialogBinding.etRoomPin.setText(profile.pin)
+                    }
+                    setOnLongClickListener {
+                        viewLifecycleOwner.lifecycleScope.launch {
+                            try { store.remove(profile.name); renderRoomProfiles(dialogBinding) }
+                            catch (e: CancellationException) { throw e }
+                            catch (_: Exception) { transferViewModel.toast(getString(R.string.profiles_save_failed)) }
+                        }
+                        true
+                    }
+                })
             }
-            container.addView(row)
         }
     }
 
@@ -724,6 +767,12 @@ class TransferFragment : Fragment() {
     // ---------------- 聊天 ----------------
 
     private fun initChatUi() {
+        chatAdapter = ChatAdapter(::bindChatMessage)
+        binding.rvMessages.apply {
+            layoutManager = LinearLayoutManager(requireContext()).apply { stackFromEnd = true }
+            adapter = chatAdapter
+            itemAnimator = null // Text selection and image holders must not flash on poll updates.
+        }
         binding.btnSendMessage.setOnClickListener {
             val draft = binding.etChatMessage.text.toString()
             if (draft.isBlank()) return@setOnClickListener
@@ -753,7 +802,8 @@ class TransferFragment : Fragment() {
 
         binding.btnClearChat.setOnClickListener {
             if (currentRoomMode == RoomMode.HOST) {
-                MessageManager.clearAll()
+                transferViewModel.clearHostScreen()
+                renderMessages(emptyList())
             } else {
                 transferViewModel.clearJoinedMessages()
             }
@@ -761,30 +811,38 @@ class TransferFragment : Fragment() {
         }
     }
 
-    /** JOINED 模式的会话流完全由 ViewModel 提供，不再读写本机 MessageManager (A3) */
-    private fun renderJoinedMessages(messages: List<ChatMessage>) {
-        if (_binding == null) return
-        binding.llChatMessages.removeAllViews()
-        if (messages.isEmpty()) {
-            binding.tvEmptyChat.visibility = View.VISIBLE
-            binding.llChatMessages.addView(binding.tvEmptyChat)
-        } else {
-            binding.tvEmptyChat.visibility = View.GONE
-            messages.forEach { appendChatMessageView(it) }
+    private fun renderMessages(incoming: List<ChatMessage>) {
+        val messages = if (currentRoomMode == RoomMode.HOST) transferViewModel.visibleHostMessages(incoming) else incoming
+        if (_binding == null || !::chatAdapter.isInitialized) return
+        val manager = binding.rvMessages.layoutManager as? LinearLayoutManager
+        val follow = chatAdapter.itemCount == 0 || (manager?.findLastVisibleItemPosition() ?: -1) >= chatAdapter.itemCount - 3
+        binding.tvEmptyChat.visibility = if (messages.isEmpty()) View.VISIBLE else View.GONE
+        chatAdapter.submitList(messages.toList()) {
+            if (_binding != null && follow && chatAdapter.itemCount > 0) binding.rvMessages.scrollToPosition(chatAdapter.itemCount - 1)
         }
     }
 
-    private fun appendChatMessageView(msg: ChatMessage) {
-        if (_binding == null) return
-        val ctx = context ?: return
-        binding.tvEmptyChat.visibility = View.GONE
+    private data class RoomAccess(val origin: String, val token: String, val roomId: String)
+    private fun roomAccess() = RoomAccess(roomApiOrigin(), when (currentRoomMode) {
+        RoomMode.HOST -> RoomManager.currentHostToken.orEmpty()
+        RoomMode.JOINED -> transferViewModel.state.value.joinedToken
+        RoomMode.CLIENT -> ""
+    }, transferViewModel.state.value.let { it.joinedRoom?.roomId ?: it.room?.roomId.orEmpty() })
 
-        val itemBinding = ItemChatMessageBinding.inflate(LayoutInflater.from(ctx), binding.llChatMessages, false)
+    private fun bindChatMessage(itemBinding: ItemChatMessageBinding, msg: ChatMessage): Job? {
+        val ctx = context ?: return null
+        val access = roomAccess()
+        var imageJob: Job? = null
+        itemBinding.ivMessageImage.setImageDrawable(null)
+        itemBinding.tvMessageContent.setOnClickListener(null)
+        itemBinding.cvMessageImage.setOnClickListener(null)
+        itemBinding.tvMessageContent.autoLinkMask = 0
+        itemBinding.tvMessageContent.movementMethod = null
         val timeStr = timeFormat.format(Date(msg.timestamp))
 
         val cleanName = msg.senderName.replace(Regex("^[\\s\\uD83C-\\uDBFF\\uDC00-\\uDFFF]+"), "").trim().ifBlank { "成员" }
         val ipTag = if (msg.senderIp.isNotBlank()) " (${msg.senderIp})" else ""
-        val isMe = (msg.clientId.isNotBlank() && msg.clientId == transferViewModel.phoneClientId) || msg.isFromPhone
+        val isMe = (msg.clientId.isNotBlank() && msg.clientId == transferViewModel.phoneClientId) || (msg.clientId.isBlank() && msg.isFromPhone && currentRoomMode == RoomMode.HOST)
         if (isMe) {
             itemBinding.tvSenderInfo.text = "（我）$cleanName$ipTag"
             itemBinding.tvSenderInfo.setTextColor(ContextCompat.getColor(ctx, R.color.chat_accent_blue))
@@ -808,24 +866,22 @@ class TransferFragment : Fragment() {
             } else {
                 content
             }
-            val resolvedUrl = if (rawImgPayload.startsWith("/api/")) {
-                appendRoomToken("${roomApiOrigin()}$rawImgPayload")
-            } else {
-                rawImgPayload
-            }
-
+            val resolvedUrl = if (rawImgPayload.startsWith("data:image/")) rawImgPayload else
+                runCatching { RoomResource.resolve(access.origin, rawImgPayload) }.getOrDefault("")
             textToCopy = resolvedUrl
             itemBinding.tvMessageContent.visibility = View.GONE
             itemBinding.cvMessageImage.visibility = View.VISIBLE
 
-            val cachedBmp = bitmapCache.get(resolvedUrl)
+            val cacheKey = "${access.origin}:${access.roomId}:${msg.id}"
+            val cachedBmp = bitmapCache.get(cacheKey)
             if (cachedBmp != null) {
                 itemBinding.ivMessageImage.setImageBitmap(cachedBmp)
             } else {
-                viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
-                    val decodedBmp = decodeImagePayload(resolvedUrl)
+                imageJob = viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+                    val decodedBmp = decodeImagePayload(resolvedUrl, access = access)
+                    currentCoroutineContext().ensureActive()
                     if (decodedBmp != null) {
-                        bitmapCache.put(resolvedUrl, decodedBmp)
+                        bitmapCache.put(cacheKey, decodedBmp)
                         withContext(Dispatchers.Main) {
                             if (_binding != null) itemBinding.ivMessageImage.setImageBitmap(decodedBmp)
                         }
@@ -834,7 +890,7 @@ class TransferFragment : Fragment() {
             }
 
             itemBinding.cvMessageImage.setOnClickListener {
-                showImageLightboxDialog(resolvedUrl)
+                showImageLightboxDialog(resolvedUrl, access)
             }
         } else if (content.startsWith("[file:") && content.endsWith("]")) {
             itemBinding.tvMessageContent.visibility = View.VISIBLE
@@ -846,15 +902,11 @@ class TransferFragment : Fragment() {
             itemBinding.tvMessageContent.text = getString(R.string.chat_file_card, fileName, fileSize)
             if (parts.size >= 3) {
                 val fileUrl = parts[2]
-                val finalUrl = appendRoomToken(if (fileUrl.startsWith("http")) fileUrl else "${roomApiOrigin()}$fileUrl")
-                textToCopy = "$fileName - $finalUrl"
+                val finalUrl = runCatching { RoomResource.resolve(access.origin, fileUrl) }.getOrNull()
+                textToCopy = if (finalUrl == null) fileName else "$fileName - $finalUrl"
                 itemBinding.tvMessageContent.setOnClickListener {
-                    try {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(finalUrl))
-                        startActivity(intent)
-                    } catch (_: Exception) {
-                        copyToClipboard(finalUrl)
-                    }
+                    if (finalUrl == null) transferViewModel.toast(getString(R.string.attachment_invalid))
+                    else transferViewModel.downloadAttachment(finalUrl, fileName)
                 }
             }
         } else {
@@ -869,10 +921,7 @@ class TransferFragment : Fragment() {
             copyToClipboard(textToCopy)
         }
 
-        binding.llChatMessages.addView(itemBinding.root)
-        binding.nestedScrollView.post {
-            binding.nestedScrollView.fullScroll(View.FOCUS_DOWN)
-        }
+        return imageJob
     }
 
     /** 端口随服务变化，不再写死 127.0.0.1:9527 */
@@ -880,30 +929,15 @@ class TransferFragment : Fragment() {
         val port = getTransferService()?.currentPort ?: 9527
         return when (currentRoomMode) {
             RoomMode.HOST -> {
-                val ip = NetworkUtils.getAllLocalIpAddresses(requireContext()).firstOrNull()?.ip ?: "127.0.0.1"
-                "http://$ip:$port"
+                "http://127.0.0.1:$port"
             }
             RoomMode.JOINED -> transferViewModel.state.value.joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: ""
             RoomMode.CLIENT -> ""
         }
     }
 
-    private fun appendRoomToken(url: String): String {
-        val token = when (currentRoomMode) {
-            RoomMode.HOST -> RoomManager.currentHostToken
-            RoomMode.JOINED -> transferViewModel.state.value.joinedToken
-            else -> null
-        }
-        if (token.isNullOrBlank() || !url.contains("/api/")) return url
-        val sep = if (url.contains('?')) "&" else "?"
-        return try {
-            url + sep + "token=" + URLEncoder.encode(token, "UTF-8")
-        } catch (_: Exception) {
-            url + sep + "token=" + token
-        }
-    }
-
-    private fun decodeImagePayload(payload: String, reqWidth: Int = 600, reqHeight: Int = 600): Bitmap? {
+    private suspend fun decodeImagePayload(payload: String, reqWidth: Int = 600, reqHeight: Int = 600, access: RoomAccess = roomAccess()): Bitmap? {
+        val cacheDir = context?.applicationContext?.cacheDir ?: return null
         return try {
             when {
                 payload.startsWith("data:image/") -> {
@@ -911,18 +945,35 @@ class TransferFragment : Fragment() {
                     decodeSampled(bytes, reqWidth, reqHeight)
                 }
                 payload.startsWith("http://") || payload.startsWith("https://") -> {
-                    val conn = URL(payload).openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 8000
-                    conn.readTimeout = 20000
+                    val coroutine = currentCoroutineContext()
+                    val temp = File.createTempFile("wenbox_preview_", ".tmp", cacheDir)
                     try {
-                        val bytes = conn.inputStream.use { it.readBytes() }
-                        decodeSampled(bytes, reqWidth, reqHeight)
-                    } finally {
-                        conn.disconnect()
-                    }
+                        RoomDownloadClient.download(access.origin, payload, access.token) { input ->
+                            temp.outputStream().use { output ->
+                                val buffer = ByteArray(32768)
+                                var total = 0L
+                                while (true) {
+                                    coroutine.ensureActive()
+                                    val read = input.read(buffer)
+                                    if (read < 0) break
+                                    total += read
+                                    check(total <= 64L * 1024 * 1024) { "图片过大，请作为文件下载" }
+                                    output.write(buffer, 0, read)
+                                }
+                            }
+                        }
+                        coroutine.ensureActive()
+                        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeFile(temp.path, options)
+                        options.inSampleSize = calculateInSampleSize(options, reqWidth, reqHeight)
+                        options.inJustDecodeBounds = false
+                        BitmapFactory.decodeFile(temp.path, options)
+                    } finally { temp.delete() }
                 }
                 else -> null
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (t: Throwable) {
             t.printStackTrace()
             null
@@ -937,20 +988,10 @@ class TransferFragment : Fragment() {
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
     }
 
-    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
-        val (height: Int, width: Int) = options.outHeight to options.outWidth
-        var inSampleSize = 1
-        if (height > reqHeight || width > reqWidth) {
-            val halfHeight: Int = height / 2
-            val halfWidth: Int = width / 2
-            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
-                inSampleSize *= 2
-            }
-        }
-        return inSampleSize
-    }
+    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int =
+        ImageSampling.sampleSize(options.outWidth, options.outHeight, reqWidth, reqHeight)
 
-    private fun showImageLightboxDialog(payload: String) {
+    private fun showImageLightboxDialog(payload: String, access: RoomAccess) {
         val ctx = context ?: return
         val dialog = trackDialog(Dialog(ctx, android.R.style.Theme_Black_NoTitleBar_Fullscreen))
         val root = LinearLayout(ctx).apply {
@@ -1011,7 +1052,7 @@ class TransferFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
             // 按屏幕尺寸采样解码，避免全尺寸解码大图 OOM (A9)
             val metrics = resources.displayMetrics
-            val bmp = decodeImagePayload(payload, metrics.widthPixels, metrics.heightPixels)
+            val bmp = decodeImagePayload(payload, metrics.widthPixels, metrics.heightPixels, access)
             fullBmp = bmp
             withContext(Dispatchers.Main) {
                 if (bmp != null) {
@@ -1426,6 +1467,8 @@ class TransferFragment : Fragment() {
         RoomManager.onMembersChangedListener = null
         MessageManager.onMessageReceivedListener = null
         UdpDiscoveryManager.onRoomsChangedListener = null
+        binding.rvMessages.adapter = null
+        binding.rvFiles.adapter = null
         bitmapCache.evictAll()
         _binding = null
         super.onDestroyView()

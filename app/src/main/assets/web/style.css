@@ -10,11 +10,9 @@
     --text-subtle:var(--text-3);
     /* 背景/描边语义 */
     --primary-bg:var(--primary);
-    --primary:var(--primary);
     --accent-bg:var(--success);
     --accent:var(--success);
     --danger-bg:var(--danger);
-    --danger:var(--danger);
     /* 旧聊天区灰系调色板统一到同一套 token */
     --ic-bg-main:var(--bg);
     --ic-bg-card:var(--surface-1);

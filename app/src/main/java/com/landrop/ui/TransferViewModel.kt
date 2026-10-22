@@ -4,6 +4,13 @@ import android.app.Application
 import android.content.ContentResolver
 import android.net.Uri
 import android.os.Build
+import com.landrop.R
+import com.landrop.server.FileManager
+import com.landrop.security.RoomProfileStore
+import com.landrop.security.RoomDownloadClient
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import java.io.FilterInputStream
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.landrop.model.ChatMessage
@@ -61,7 +68,59 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
     private val _toasts = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val toasts = _toasts.asSharedFlow()
 
+    private val hostMessageScreen = MessageScreen()
+    fun visibleHostMessages(messages: List<ChatMessage>) = hostMessageScreen.visible(_state.value.room?.roomId.orEmpty(), messages)
+    fun clearHostScreen() = hostMessageScreen.clear(_state.value.room?.roomId.orEmpty(), MessageManager.getMessages())
+
     private var pollJob: Job? = null
+    private val profileStore = RoomProfileStore(application)
+
+    init {
+        viewModelScope.launch {
+            try { profileStore.load() } // Migrate old plaintext before a profile dialog is opened.
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { toast(application.getString(R.string.profiles_unavailable)) }
+        }
+    }
+
+    fun saveRoomProfile(name: String, pin: String) {
+        viewModelScope.launch {
+            try { profileStore.upsert(name, pin) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { toast(getApplication<Application>().getString(R.string.profiles_save_failed)) }
+        }
+    }
+
+    fun downloadAttachment(resource: String, fileName: String) {
+        val snapshot = _state.value
+        val origin = when (snapshot.mode) {
+            RoomMode.HOST -> "http://127.0.0.1:${snapshot.room?.hostPort ?: 9527}"
+            RoomMode.JOINED -> snapshot.joinedRoom?.let { "http://${it.ip}:${it.port}" } ?: return
+            RoomMode.CLIENT -> return
+        }
+        val token = if (snapshot.mode == RoomMode.HOST) RoomManager.currentHostToken else snapshot.joinedToken
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            try {
+                val coroutine = currentCoroutineContext()
+                toast(app.getString(R.string.attachment_downloading, fileName))
+                val saved = RoomDownloadClient.download(origin, resource, token.orEmpty()) { input ->
+                    val stream = object : FilterInputStream(input) {
+                        override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                            coroutine.ensureActive()
+                            return super.read(bytes, offset, length)
+                        }
+                    }
+                    checkNotNull(FileManager.saveIncomingFile(app, fileName, stream)) { "无法保存文件" }
+                }
+                coroutine.ensureActive()
+                val location = if (saved.uri.scheme == "file") saved.uri.path.orEmpty() else "Downloads/WenBox/${saved.name}"
+                toast(app.getString(R.string.attachment_saved, location))
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { toast(app.getString(R.string.attachment_failed)) }
+        }
+    }
+
 
     /** 本机客户端 id 持久化，重建后保持一致，避免自己的消息被当成别人的重复显示 (A5/Rust 其它) */
     val phoneClientId: String = run {
@@ -376,9 +435,10 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                     put("senderIp", myIp)
                     put("clientId", phoneClientId)
                 }
-                val headers = token?.let { mapOf("X-Room-Token" to it) } ?: emptyMap()
+                val headers = mapOf("X-Room-Token" to token)
                 val (code, _) = HttpHelper.postJson("http://${room.ip}:${room.port}/api/messages", body, headers)
                 if (code !in 200..299) throw IllegalStateException("HTTP $code")
+                if (!isCurrentJoinedRoom(room, token)) return@launch
                 // 自己的消息只写进会话列表，绝不写进本机 MessageManager：
                 // 否则加入别人房间的消息会出现在本机房间的服务端，造成串房 (A3)
                 appendJoinedMessage(
@@ -420,7 +480,7 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                     } ?: throw IllegalStateException("无法读取所选文件")
                     target
                 }
-                val headers = token?.let { mapOf("X-Room-Token" to it) } ?: emptyMap()
+                val headers = mapOf("X-Room-Token" to token)
                 val (code, res) = withContext(Dispatchers.IO) {
                     buffer.inputStream().use { stream ->
                         HttpHelper.uploadFile("http://${room.ip}:${room.port}/api/upload", fileName, stream, headers)
@@ -430,6 +490,7 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                     _toasts.tryEmit("上传文件失败 (code: $code)")
                     return@launch
                 }
+                if (!isCurrentJoinedRoom(room, token)) return@launch
                 val fileId = runCatching { JSONObject(res).optString("fileId", "") }.getOrDefault("")
                 val encoded = java.net.URLEncoder.encode(fileName, "UTF-8")
                 val dlUrl = if (fileId.isNotBlank()) "/api/download/$fileId" else "/api/download/$encoded"
@@ -440,9 +501,9 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                     put("senderIp", NetworkUtils.getAllLocalIpAddresses(getApplication()).firstOrNull()?.ip ?: "")
                     put("clientId", phoneClientId)
                 }
-                withContext(Dispatchers.IO) {
-                    HttpHelper.postJson("http://${room.ip}:${room.port}/api/messages", body, headers)
-                }
+                val (messageCode, _) = HttpHelper.postJson("http://${room.ip}:${room.port}/api/messages", body, headers)
+                check(messageCode in 200..299) { "文件已上传，但消息发送失败" }
+                if (!isCurrentJoinedRoom(room, token)) return@launch
                 appendJoinedMessage(
                     ChatMessage(
                         id = UUID.randomUUID().toString(),
@@ -464,6 +525,9 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
             }
         }
     }
+
+    private fun isCurrentJoinedRoom(room: DiscoveredRoom, token: String) =
+        _state.value.mode == RoomMode.JOINED && _state.value.joinedRoom?.roomId == room.roomId && _state.value.joinedToken == token
 
     private fun appendJoinedMessage(msg: ChatMessage) {
         val merged = (_state.value.joinedMessages + msg).distinctBy { it.id }.sortedBy { it.timestamp }

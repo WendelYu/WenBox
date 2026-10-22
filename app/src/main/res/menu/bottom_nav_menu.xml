@@ -1,22 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:id="@+id/nav_transfer"
-        android:icon="@drawable/ic_nav_transfer"
-        android:title="@string/nav_transfer" />
-
-    <item
-        android:id="@+id/nav_json"
-        android:icon="@drawable/ic_nav_json"
-        android:title="@string/nav_json" />
-
-    <item
-        android:id="@+id/nav_converter"
-        android:icon="@drawable/ic_nav_converter"
-        android:title="@string/nav_converter" />
-
-    <item
-        android:id="@+id/nav_cron"
-        android:icon="@drawable/ic_nav_cron"
-        android:title="@string/nav_cron" />
+    <item android:id="@+id/nav_transfer" android:icon="@drawable/ic_nav_transfer" android:title="@string/nav_transfer" />
+    <item android:id="@+id/nav_tools" android:icon="@drawable/ic_nav_json" android:title="@string/nav_tools" />
 </menu>

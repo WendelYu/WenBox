@@ -190,4 +190,19 @@
     <string name="room_profiles_hint">常用密码房 (点击填入，长按删除)：</string>
     <string name="chat_file_card">[文件快传] %1$s (%2$s)\n点击打开下载</string>
     <string name="room_profile_row">▸ %1$s</string>
+    <string name="nav_tools">工具</string>
+    <string name="room_tab_chat">聊天</string>
+    <string name="room_tab_files">文件</string>
+    <string name="room_connection_details">访问地址与二维码</string>
+    <string name="profiles_unavailable">无法读取常用房间，请在此设备重新保存配置</string>
+    <string name="profiles_save_failed">常用房间保存失败，请重试</string>
+    <string name="saved_room_label">%1$s（点击填入，长按删除）</string>
+    <string name="attachment_downloading">正在下载「%1$s」…</string>
+    <string name="attachment_saved">文件已保存：%1$s</string>
+    <string name="attachment_failed">文件下载失败，请确认房主在线且文件仍可下载</string>
+    <string name="attachment_invalid">附件地址无效，请让发送者重新分享文件</string>
+    <string name="json_formatted">格式化成功</string>
+    <string name="json_minified">已压缩为单行</string>
+    <string name="profiles_reset">重置本机常用房间</string>
+    <string name="profiles_reset_message">常用房间配置无法解密。重置将删除本机保存的房间名称与密码，之后可重新保存。</string>
 </resources>

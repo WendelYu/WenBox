@@ -1,0 +1,51 @@
+name: Package macOS release
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: false
+        default: ''
+permissions:
+  contents: read
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test shared UI and native network backend
+        run: |
+          node --check app/src/main/assets/web/app.js
+          npm test
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Build Intel and Apple Silicon application
+        run: npx --yes @tauri-apps/cli@1.5 build --target universal-apple-darwin --bundles app,dmg
+      - name: Check local network permission description
+        run: |
+          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSExceptionDomains:169.254.0.0/16:NSExceptionAllowsInsecureHTTPLoads' src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/Info.plist
+      - name: Package universal macOS downloads
+        run: |
+          mkdir -p release-macos
+          ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app release-macos/WenBox-macOS-universal.zip
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg release-macos/WenBox-macOS-universal.dmg
+          lipo -verify_arch arm64 x86_64 src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/MacOS/WenBox
+          cd release-macos
+          shasum -a 256 WenBox-macOS-universal.dmg WenBox-macOS-universal.zip > SHA256SUMS-macOS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: release-macos/*
+          if-no-files-found: error
+          retention-days: 7

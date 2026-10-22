@@ -1,6 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod network;
+
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -94,6 +96,9 @@ pub struct RoomConfig {
     pub host_port: u16,
     #[serde(rename = "createdAt")]
     pub created_at: u64,
+    /// Only untouched startup rooms participate in automatic wired pairing.
+    #[serde(rename = "autoConnect", default)]
+    pub auto_connect: bool,
 }
 
 impl Default for RoomConfig {
@@ -108,6 +113,7 @@ impl Default for RoomConfig {
             host_ip: String::new(),
             host_port: 9527,
             created_at: 0,
+            auto_connect: false,
         }
     }
 }
@@ -142,6 +148,10 @@ pub struct DiscoveredRoom {
     pub need_password: bool,
     #[serde(rename = "lastSeen")]
     pub last_seen: u64,
+    #[serde(rename = "autoConnect", default)]
+    pub auto_connect: bool,
+    #[serde(rename = "canAutoConnect", default)]
+    pub can_auto_connect: bool,
 }
 
 struct AppState {
@@ -174,50 +184,38 @@ enum PinGate {
 // ---------------- 智能获取本机所有可用局域网 IPv4 地址 ----------------
 /// 物理网卡及其子网掩码 / 广播地址。if-addrs 同时提供 netmask，
 /// 因此不再假设所有网络都是 /24 (S6/Rust 其它: 子网广播写死为 /24)。
-fn get_lan_interfaces() -> Vec<(String, std::net::Ipv4Addr, std::net::Ipv4Addr)> {
+fn get_network_interfaces() -> Vec<(String, std::net::Ipv4Addr, std::net::Ipv4Addr)> {
     let mut list = Vec::new();
     for iface in if_addrs::get_if_addrs().unwrap_or_default() {
         let if_addrs::IfAddr::V4(v4) = iface.addr else { continue };
         let ip = v4.ip;
-        if ip.is_loopback() || ip.is_link_local() {
+        if !network::usable_ipv4(ip) {
             continue;
         }
-        let mask = v4.netmask;
-        let broadcast = std::net::Ipv4Addr::from(u32::from(ip) | !u32::from(mask));
-        list.push((iface.name, ip, broadcast));
+        list.push((iface.name, ip, network::effective_mask(ip, v4.netmask)));
     }
     list
 }
 
+fn get_lan_interfaces() -> Vec<(String, std::net::Ipv4Addr, std::net::Ipv4Addr)> {
+    get_network_interfaces().into_iter()
+        .map(|(name, ip, mask)| (name, ip, network::broadcast(ip, mask))).collect()
+}
+
 fn get_all_lan_ips() -> Vec<LocalIpInfo> {
-    static CACHE: Mutex<Option<(std::time::Instant, Vec<LocalIpInfo>)>> = Mutex::new(None);
-    if let Some((updated, ips)) = &*CACHE.lock().unwrap_or_else(|e| e.into_inner()) {
-        if updated.elapsed() < Duration::from_secs(5) { return ips.clone(); }
-    }
+    // No address cache: USB adapters can appear or receive APIPA after the app starts.
     let mut list = Vec::new();
-    if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
-        for (name, ip) in interfaces {
-            if let std::net::IpAddr::V4(ipv4) = ip {
-                if !ipv4.is_loopback() && !ipv4.is_link_local() {
-                    let s = ipv4.to_string();
-                    let lower_name = name.to_lowercase();
-                    let is_virtual = lower_name.contains("vethernet")
-                        || lower_name.contains("wsl")
-                        || lower_name.contains("virtual")
-                        || lower_name.contains("vmnet")
-                        || lower_name.contains("docker");
-
-                    let is_lan = ipv4.is_private();
-                    let is_preferred = is_lan && !is_virtual;
-
-                    list.push(LocalIpInfo {
-                        ip: s,
-                        name: name.clone(),
-                        is_preferred,
-                    });
-                }
-            }
-        }
+    for (name, ipv4, _) in get_network_interfaces() {
+        let lower_name = name.to_lowercase();
+        let is_virtual = lower_name.contains("vethernet")
+            || lower_name.contains("wsl")
+            || lower_name.contains("virtual")
+            || lower_name.contains("vmnet")
+            || lower_name.contains("docker");
+        let is_lan = ipv4.is_private() || ipv4.is_link_local();
+        list.push(LocalIpInfo {
+            ip: ipv4.to_string(), name, is_preferred: is_lan && !is_virtual,
+        });
     }
 
     // 优先将真正的 WiFi / 局域网物理网卡排在最前
@@ -231,7 +229,6 @@ fn get_all_lan_ips() -> Vec<LocalIpInfo> {
         });
     }
 
-    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), list.clone()));
     list
 }
 
@@ -255,7 +252,10 @@ async fn get_local_ip(state: tauri::State<'_, Arc<AppState>>) -> Result<String, 
 }
 
 fn get_local_ip_blocking(state: Arc<AppState>) -> String {
-    state.selected_ip.lock().unwrap().clone().unwrap_or_else(get_primary_ip)
+    let ips = get_all_lan_ips();
+    state.selected_ip.lock().unwrap().clone()
+        .filter(|selected| ips.iter().any(|item| &item.ip == selected))
+        .unwrap_or_else(|| ips[0].ip.clone())
 }
 
 #[tauri::command]
@@ -432,6 +432,7 @@ fn create_room_cmd(
         host_ip: primary_ip.clone(),
         host_port: 9527,
         created_at: now,
+        auto_connect: false,
     };
 
     *state.room.lock().unwrap_or_else(|e| e.into_inner()) = cfg.clone();
@@ -497,7 +498,19 @@ fn get_room_status_cmd(state: tauri::State<Arc<AppState>>) -> serde_json::Value 
         "hostPort": room.host_port,
         "createdAt": room.created_at,
         "isTauriHost": is_tauri_host,
+        "autoConnect": room.auto_connect,
+        "canAutoConnect": can_auto_connect(&state),
     })
+}
+
+fn can_auto_connect(state: &AppState) -> bool {
+    let room = state.room.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    room.is_active && room.auto_connect && !room.need_password
+        && state.files.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+        && state.messages.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+        && !state.members.lock().unwrap_or_else(|e| e.into_inner()).iter()
+            .any(|(key, member)| key != "host" && now.saturating_sub(member.last_seen) < 15)
 }
 
 #[tauri::command]
@@ -543,6 +556,8 @@ fn get_discovered_rooms_cmd_blocking(state: Arc<AppState>) -> Vec<DiscoveredRoom
             port: 9527,
             need_password: my_room.need_password,
             last_seen: now,
+            auto_connect: false,
+            can_auto_connect: false,
         });
     }
     list
@@ -589,14 +604,24 @@ fn clear_chat_messages_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, S
 }
 
 #[tauri::command]
-async fn join_remote_room_cmd(host_url: String, pin: String, my_name: String, state: tauri::State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
+async fn join_remote_room_cmd(host_url: String, pin: String, my_name: String, expected_room_id: Option<String>, state: tauri::State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || join_remote_room_cmd_blocking(host_url, pin, my_name, state))
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(expected) = expected_room_id {
+            join_remote_room_expected(host_url, pin, my_name, state, Some(expected))
+        } else {
+            join_remote_room_cmd_blocking(host_url, pin, my_name, state)
+        }
+    })
         .await
         .map_err(|e| format!("后台任务失败: {}", e))?
 }
 
 fn join_remote_room_cmd_blocking(host_url: String, pin: String, my_name: String, state: Arc<AppState>) -> Result<serde_json::Value, String> {
+    join_remote_room_expected(host_url, pin, my_name, state, None)
+}
+
+fn join_remote_room_expected(host_url: String, pin: String, my_name: String, state: Arc<AppState>, expected: Option<String>) -> Result<serde_json::Value, String> {
     let clean = host_url.trim().trim_end_matches('/');
     let url = format!("{}/api/room/join", clean);
     let dev_name = if my_name.trim().is_empty() {
@@ -608,22 +633,25 @@ fn join_remote_room_cmd_blocking(host_url: String, pin: String, my_name: String,
     let body = serde_json::json!({
         "pin": pin.trim(),
         "name": dev_name,
-        "platform": desktop_platform()
+        "platform": desktop_platform(),
+        "expectedRoomId": expected,
     });
 
     let client = get_http_client();
     let resp = client.post(&url)
         .set("Content-Type", "application/json; charset=utf-8")
-        .send_string(&body.to_string())
-        .map_err(|e| format!("连接房间失败: {}", e))?;
+        .send_string(&body.to_string());
+    let resp = match resp {
+        Ok(response) | Err(ureq::Error::Status(_, response)) => response,
+        Err(error) => return Err(format!("连接房间失败: {}", error)),
+    };
 
     let val: serde_json::Value = resp.into_json().map_err(|e| format!("解析房间响应失败: {}", e))?;
-    if val["success"].as_bool().unwrap_or(false) {
-        state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        Ok(val)
-    } else {
-        Err(val["message"].as_str().unwrap_or("加入房间失败").to_string())
+    if expected.is_none() && val["success"].as_bool() == Some(true) {
+        state.room.lock().unwrap_or_else(|e| e.into_inner()).auto_connect = false;
     }
+    // Preserve structured PIN lockout metadata; joining another room does not clear our hosted history.
+    Ok(val)
 }
 
 /// 全网广播目标地址列表（含逐网卡的真实子网广播地址）
@@ -1797,6 +1825,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     host_ip: primary_ip.clone(),
                     host_port: port,
                     created_at: now,
+                    auto_connect: false,
                 };
 
                 // 建房检查与写入必须在同一个 room 锁作用域内完成，否则两个并发请求
@@ -1960,6 +1989,8 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                             let room = state.room.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             if !room.is_active {
                                 msg = "房间尚未开启或已解散".into();
+                            } else if val["expectedRoomId"].as_str().map(|id| id != room.room_id || !room.auto_connect).unwrap_or(false) {
+                                msg = "对端房间已变更，等待重新发现".into();
                             } else if room.need_password && !pin_matches(&room.pin, &pin) {
                                 pin_gate_record_failure(&state, &client_ip);
                                 msg = "房间密码错误".into();
@@ -2001,6 +2032,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                                     "hostDevice": room.host_device,
                                     "hostIp": host_ip_to_show,
                                     "hostPort": port,
+                                    "autoConnect": room.auto_connect,
                                 });
                             }
                         }
@@ -2204,6 +2236,8 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         port,
                         need_password: my_room.need_password,
                         last_seen: now,
+                        auto_connect: false,
+                        can_auto_connect: false,
                     });
                 }
 
@@ -2543,17 +2577,7 @@ const MULTICAST_IPV4: &str = "239.255.255.250";
 const DISCOVERY_PORT: u16 = 9528;
 
 fn get_ipv4_interfaces() -> Vec<(String, std::net::Ipv4Addr)> {
-    let mut list = Vec::new();
-    if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
-        for (name, ip) in interfaces {
-            if let std::net::IpAddr::V4(ipv4) = ip {
-                if !ipv4.is_loopback() && !ipv4.is_link_local() {
-                    list.push((name, ipv4));
-                }
-            }
-        }
-    }
-    list
+    get_network_interfaces().into_iter().map(|(name, ip, _)| (name, ip)).collect()
 }
 
 
@@ -2571,8 +2595,7 @@ fn send_room_probe_cmd_blocking() -> Result<bool, String> {
     let bytes = msg.as_bytes();
 
     for (iface_ip, subnet_bcast) in get_per_interface_broadcasts() {
-        if let Ok(socket) = UdpSocket::bind((iface_ip, 0)) {
-            let _ = socket.set_broadcast(true);
+        if let Ok(socket) = network::discovery_sender(iface_ip) {
             let _ = socket.send_to(bytes, subnet_bcast.as_str());
             let _ = socket.send_to(bytes, "255.255.255.255:9528");
             let _ = socket.send_to(bytes, format!("{}:9528", MULTICAST_IPV4));
@@ -2598,17 +2621,18 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
             }
         };
         let _ = socket.set_broadcast(true);
-
-        // 加入多播组
-        if let Ok(mcast_addr) = MULTICAST_IPV4.parse::<std::net::Ipv4Addr>() {
-            for (_name, iface_ip) in get_ipv4_interfaces() {
-                let _ = socket.join_multicast_v4(&mcast_addr, &iface_ip);
-            }
-            let _ = socket.join_multicast_v4(&mcast_addr, &std::net::Ipv4Addr::UNSPECIFIED);
-        }
+        let _ = socket.set_read_timeout(Some(Duration::from_secs(1)));
+        let mcast_addr = MULTICAST_IPV4.parse::<std::net::Ipv4Addr>().unwrap();
+        let mut joined_interfaces = HashSet::new();
+        let mut refreshed_at = None::<std::time::Instant>;
 
         let mut buf = [0u8; 2048];
         loop {
+            if refreshed_at.map(|at| at.elapsed() >= Duration::from_secs(1)).unwrap_or(true) {
+                let current = get_ipv4_interfaces().into_iter().map(|(_, ip)| ip).collect();
+                network::refresh_memberships(&socket, mcast_addr, &mut joined_interfaces, &current);
+                refreshed_at = Some(std::time::Instant::now());
+            }
             if let Ok((len, src)) = socket.recv_from(&mut buf) {
                 if let Ok(text) = std::str::from_utf8(&buf[..len]) {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
@@ -2655,6 +2679,8 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                     port,
                                     need_password,
                                     last_seen: now,
+                                    auto_connect: val["autoConnect"].as_bool().unwrap_or(false),
+                                    can_auto_connect: val["canAutoConnect"].as_bool().unwrap_or(true),
                                 };
                                 state_recv.discovered_rooms.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone(), disc);
 
@@ -2685,19 +2711,13 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                     }
                                 };
                                 // 如果发来探测的 src 在某个物理网卡子网，优先以该子网的 IP 应答
-                                let target_ip = src.ip();
-                                let matched_iface_ip = get_ipv4_interfaces()
-                                    .into_iter()
-                                    .find(|(_name, ipv4)| {
-                                        if let std::net::IpAddr::V4(target_v4) = target_ip {
-                                            let o1 = ipv4.octets();
-                                            let o2 = target_v4.octets();
-                                            o1[0] == o2[0] && o1[1] == o2[1] && o1[2] == o2[2]
-                                        } else {
-                                            false
-                                        }
-                                    })
-                                    .map(|(_name, ip)| ip.to_string())
+                                let interfaces = get_network_interfaces().into_iter()
+                                    .map(|(_, ip, mask)| (ip, mask)).collect::<Vec<_>>();
+                                let matched = match src.ip() {
+                                    std::net::IpAddr::V4(ip) => network::matching_interface(ip, &interfaces),
+                                    _ => None,
+                                };
+                                let matched_iface_ip = matched.map(|ip| ip.to_string())
                                     .unwrap_or_else(|| my_room.host_ip.clone());
 
                                 let reply = serde_json::json!({
@@ -2710,12 +2730,16 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                     "hostPort": my_port,
                                     "hostIp": matched_iface_ip,
                                     "needPassword": my_room.need_password,
+                                    "autoConnect": my_room.auto_connect,
+                                    "canAutoConnect": can_auto_connect(&state_recv),
                                     "memberCount": member_count
                                 }).to_string();
 
                                 // 同时向对方来源端口以及 9528 发送单播回包，防止对端临时端口已关闭
-                                let _ = socket.send_to(reply.as_bytes(), src);
-                                let _ = socket.send_to(reply.as_bytes(), (src.ip(), DISCOVERY_PORT));
+                                let reply_socket = matched.and_then(|ip| network::discovery_sender(ip).ok());
+                                let reply_socket = reply_socket.as_ref().unwrap_or(&socket);
+                                let _ = reply_socket.send_to(reply.as_bytes(), src);
+                                let _ = reply_socket.send_to(reply.as_bytes(), (src.ip(), DISCOVERY_PORT));
                             }
                         }
 
@@ -2757,6 +2781,8 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
     let state_bcast = state.clone();
     thread::spawn(move || {
         loop {
+            // Probe even while hosting. Both clients start as hosts, and adapters may arrive later.
+            let _ = send_room_probe_cmd_blocking();
             // 浏览器建房的场景：房主关掉页面后没有人再发心跳，房间会永远挂着。
             // 非 Tauri 房主超过 BROWSER_HOST_TIMEOUT_SECS 未心跳即自动关房。
             {
@@ -2807,9 +2833,7 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
 
                 // 针对每一个网卡独立绑定 socket 发送，彻底解决多网卡（WiFi+网口）路由限制
                 for (iface_ip, subnet_bcast) in &per_interface {
-                    if let Ok(socket) = UdpSocket::bind((*iface_ip, 0)) {
-                        let _ = socket.set_broadcast(true);
-                        let _ = socket.set_multicast_loop_v4(false);
+                    if let Ok(socket) = network::discovery_sender(*iface_ip) {
 
                         let host_ip_str = iface_ip.to_string();
 
@@ -2823,6 +2847,8 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                             "hostPort": my_port,
                             "hostIp": host_ip_str,
                             "needPassword": room.need_password,
+                            "autoConnect": room.auto_connect,
+                            "canAutoConnect": can_auto_connect(&state_bcast),
                             "memberCount": member_count
                         }).to_string();
 
@@ -2851,6 +2877,8 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                 "hostPort": my_port,
                                 "hostIp": room.host_ip,
                                 "needPassword": room.need_password,
+                                "autoConnect": room.auto_connect,
+                                "canAutoConnect": can_auto_connect(&state_bcast),
                                 "memberCount": member_count
                             }).to_string();
                             let _ = unicast_socket.send_to(msg.as_bytes(), format!("{}:9528", tip));
@@ -2913,6 +2941,7 @@ fn start_default_open_room(state: &Arc<AppState>) {
         host_ip: primary_ip.clone(),
         host_port: 9527,
         created_at: now,
+        auto_connect: true,
     };
 
     *state.room.lock().unwrap_or_else(|e| e.into_inner()) = cfg.clone();
@@ -3002,6 +3031,65 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_direct_pairing_only_leaves_untouched_startup_rooms() {
+        let state = protected_state();
+        assert!(!can_auto_connect(&state));
+        {
+            let mut room = state.room.lock().unwrap();
+            room.auto_connect = true;
+            room.need_password = false;
+            room.pin.clear();
+        }
+        assert!(!can_auto_connect(&state), "shared files must keep the local room in place");
+        state.files.lock().unwrap().clear();
+        assert!(!can_auto_connect(&state), "pre-existing messages also keep the room in place");
+        state.messages.lock().unwrap().clear();
+        assert!(can_auto_connect(&state));
+        state.messages.lock().unwrap().push(ChatMessage {
+            id: "message".into(), sender_name: "房主".into(), content: "工作记录".into(),
+            timestamp: 0, is_from_phone: false, sender_ip: String::new(), client_id: None,
+        });
+        assert!(!can_auto_connect(&state), "existing conversations must stay visible");
+        state.messages.lock().unwrap().clear();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        state.members.lock().unwrap().insert("guest".into(), RoomMember {
+            id: "guest-id".into(), name: "同事".into(), ip: "169.254.8.8".into(),
+            platform: "Windows".into(), access_ip: "169.254.18.3:9527".into(),
+            joined_at: now, last_seen: now,
+        });
+        assert!(!can_auto_connect(&state), "an online peer must not be abandoned");
+        state.members.lock().unwrap().get_mut("guest").unwrap().last_seen = now - 16;
+        assert!(can_auto_connect(&state), "a disconnected peer must not block recovery forever");
+        state.room.lock().unwrap().is_active = false;
+        assert!(!can_auto_connect(&state));
+    }
+
+    #[test]
+    fn test_automatic_join_rejects_stale_or_manually_replaced_rooms() {
+        let host = protected_state();
+        {
+            let mut room = host.room.lock().unwrap();
+            room.auto_connect = true;
+            room.need_password = false;
+            room.pin.clear();
+        }
+        let port = spawn_test_server(host.clone());
+        let local = protected_state();
+        let url = format!("http://127.0.0.1:{}", port);
+        let tokens_before = host.auth_tokens.lock().unwrap().len();
+        let stale = join_remote_room_expected(url.clone(), String::new(), "访客".into(), local.clone(), Some("old-room-id".into())).unwrap();
+        assert_eq!(stale["success"], false);
+        assert_eq!(host.auth_tokens.lock().unwrap().len(), tokens_before);
+        host.room.lock().unwrap().auto_connect = false;
+        let replaced = join_remote_room_expected(url.clone(), String::new(), "访客".into(), local.clone(), Some("room-uuid".into())).unwrap();
+        assert_eq!(replaced["success"], false);
+        host.room.lock().unwrap().auto_connect = true;
+        let current = join_remote_room_expected(url, String::new(), "访客".into(), local, Some("room-uuid".into())).unwrap();
+        assert_eq!(current["success"], true);
+        assert_eq!(current["room"]["roomId"], "room-uuid");
+    }
 
     #[test]
     fn test_percent_decode_strict_non_ascii_does_not_panic() {
@@ -3167,6 +3255,7 @@ mod tests {
                 host_ip: "192.168.1.8".into(),
                 host_port: 9527,
                 created_at: 0,
+                auto_connect: false,
             }),
             members: Mutex::new(HashMap::new()),
             discovered_rooms: Mutex::new(HashMap::new()),
@@ -3311,6 +3400,26 @@ mod tests {
         // 锁定期间即使猜对了 PIN 也不放行
         let correct = attempt("246810");
         assert!(correct.starts_with("HTTP/1.1 429"), "{}", correct);
+    }
+
+    #[test]
+    fn test_native_join_preserves_lockout_metadata_and_hosted_history() {
+        let remote = protected_state();
+        let port = spawn_test_server(remote);
+        let local = protected_state();
+        let host = format!("http://127.0.0.1:{}", port);
+        for _ in 0..PIN_MAX_FAILURES {
+            let result = join_remote_room_cmd_blocking(host.clone(), "000000".into(), "访客".into(), local.clone()).unwrap();
+            assert_eq!(result["success"], false);
+        }
+        let locked = join_remote_room_cmd_blocking(host, "246810".into(), "访客".into(), local.clone()).unwrap();
+        assert_eq!(locked["success"], false);
+        assert!(locked["retryAfter"].as_u64().unwrap() > 0);
+        assert_eq!(local.messages.lock().unwrap().len(), 1);
+        let other_port = spawn_test_server(protected_state());
+        let joined = join_remote_room_cmd_blocking(format!("http://127.0.0.1:{}", other_port), "246810".into(), "访客".into(), local.clone()).unwrap();
+        assert_eq!(joined["success"], true);
+        assert_eq!(local.messages.lock().unwrap().len(), 1);
     }
 
     #[test]

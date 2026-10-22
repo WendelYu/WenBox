@@ -1,5 +1,10 @@
 package com.landrop.server
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import com.landrop.security.SafeFileName
+import kotlinx.coroutines.CancellationException
 import android.content.ContentResolver
 import android.content.ContentValues
 import android.content.Context
@@ -89,23 +94,24 @@ object FileManager {
      * 在目标目录里挑一个不会覆盖既有文件的文件名：
      * name.ext -> name (1).ext -> name (2).ext
      */
-    private fun uniqueFile(dir: File, fileName: String): File {
-        val candidate = File(dir, fileName)
-        if (!candidate.exists()) return candidate
+    private fun reserveFile(dir: File, fileName: String): File {
+        check(dir.isDirectory || dir.mkdirs() || dir.isDirectory) { "无法创建下载目录" }
         val dot = fileName.lastIndexOf('.')
         val stem = if (dot > 0) fileName.substring(0, dot) else fileName
         val ext = if (dot > 0) fileName.substring(dot) else ""
-        for (index in 1..999) {
-            val next = File(dir, "$stem ($index)$ext")
-            if (!next.exists()) return next
+        for (index in 0..9999) {
+            val name = if (index == 0) fileName else "$stem ($index)$ext"
+            val next = File(dir, name)
+            if (next.createNewFile()) return next
         }
-        return File(dir, "$stem-${UUID.randomUUID().toString().take(8)}$ext")
+        error("同名文件过多，请整理下载目录后重试")
     }
 
     /**
-     * 将从电脑端上传的文件保存到手机的系统「下载/WenBox」目录并注册可供房间内其他成员下载
+     * 流式保存到下载目录。接收到的文件不自动加入全房间共享列表。
      */
-    fun saveIncomingFile(context: Context, fileName: String, inputStream: InputStream): SharedFile? {
+    fun saveIncomingFile(context: Context, originalName: String, inputStream: InputStream): SharedFile? {
+        val fileName = SafeFileName.sanitize(originalName)
         return try {
             val id = UUID.randomUUID().toString()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -122,12 +128,12 @@ object FileManager {
                 } else {
                     try {
                         var writtenBytes = 0L
-                        resolver.openOutputStream(uri)?.use { out ->
+                        checkNotNull(resolver.openOutputStream(uri)) { "无法写入下载目录" }.use { out ->
                             writtenBytes = inputStream.copyTo(out)
                         }
                         values.clear()
                         values.put(MediaStore.Downloads.IS_PENDING, 0)
-                        resolver.update(uri, values, null, null)
+                        check(resolver.update(uri, values, null, null) > 0) { "无法完成文件保存" }
 
                         val sharedFile = SharedFile(
                             id = id,
@@ -136,7 +142,6 @@ object FileManager {
                             mimeType = resolver.getType(uri) ?: "application/octet-stream",
                             uri = uri
                         )
-                        files.add(0, sharedFile)
                         receivedFiles.add(0, sharedFile)
                         onFilesChangedListener?.invoke()
                         sharedFile
@@ -148,13 +153,10 @@ object FileManager {
                 }
             } else {
                 // Android 9 及以下使用公开外部存储（需要 WRITE_EXTERNAL_STORAGE 权限）
-                val dir = File(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                    "WenBox"
-                )
-                if (!dir.exists()) dir.mkdirs()
-                // 同名文件不再覆盖，改为追加序号
-                val targetFile = uniqueFile(dir, fileName)
+                val canWritePublic = ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+                val root = if (canWritePublic) Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    else context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
+                val targetFile = reserveFile(File(root, "WenBox"), fileName)
                 var writtenBytes = 0L
                 try {
                     FileOutputStream(targetFile).use { out ->
@@ -172,11 +174,12 @@ object FileManager {
                     mimeType = "application/octet-stream",
                     uri = fileUri
                 )
-                files.add(0, sharedFile)
                 receivedFiles.add(0, sharedFile)
                 onFilesChangedListener?.invoke()
                 sharedFile
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             e.printStackTrace()
             null

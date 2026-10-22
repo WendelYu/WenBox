@@ -1,10 +1,15 @@
-name: Release WenBox (Android APK & Windows EXE)
+name: Release WenBox (Android, Windows & macOS)
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release (for example v1.3.1)
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -16,6 +21,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -59,6 +66,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
@@ -71,7 +80,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Build Tauri Windows EXE
         run: npx @tauri-apps/cli@1.5 build
@@ -95,13 +104,20 @@ jobs:
           retention-days: 1
           path: release-win/*
 
+  build-macos:
+    uses: ./.github/workflows/release-macos.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+
   publish-release:
     name: Publish to GitHub Releases
-    needs: [build-android, build-windows]
+    needs: [build-android, build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Download Android Artifact
         uses: actions/download-artifact@v4
@@ -115,14 +131,21 @@ jobs:
           name: windows-exe
           path: release-assets
 
+      - name: Download macOS Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-app
+          path: release-assets
+
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name || 'v1.0.0' }}
-          name: Release ${{ github.ref_name || 'v1.0.0' }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: Release ${{ inputs.tag || github.ref_name }}
           draft: false
           prerelease: false
+          body_path: docs/RELEASE_NOTES.md
           generate_release_notes: true
           files: release-assets/*

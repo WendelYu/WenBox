@@ -24,6 +24,8 @@ import com.landrop.databinding.FragmentCronBinding
 
 class CronFragment : Fragment() {
 
+    private var selectedPreset = 0
+    private var restoring = true
     private var analysisJob: Job? = null
     private var _binding: FragmentCronBinding? = null
     private val binding get() = _binding!!
@@ -39,6 +41,8 @@ class CronFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        restoring = true
+        selectedPreset = savedInstanceState?.getInt("cron_preset") ?: selectedPreset
         initPresets()
         initInputListener()
     }
@@ -48,9 +52,12 @@ class CronFragment : Fragment() {
         val labels = CronHelper.PRESETS.map { it.label }
         val adapter = ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, labels)
         binding.spCronPresets.adapter = adapter
+        binding.spCronPresets.setSelection(selectedPreset, false)
 
         binding.spCronPresets.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (restoring || position == selectedPreset) return
+                selectedPreset = position
                 val preset = CronHelper.PRESETS[position]
                 binding.etCronInput.setText(preset.expression)
             }
@@ -90,7 +97,7 @@ class CronFragment : Fragment() {
             }
         }
 
-        updateCronAnalysis("* * * * * ?")
+        updateCronAnalysis(binding.etCronInput.text.toString())
     }
 
     private fun updateCronAnalysis(cron: String) {
@@ -103,6 +110,17 @@ class CronFragment : Fragment() {
             _binding?.tvCronMeaning?.text = meaning
             _binding?.tvNextTimes?.text = times.mapIndexed { index, time -> "${index + 1}.  $time" }.joinToString("\n")
         }
+    }
+
+    override fun onViewStateRestored(savedInstanceState: Bundle?) {
+        super.onViewStateRestored(savedInstanceState)
+        restoring = false
+        updateCronAnalysis(binding.etCronInput.text.toString())
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("cron_preset", selectedPreset)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onDestroyView() {

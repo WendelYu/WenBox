@@ -77,6 +77,10 @@ class LanServer(
                 uri == "/style.css" -> serveAsset("web/style.css", "text/css; charset=UTF-8")
                 uri == "/app.js" -> serveAsset("web/app.js", "application/javascript; charset=UTF-8")
                 uri == "/runtime.js" -> serveAsset("web/runtime.js", "application/javascript; charset=UTF-8")
+                uri == "/upload-queue.js" -> serveAsset("web/upload-queue.js", "application/javascript; charset=UTF-8")
+                uri == "/ui-state.js" -> serveAsset("web/ui-state.js", "application/javascript; charset=UTF-8")
+                uri == "/theme.js" -> serveAsset("web/theme.js", "application/javascript; charset=UTF-8")
+                uri == "/workspace.css" -> serveAsset("web/workspace.css", "text/css; charset=UTF-8")
                 uri == "/tokens.css" -> serveAsset("web/tokens.css", "text/css; charset=UTF-8")
                 uri == "/icons.svg" -> serveAsset("web/icons.svg", "image/svg+xml; charset=UTF-8")
                 uri == "/logo.png" || uri == "/favicon.png" || uri == "/apple-touch-icon.png" ->
@@ -657,11 +661,12 @@ class LanServer(
                     FileManager.saveIncomingFile(context, originalName, inStream)
                 }
                 tempFile.delete()
+                if (sharedFile == null) return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json; charset=utf-8", "{\"success\":false,\"message\":\"保存文件失败\"}")
                 val resObj = JSONObject().apply {
                     put("success", true)
-                    put("fileId", sharedFile?.id ?: "")
+                    put("fileId", sharedFile.id)
                     put("name", originalName)
-                    put("size", sharedFile?.size ?: 0L)
+                    put("size", sharedFile.size)
                     put("message", "File saved to Download/WenBox")
                 }
                 val resBytes = resObj.toString().toByteArray(Charsets.UTF_8)

@@ -1,6 +1,14 @@
 (function () {
     // ---------------- 全局通知 Toast ----------------
-    const { copyText, singleFlight, fetchWithTimeout, listChanged } = window.WenBox;
+    const { copyText, singleFlight, fetchWithTimeout, listChanged, scheduler } = window.WenBox;
+    let uploadQueue = null;
+    const cooldown = window.WenBoxUI.createCooldown();
+    const outbox = window.WenBoxUI.createOutbox();
+    let discoveryStartedAt = Date.now();
+    let chatHasSynced = false;
+    let directAutoConnectEnabled = true;
+    let directRetryAt = 0;
+    const directConnectionStatus = document.getElementById('directConnectionStatus');
     const toast = document.getElementById('toast');
     let toastTimer;
     function setText(element, value) {
@@ -63,38 +71,146 @@
         }, 1500);
     }
 
-    // ---------------- 顶部 Tab 导航切换 ----------------
-    const navTabs = document.querySelectorAll('.nav-tab');
-    const tabPanes = document.querySelectorAll('.tab-pane');
-    let currentActiveTab = 'tab-transfer';
-
-    navTabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            navTabs.forEach(t => t.classList.remove('active'));
-            tabPanes.forEach(p => p.classList.remove('active'));
-
-            tab.classList.add('active');
-            const targetId = tab.getAttribute('data-tab');
-            currentActiveTab = targetId;
-            const targetPane = document.getElementById(targetId);
-            if (targetPane) targetPane.classList.add('active');
-
-            if (currentActiveTab === 'tab-transfer') {
-                if (roomState.mode === 'joined') {
-                    loadFiles();
-                } else if (roomState.mode === 'host') {
-                    loadLocalSharedFiles();
-                    loadReceivedFiles();
-                } else {
-                    pollDiscoveredRooms();
-                }
-            } else if (currentActiveTab === 'tab-chat') {
-                if (roomState.mode === 'host' || roomState.mode === 'joined') {
-                    pollChatMessages();
-                }
-            }
+    // Primary navigation and independent tool/file segments share delegated controls.
+    let currentActiveTab = 'view-room';
+    function animateArrival(element, drawer = false) {
+        if (!element?.animate || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        element.getAnimations().forEach(animation => animation.cancel());
+        element.animate([{ transform: drawer ? 'translateX(28px)' : 'translateY(10px) scale(.985)' }, { transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.16, 1, .3, 1)' });
+    }
+    function selectView(id) {
+        currentActiveTab = id;
+        document.body.dataset.activeView = id;
+        setText(document.getElementById('workspaceTitle'), id === 'view-tools' ? '随手工具' : '快传工作台');
+        setText(document.getElementById('workspaceSubtitle'), id === 'view-tools' ? '常用的小工具，离线也顺手' : '文件与消息，在设备间轻松流转');
+        document.querySelectorAll('.primary-view').forEach(view => { view.hidden = view.id !== id; });
+        document.querySelectorAll('[data-view]').forEach(button => {
+            const selected = button.dataset.view === id;
+            button.classList.toggle('active', selected); button.setAttribute('aria-pressed', String(selected));
+        });
+        animateArrival(document.getElementById(id));
+        scheduler.runNow();
+    }
+    function selectSegment(button, attribute, selector) {
+        const id = button.dataset[attribute];
+        document.querySelectorAll(`[data-${selector}]`).forEach(other => {
+            const selected = other === button;
+            other.classList.toggle('active', selected); other.setAttribute('aria-pressed', String(selected));
+            const pane = document.getElementById(other.dataset[attribute]);
+            if (pane) { pane.hidden = !selected; if (selected) animateArrival(pane); }
+        });
+    }
+    function toggleFiles(open) {
+        document.body.classList.toggle('files-open', open);
+        document.getElementById('btnToggleFiles')?.setAttribute('aria-expanded', String(open));
+        if (open) document.getElementById('btnCloseFiles')?.focus();
+    }
+    // Safari does not focus buttons on mouse click; capture the actual opener.
+    let recentModalTrigger = null;
+    document.addEventListener('click', event => {
+        const target = event.target.closest('button, summary, a[href]');
+        if (target) recentModalTrigger = { target, time: performance.now() };
+    }, true);
+    const modalFocus = new WeakMap();
+    const modalClosing = new WeakMap();
+    function openModal(modal) {
+        if (typeof modal === 'string') modal = document.getElementById(modal);
+        if (!modal) return;
+        modalClosing.get(modal)?.cancel();
+        modalClosing.delete(modal);
+        if (modal.open) return;
+        const details = document.getElementById('connectionDetails');
+        const source = recentModalTrigger && performance.now() - recentModalTrigger.time < 1000 ? recentModalTrigger.target : document.activeElement;
+        const trigger = details?.contains(source) ? details.querySelector('summary') : source;
+        details?.removeAttribute('open');
+        modalFocus.set(modal, trigger);
+        modal.showModal();
+        animateArrival(modal, modal.classList.contains("members-drawer"));
+        (modal.querySelector('input:not([type="checkbox"]), textarea') || modal.querySelector('button'))?.focus();
+    }
+    function closeModal(modal) {
+        if (typeof modal === 'string') modal = document.getElementById(modal);
+        if (!modal?.open || modalClosing.has(modal)) return;
+        if (!modal.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { modal.close(); return; }
+        const style = getComputedStyle(modal);
+        const animation = modal.animate([
+            { opacity: style.opacity, transform: style.transform },
+            { opacity: 0, transform: 'translateY(6px) scale(.99)' }
+        ], { duration: 130, easing: 'cubic-bezier(.4, 0, 1, 1)', fill: 'forwards' });
+        modalClosing.set(modal, animation);
+        animation.finished.then(() => {
+            if (modalClosing.get(modal) !== animation) return;
+            modalClosing.delete(modal); modal.close(); animation.cancel();
+        }).catch(() => {});
+    }
+    document.querySelectorAll('dialog.modal').forEach(modal => {
+        modal.addEventListener('cancel', event => {
+            event.preventDefault();
+            if (modal.id === 'appConfirmModal') window.closeAppConfirm(false);
+            else if (modal.id === 'appAlertModal') window.closeAppAlert();
+            else if (modal.id === 'joinRoomPinModal') window.closeJoinPinModal();
+            else closeModal(modal);
+        });
+        modal.addEventListener('close', () => {
+            const trigger = modalFocus.get(modal); modalFocus.delete(modal);
+            if (trigger?.isConnected) trigger.focus({ preventScroll: true });
         });
     });
+    document.addEventListener('click', event => {
+        const details = document.getElementById('connectionDetails');
+        if (details?.open && !details.contains(event.target)) details.open = false;
+    });
+    document.addEventListener('keydown', event => {
+        const details = document.getElementById('connectionDetails');
+        if (event.key === 'Escape' && details?.open && !document.querySelector('dialog[open]')) {
+            details.open = false; details.querySelector('summary')?.focus();
+        }
+    });
+    document.addEventListener('click', event => {
+        const button = event.target.closest('button[data-action], button[data-view], button[data-tool], button[data-file-page], button[data-room-page]');
+        if (!button) return;
+        if (button.dataset.view) return selectView(button.dataset.view);
+        if (button.dataset.tool) return selectSegment(button, 'tool', 'tool');
+        if (button.dataset.filePage) return selectSegment(button, 'filePage', 'file-page');
+        if (button.dataset.roomPage) {
+            document.body.dataset.roomPage = button.dataset.roomPage;
+            document.querySelectorAll('[data-room-page]').forEach(other => {
+                if (other === document.body) return;
+                other.classList.toggle('active', other === button); other.setAttribute('aria-pressed', String(other === button));
+            });
+            return;
+        }
+        const value = button.dataset.value;
+        const actions = {
+            openCreateRoomModal: () => window.openCreateRoomModal(),
+            closeCreateRoomModal: () => window.closeCreateRoomModal(),
+            closeJoinPinModal: () => window.closeJoinPinModal(),
+            closeManualJoinModal: () => window.closeManualJoinModal(),
+            closeHostQrModal: () => window.closeHostQrModal(),
+            closeAppConfirm: () => window.closeAppConfirm(false),
+            closeAppAlert: () => window.closeAppAlert(),
+            closeOnlineMembersModal: () => window.closeOnlineMembersModal(),
+            closeEditNicknameModal: () => window.closeEditNicknameModal(),
+            'join-room': () => window.onDiscoveredRoomClicked(value),
+            'fill-profile': () => window.fillRoomProfile(Number(value)),
+            'delete-profile': () => window.deleteRoomProfile(Number(value)),
+            'copy-ip': () => window.copyMemberIp(value),
+            'download-file': () => window.downloadRemoteFile(value, button.dataset.name),
+            'remove-file': () => window.removeLocalSharedFile(value),
+            'copy-code': () => window.copyChatCode(button),
+            'refresh-files': () => loadFiles(),
+            'retry-message': () => retryMessage(button.dataset.value),
+            'cancel-upload': () => uploadQueue?.cancel(button.dataset.uploadId),
+            'retry-upload': () => uploadQueue?.retry(button.dataset.uploadId)
+        };
+        actions[button.dataset.action]?.();
+    });
+    document.getElementById('btnToggleFiles')?.addEventListener('click', () => toggleFiles(!document.body.classList.contains('files-open')));
+    document.getElementById('btnCloseFiles')?.addEventListener('click', () => { toggleFiles(false); document.getElementById('btnToggleFiles')?.focus(); });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && document.body.classList.contains('files-open')) toggleFiles(false);
+    });
+    document.getElementById('hostAddressSelect')?.addEventListener('change', event => window.switchActiveServerIp(event.target.value));
 
     // ---------------- 房间制架构与状态管理 (默认客户端发现模式) ----------------
     let roomState = {
@@ -112,27 +228,16 @@
     let currentTargetDeviceName = '本端直连';
 
     // UI 容器与元素绑定
-    const roomClientBanner = document.getElementById('roomClientBanner');
-    const roomHostBanner = document.getElementById('roomHostBanner');
-    const roomJoinedBanner = document.getElementById('roomJoinedBanner');
     const discoveredRoomsContainer = document.getElementById('discoveredRoomsContainer');
     const discoveredRoomsCount = document.getElementById('discoveredRoomsCount');
     const noRoomsDiscoveredPrompt = document.getElementById('noRoomsDiscoveredPrompt');
 
     // Host 模式 UI 元素
-    const hostRoomNameDisplay = document.getElementById('hostRoomNameDisplay');
-    const hostRoomIdDisplay = document.getElementById('hostRoomIdDisplay');
-    const hostRoomPinDisplay = document.getElementById('hostRoomPinDisplay');
-    const hostRoomUrlDisplay = document.getElementById('hostRoomUrlDisplay');
-    const hostMemberCount = document.getElementById('hostMemberCount');
-    const hostMembersContainer = document.getElementById('hostMembersContainer');
     const btnShowHostQrCode = document.getElementById('btnShowHostQrCode');
     const btnCopyRoomDirectLink = document.getElementById('btnCopyRoomDirectLink');
     const btnCloseRoom = document.getElementById('btnCloseRoom');
 
     // Joined 模式 UI 元素
-    const joinedRoomNameDisplay = document.getElementById('joinedRoomNameDisplay');
-    const joinedHostDeviceDisplay = document.getElementById('joinedHostDeviceDisplay');
     const btnLeaveRoom = document.getElementById('btnLeaveRoom');
 
     // 模态弹窗元素
@@ -162,7 +267,6 @@
 
     const btnRefreshDiscoveredRooms = document.getElementById('btnRefreshDiscoveredRooms');
     const phoneNameBadge = document.getElementById('phoneName');
-    const currentViewingDeviceTitle = document.getElementById('currentViewingDeviceTitle');
 
     // ---------------- 纯前端离线二维码生成器 (零外部依赖，已与标准 QR 实现逐位交叉验证) ----------------
     // Byte 模式, 版本 1-14, ECC M/L 自适应, 8 掩码按规范惩罚规则择优
@@ -464,7 +568,7 @@
         ctx.fillStyle = '#60A5FA';
         ctx.font = 'bold 13px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText('📱 局域网直链二维码', size / 2, size / 2 - 20);
+        ctx.fillText(' 局域网直链二维码', size / 2, size / 2 - 20);
         ctx.font = '11px monospace';
         ctx.fillStyle = '#F8FAFC';
         ctx.fillText(text.length > 28 ? text.substring(0, 28) + '...' : text, size / 2, size / 2 + 10);
@@ -475,17 +579,17 @@
 
     // ---------------- 模态框打开与关闭控制 ----------------
     window.closeCreateRoomModal = function () {
-        if (createRoomModal) createRoomModal.style.display = 'none';
+        if (createRoomModal) closeModal(createRoomModal);
     };
     window.closeJoinPinModal = function () {
-        if (joinRoomPinModal) joinRoomPinModal.style.display = 'none';
+        if (joinRoomPinModal) closeModal(joinRoomPinModal);
         pendingJoinRoomData = null;
     };
     window.closeManualJoinModal = function () {
-        if (manualJoinModal) manualJoinModal.style.display = 'none';
+        if (manualJoinModal) closeModal(manualJoinModal);
     };
     window.closeHostQrModal = function () {
-        if (hostQrModal) hostQrModal.style.display = 'none';
+        if (hostQrModal) closeModal(hostQrModal);
     };
 
     // ---------------- 常用密码房配置 (保存 / 一键填入 / 删除) ----------------
@@ -512,15 +616,9 @@
             container.innerHTML = '';
             return;
         }
-        container.innerHTML = `
-            <div style="margin-top: 12px; font-size: 12.5px; color: var(--ic-text-sub);">📌 常用密码房 (点击填入)：</div>
-            ${profiles.map((p, i) => `
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 6px 10px; background: rgba(56, 189, 248, 0.08); border: 1px solid var(--ic-border); border-radius: 8px; cursor: pointer;" onclick="window.fillRoomProfile(${i})">
-                    <span style="font-size: 13px; color: #60A5FA; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">▸ ${escapeHtml(p.name)}${p.pin ? ` (PIN: ${escapeHtml(p.pin)})` : ' (免密)'}</span>
-                    <button onclick="event.stopPropagation(); window.deleteRoomProfile(${i})" title="删除该常用配置" style="background: none; border: none; color: #EF4444; cursor: pointer; font-size: 13px; flex-shrink: 0;">✕</button>
-                </div>
-            `).join('')}
-        `;
+        container.innerHTML = `<p class="text-2">常用房间（密码仅在本机保存）</p>` + profiles.map((profile, i) => `
+            <div class="row row--between profile-row"><button type="button" class="btn btn--ghost truncate" data-action="fill-profile" data-value="${i}">${escapeHtml(profile.name)}</button>
+            <button type="button" class="btn btn--danger btn--sm" data-action="delete-profile" data-value="${i}" aria-label="删除常用房间">删除</button></div>`).join('');
     }
 
     window.fillRoomProfile = function (i) {
@@ -528,6 +626,8 @@
         if (!p) return;
         if (modalInputRoomName) modalInputRoomName.value = p.name || '';
         if (modalInputRoomPin) modalInputRoomPin.value = p.pin || '';
+        document.getElementById('requireRoomPin').checked = !!p.pin;
+        updatePinField();
     };
 
     window.deleteRoomProfile = function (i) {
@@ -546,6 +646,7 @@
     }
 
     window.openCreateRoomModal = function () {
+        directAutoConnectEnabled = false;
         if (modalInputCreateRoomNickname) {
             modalInputCreateRoomNickname.value = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
         }
@@ -553,24 +654,71 @@
             const randomNum = Math.floor(1000 + Math.random() * 9000);
             modalInputRoomName.value = `WenBox-${randomNum}`;
         }
-        if (modalInputRoomPin) modalInputRoomPin.value = '';
+        if (modalInputRoomPin) { modalInputRoomPin.value = ''; modalInputRoomPin.type = 'password'; }
+        document.getElementById('btnRevealRoomPin').textContent = '显示密码';
+        document.getElementById('btnRevealRoomPin').setAttribute('aria-pressed', 'false');
+        document.getElementById('requireRoomPin').checked = false;
+        updatePinField();
         const chkSave = document.getElementById('chkSaveProfile');
         if (chkSave) chkSave.checked = false;
         const saveRow = document.getElementById('saveProfileRow');
-        if (saveRow) saveRow.style.display = 'none';
+        if (saveRow) saveRow.hidden = true;
         renderRoomProfiles();
-        if (createRoomModal) createRoomModal.style.display = 'flex';
+        updateCreateRoomPreview();
+        document.getElementById("createRoomError").hidden = true;
+        if (createRoomModal) openModal(createRoomModal);
         if (modalInputCreateRoomNickname) {
             setTimeout(() => { modalInputCreateRoomNickname.focus(); modalInputCreateRoomNickname.select(); }, 120);
         }
     };
 
-    if (modalInputRoomPin) {
-        modalInputRoomPin.addEventListener('input', () => {
-            const saveRow = document.getElementById('saveProfileRow');
-            if (saveRow) saveRow.style.display = modalInputRoomPin.value.trim() ? 'flex' : 'none';
-        });
+    function updateCreateRoomPreview() {
+        setText(document.getElementById('createRoomPreview'), modalInputRoomName.value.trim() || '新的协作房间');
+        setText(document.getElementById('createRoomPrivacy'), document.getElementById('requireRoomPin').checked ? '密码房间 · 凭密码加入' : '公开房间 · 同一网络可发现');
     }
+    modalInputRoomName.addEventListener('input', updateCreateRoomPreview);
+    function updatePinField() {
+        updateCreateRoomPreview();
+        const enabled = document.getElementById('requireRoomPin').checked;
+        document.getElementById('createPinField').hidden = !enabled;
+        if (!enabled) { modalInputRoomPin.value = ''; document.getElementById('chkSaveProfile').checked = false; }
+        document.getElementById('saveProfileRow').hidden = !enabled;
+    }
+    document.getElementById('requireRoomPin').addEventListener('change', updatePinField);
+    document.getElementById('btnRevealRoomPin').addEventListener('click', event => {
+        const visible = modalInputRoomPin.type === 'password';
+        modalInputRoomPin.type = visible ? 'text' : 'password';
+        event.currentTarget.textContent = visible ? '隐藏密码' : '显示密码';
+        event.currentTarget.setAttribute('aria-pressed', String(visible));
+    });
+    function updatePinSlots() {
+        const input = modalInputJoinPin;
+        const full = document.getElementById('btnPinInputMode').getAttribute('aria-pressed') === 'true';
+        input.parentElement.classList.toggle('pin-entry--full', full || input.value.length > 6 || /[^0-9]/.test(input.value));
+        document.querySelectorAll('#joinPinSlots span').forEach((slot, index) => { slot.textContent = input.value[index] ? '•' : ''; });
+    }
+    modalInputJoinPin.addEventListener('input', () => { updatePinSlots(); modalInputJoinPin.removeAttribute('aria-invalid'); document.getElementById('joinPinError').hidden = true; });
+    document.getElementById('btnPinInputMode').addEventListener('click', event => {
+        const full = event.currentTarget.getAttribute('aria-pressed') !== 'true';
+        event.currentTarget.setAttribute('aria-pressed', String(full));
+        event.currentTarget.textContent = full ? '使用 PIN 分格输入' : '使用完整密码输入';
+        modalInputJoinPin.inputMode = full ? 'text' : 'numeric'; updatePinSlots(); modalInputJoinPin.focus();
+    });
+    function joinHostKey(value) {
+        try { return new URL(value).origin; } catch (_) { return value; }
+    }
+    function manualHostUrl(value) {
+        try { const url = new URL(value.includes('://') ? value : 'http://' + value); if (!['http:', 'https:'].includes(url.protocol)) return ''; if (!url.port) url.port = '9527'; return url.origin; } catch (_) { return ''; }
+    }
+    function updateJoinCooldown() {
+        for (const [button, host] of [[modalBtnConfirmJoinPin, pendingJoinRoomData?.hostUrl], [modalBtnConfirmManualJoin, manualHostUrl(modalInputManualUrl.value)]]) {
+            const seconds = cooldown.remaining(joinHostKey(host || ''));
+            button.setAttribute('aria-busy', String(isJoiningRoom));
+            button.disabled = isJoiningRoom || seconds > 0;
+            button.textContent = seconds ? `${seconds} 秒后重试` : isJoiningRoom ? '正在加入…' : '加入房间';
+        }
+    }
+    modalInputManualUrl.addEventListener('input', updateJoinCooldown);
 
     if (btnOpenCreateRoomModal) {
         btnOpenCreateRoomModal.addEventListener('click', () => {
@@ -582,7 +730,8 @@
         btnOpenManualJoinModal.addEventListener('click', () => {
             if (modalInputManualUrl) modalInputManualUrl.value = '';
             if (modalInputManualPin) modalInputManualPin.value = '';
-            if (manualJoinModal) manualJoinModal.style.display = 'flex';
+            if (manualJoinModal) openModal(manualJoinModal);
+            document.getElementById('manualJoinError').hidden = true; updateJoinCooldown();
         });
     }
 
@@ -602,7 +751,7 @@
         }
         if (qrDirectUrlText) qrDirectUrlText.textContent = directUrl;
         renderQrCodeToCanvas(hostQrCanvas, directUrl);
-        hostQrModal.style.display = 'flex';
+        openModal(hostQrModal);
     }
 
     // ---------------- 模块一：局域网快传与日期归类直存 ----------------
@@ -612,10 +761,6 @@
     const btnRefresh = document.getElementById('btnRefresh');
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
-    const uploadProgressContainer = document.getElementById('uploadProgressContainer');
-    const uploadProgressBar = document.getElementById('uploadProgressBar');
-    const uploadFileName = document.getElementById('uploadFileName');
-    const uploadPercent = document.getElementById('uploadPercent');
 
     // 日期归档直存按钮与状态
     const btnSelectReimburseDir = document.getElementById('btnSelectReimburseDir');
@@ -632,6 +777,9 @@
     if (customFolderSuffix) {
         customFolderSuffix.addEventListener('input', updatePreviewFolderName);
     }
+    document.querySelectorAll('[data-archive-topic]').forEach(button => button.addEventListener('click', () => {
+        customFolderSuffix.value = button.dataset.archiveTopic; updatePreviewFolderName();
+    }));
     updatePreviewFolderName();
 
     function getTodayDateStr() {
@@ -653,22 +801,10 @@
         return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
     }
 
-    function getFileIcon(name, mimeType) {
-        const ext = name.split('.').pop().toLowerCase();
-        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext) || (mimeType && mimeType.startsWith('image/'))) return '🖼️';
-        if (['mp4', 'mkv', 'avi', 'mov', 'webm'].includes(ext) || (mimeType && mimeType.startsWith('video/'))) return '🎬';
-        if (['mp3', 'wav', 'flac', 'aac'].includes(ext) || (mimeType && mimeType.startsWith('audio/'))) return '🎵';
-        if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return '📦';
-        if (['pdf'].includes(ext)) return '📑';
-        if (['doc', 'docx', 'txt', 'md'].includes(ext)) return '📝';
-        if (['xls', 'xlsx', 'csv'].includes(ext)) return '📊';
-        if (['apk'].includes(ext)) return '🤖';
-        return '📄';
-    }
+    function iconMarkup(name) { return `<svg class="icon" aria-hidden="true"><use href="#i-${name}"></use></svg>`; }
+    function getFileIcon(name, mimeType) { return iconMarkup(getFileIconByExtension(name)); }
 
     // 视图切换容器
-    const selfViewSection = document.getElementById('selfViewSection');
-    const remoteViewSection = document.getElementById('remoteViewSection');
     const localSharedFileListContainer = document.getElementById('localSharedFileListContainer');
     const localEmptyState = document.getElementById('localEmptyState');
     const btnSelectShareFile = document.getElementById('btnSelectShareFile');
@@ -679,11 +815,7 @@
     const btnOpenDownloadFolder = document.getElementById('btnOpenDownloadFolder');
     const btnRefreshReceivedFiles = document.getElementById('btnRefreshReceivedFiles');
     const btnRefreshRemoteFiles = document.getElementById('btnRefreshRemoteFiles');
-    const uploadSectionTitle = document.getElementById('uploadSectionTitle');
-    const uploadSectionSubtitle = document.getElementById('uploadSectionSubtitle');
-    const dropZoneHint = document.getElementById('dropZoneHint');
     const multiIpSelectorContainer = document.getElementById('multiIpSelectorContainer');
-    const multiIpPills = document.getElementById('multiIpPills');
 
     function isTauriDesktop() {
         return !!getTauriInvoke() || window.location.hostname === 'tauri.localhost' || window.location.protocol === 'tauri:';
@@ -762,24 +894,16 @@
     }
 
     function renderMultiIpPills(ips, activeIp) {
-        if (!multiIpSelectorContainer || !multiIpPills) return;
-        if (!ips || ips.length <= 1) {
-            multiIpSelectorContainer.style.display = 'none';
-            return;
-        }
-
-        multiIpSelectorContainer.style.display = 'flex';
-        if (!listChanged(multiIpPills, ips, activeIp)) return;
-        multiIpPills.innerHTML = ips.map(item => {
-            const ipStr = typeof item === 'string' ? item : item.ip;
-            const nameStr = (typeof item === 'object' && item.name) ? ` (${item.name})` : '';
-            const isActive = ipStr === activeIp;
-            return `
-                <button class="ip-pill ${isActive ? 'active' : ''}" onclick="window.switchActiveServerIp(${jsAttr(ipStr)})">
-                    ${escapeHtml(ipStr)}${escapeHtml(nameStr)}
-                </button>
-            `;
-        }).join('');
+        if (!multiIpSelectorContainer) return;
+        multiIpSelectorContainer.hidden = !ips || ips.length <= 1;
+        const select = document.getElementById('hostAddressSelect');
+        if (!select || !listChanged(select, ips, activeIp)) return;
+        select.replaceChildren(...(ips || []).map(item => {
+            const option = document.createElement('option');
+            option.value = typeof item === 'string' ? item : item.ip;
+            option.textContent = option.value + (item.name ? ` (${item.name})` : '');
+            option.selected = option.value === activeIp; return option;
+        }));
     }
 
     window.switchActiveServerIp = function (ip) {
@@ -812,21 +936,14 @@
         if (roomState.mode) {
             updateChatStatusBar(roomState.mode, roomState.roomInfo);
         }
-        if (hostQrModal && hostQrModal.style.display !== 'none') {
+        if (hostQrModal && hostQrModal.open) {
             showHostQrModal();
         }
         showToast(`访问地址已切换为： ${ip}`);
     };
 
     function updateHostBannerDisplay() {
-        if (!roomState.roomInfo) return;
-        const info = roomState.roomInfo;
-        const fullUrl = getReachableHostAddress(info.hostPort);
-        if (hostRoomUrlDisplay) hostRoomUrlDisplay.textContent = fullUrl;
-        if (phoneNameBadge) {
-            const badgeHtml = `👑 房主服务中: <b style="color:#10B981;">${escapeHtml(info.roomName || '房间')}</b> (${fullUrl})`;
-            if (phoneNameBadge.innerHTML !== badgeHtml) phoneNameBadge.innerHTML = badgeHtml;
-        }
+        if (roomState.mode === 'host') updateChatStatusBar('host', roomState.roomInfo);
     }
 
     const checkSelfServerStatus = singleFlight(checkSelfServerStatusTask);
@@ -857,6 +974,8 @@
                 if (hasSelected) {
                     selfDeviceInfo.ip = userSelectedIp;
                 } else {
+                    userSelectedIp = null;
+                    localStorage.removeItem('wenbox_selected_ip');
                     selfDeviceInfo.ip = primary || (selfLanIps.length > 0 ? (selfLanIps[0].ip || selfLanIps[0]) : '127.0.0.1');
                 }
 
@@ -901,7 +1020,7 @@
                     updateHostBannerDisplay();
                     updateChatStatusBar('host', roomState.roomInfo);
                 } else {
-                    if (multiIpSelectorContainer) multiIpSelectorContainer.style.display = 'none';
+                    if (multiIpSelectorContainer) multiIpSelectorContainer.hidden = true;
                 }
             }
         } catch (e) {
@@ -957,128 +1076,43 @@
 
     // ---------------- 房间系统核心：模式渲染与切换 ----------------
     function setRoomMode(mode, data) {
-        if (roomState.mode === 'joined' && mode !== 'joined') {
-            notifyLeaveRoom();
-        }
-        if (roomState.mode !== mode || (data && roomState.roomInfo && data.roomId !== roomState.roomInfo.roomId)) {
-            if (typeof resetChatRoomHistory === 'function') {
-                resetChatRoomHistory();
-            }
-        }
-        roomRevision++;
+        if (roomState.mode === 'joined' && mode !== 'joined') notifyLeaveRoom();
+        const changed = roomState.mode !== mode || roomState.roomInfo?.roomId !== data?.roomId;
+        if (changed) { resetChatRoomHistory(); uploadQueue?.clear(); outbox.clear(); }
+        if (mode === 'client') discoveryStartedAt = Date.now();
+        roomRevision++; scheduler.bump();
         latestRoomMembers = [];
         roomState.mode = mode;
-        if (mode === 'host') {
-            roomState.roomInfo = data;
-            currentTargetBaseUrl = ''; // 房主端自身即服务端
-            currentTargetDeviceName = '本机房间';
-
-            if (roomClientBanner) roomClientBanner.style.display = 'none';
-            if (roomHostBanner) roomHostBanner.style.display = 'block';
-            if (roomJoinedBanner) roomJoinedBanner.style.display = 'none';
-
-            if (hostRoomNameDisplay) hostRoomNameDisplay.textContent = data.roomName || '--';
-            if (hostRoomIdDisplay) hostRoomIdDisplay.textContent = data.roomId || '--';
-            if (hostRoomPinDisplay) hostRoomPinDisplay.textContent = data.pin ? data.pin : '（公开房间，免密）';
-            updateHostBannerDisplay();
-
-            // 房主视图：显示本机分享与已接收文件面板
-            if (selfViewSection) selfViewSection.style.display = 'block';
-            if (remoteViewSection) remoteViewSection.style.display = 'none';
-            if (uploadSectionTitle) uploadSectionTitle.textContent = '📤 本机对外分享新文件';
-            if (uploadSectionSubtitle) uploadSectionSubtitle.textContent = '添加文件后，加入该房间的成员可立即查看并免解压下载';
-
-            loadLocalSharedFiles();
-            loadReceivedFiles();
-            pollRoomMembers();
-        } else if (mode === 'joined') {
-            roomState.roomInfo = data;
-            const rawHost = (data && data.hostUrl && String(data.hostUrl).trim()) ? String(data.hostUrl).trim() : (isTauriDesktop() ? 'http://127.0.0.1:9527' : window.location.origin);
-            currentTargetBaseUrl = rawHost.replace(/\/+$/, '');
-            currentTargetDeviceName = data.hostDevice || '房主';
-
-            if (roomClientBanner) roomClientBanner.style.display = 'none';
-            if (roomHostBanner) roomHostBanner.style.display = 'none';
-            if (roomJoinedBanner) roomJoinedBanner.style.display = 'block';
-
-            if (joinedRoomNameDisplay) joinedRoomNameDisplay.textContent = data.roomName || data.roomId || '--';
-            if (joinedHostDeviceDisplay) joinedHostDeviceDisplay.textContent = data.hostDevice || '主机';
-            if (phoneNameBadge) {
-                phoneNameBadge.innerHTML = `🔗 已入房: <b style="color:#38BDF8;">${escapeHtml(data.roomName || data.roomId)}</b>`;
-            }
-
-            // 加入者视图：显示远程房主分享文件下载面板与向房主投送面板
-            if (selfViewSection) selfViewSection.style.display = 'none';
-            if (remoteViewSection) remoteViewSection.style.display = 'block';
-            if (currentViewingDeviceTitle) currentViewingDeviceTitle.textContent = `📂 房主分享的文件 (${data.roomName || '房间'})`;
-            if (uploadSectionTitle) uploadSectionTitle.textContent = `📤 发送文件至房主「${data.hostDevice || '主机'}」`;
-            if (uploadSectionSubtitle) uploadSectionSubtitle.textContent = '拖拽或点击选择文件，文件将直接投送到房主电脑 Downloads/WenBox 目录';
-
-            loadFiles();
-            pollJoinedMembers();
-        } else {
-            // 默认客户端发现模式 (Client Mode)
-            roomState.mode = 'client';
-            roomState.roomInfo = null;
-            currentTargetBaseUrl = '';
-
-            if (roomClientBanner) roomClientBanner.style.display = 'block';
-            if (roomHostBanner) roomHostBanner.style.display = 'none';
-            if (roomJoinedBanner) roomJoinedBanner.style.display = 'none';
-            if (selfViewSection) selfViewSection.style.display = 'none';
-            if (remoteViewSection) remoteViewSection.style.display = 'none';
-
-            if (phoneNameBadge) {
-                phoneNameBadge.innerHTML = `🔍 客户端发现中: <span style="color:#60A5FA;">就绪</span>`;
-            }
-            pollDiscoveredRooms();
-        }
-        if (typeof updateChatGatingUi === 'function') {
-            updateChatGatingUi(mode, data);
-        }
-        updateChatStatusBar(mode, data);
-        if (typeof updateMyNicknameDisplay === 'function') {
-            updateMyNicknameDisplay();
-        }
+        if (!directAutoConnectEnabled) directConnectionStatus.hidden = true;
+        roomState.roomInfo = mode === 'client' ? null : data;
+        currentTargetBaseUrl = mode === 'joined' ? (data.hostUrl || window.location.origin).replace(/\/+$/, '') : '';
+        currentTargetDeviceName = mode === 'joined' ? data.hostDevice || '房主' : '本机房间';
+        document.body.dataset.roomMode = mode;
+        document.body.dataset.roomPage = 'chat'; toggleFiles(false);
+        document.querySelectorAll('[data-room-page]').forEach(button => {
+            if (button === document.body) return;
+            const selected = button.dataset.roomPage === 'chat';
+            button.classList.toggle('active', selected); button.setAttribute('aria-pressed', String(selected));
+        });
+        const defaultPage = document.querySelector(`[data-file-page="${mode === 'host' ? 'panel-shared' : 'panel-remote'}"]`);
+        if (defaultPage) selectSegment(defaultPage, 'filePage', 'file-page');
+        if (mode === 'host') { updateHostBannerDisplay(); loadLocalSharedFiles(); loadReceivedFiles(); pollRoomMembers(); }
+        else if (mode === 'joined') { loadFiles(); pollJoinedMembers(); }
+        else { currentFiles = []; pollDiscoveredRooms(); }
+        updateChatStatusBar(mode, data); updateMyNicknameDisplay();
+        if (mode !== 'client') pollChatMessages();
     }
-
     function updateChatStatusBar(mode, data) {
-        const onlineBadge = document.getElementById('chatOnlineMemberBadge');
-        const ipBadge = document.getElementById('chatRoomIpBadge');
-        const copyBtn = document.getElementById('btnCopyChatRoomUrl');
-
-        if (mode === 'host') {
-            const reachableUrl = getReachableHostAddress(data ? data.hostPort : null);
-            const rId = data ? (data.roomId || data.roomName || '') : '';
-            const fullJoinUrl = rId ? `${reachableUrl}/?room=${encodeURIComponent(rId)}` : reachableUrl;
-            const memberCount = (latestRoomMembers && latestRoomMembers.length) || 1;
-            setText(onlineBadge, `👥 ${memberCount} 人在线 · 查看成员`);
-            if (ipBadge) ipBadge.textContent = `🌐 访问地址: ${reachableUrl}`;
-            if (copyBtn) {
-                copyBtn.onclick = () => {
-                    copyWithFeedback(fullJoinUrl, '入房链接已复制');
-                };
-            }
-        } else if (mode === 'joined' && data) {
-            let hUrl = data.hostUrl || currentTargetBaseUrl;
-            if (!hUrl && data.hostIp && data.hostPort) {
-                hUrl = `http://${data.hostIp}:${data.hostPort}`;
-            }
-            const memberCount = (latestRoomMembers && latestRoomMembers.length > 0) ? latestRoomMembers.length : 1;
-            setText(onlineBadge, `👥 ${memberCount} 人在线 · 查看成员`);
-            if (ipBadge) ipBadge.textContent = `🌐 房主地址: ${hUrl || '已连接'}`;
-            if (copyBtn) {
-                copyBtn.onclick = () => {
-                    if (hUrl) {
-                        copyWithFeedback(hUrl, '房主地址已复制');
-                    }
-                };
-            }
-        } else {
-            setText(onlineBadge, '👥 未进入房间');
-            if (ipBadge) ipBadge.textContent = '🌐 未进入房间';
-            if (copyBtn) copyBtn.onclick = null;
-        }
+        setText(document.getElementById('roomRoleBadge'), ({ host: '房主', joined: '成员', client: '未加入房间' })[mode]);
+        setText(document.getElementById('roomName'), data?.roomName?.replace(/^WenBox[·・]/, '') || data?.roomId || '发现附近的设备');
+        setText(document.getElementById('roomLock'), data?.needPassword || data?.pin ? '密码房' : '公开房间');
+        setText(document.getElementById('chatOnlineMemberBadge'), `${latestRoomMembers.length || 1} 人在线 · 查看成员`);
+        setText(document.getElementById('chatRoomIpBadge'), mode === 'host' ? getReachableHostAddress(data?.hostPort) : currentTargetBaseUrl);
+        setText(phoneNameBadge, '本地直传');
+        document.getElementById('btnCopyChatRoomUrl').onclick = () => {
+            const url = mode === 'host' ? getReachableHostAddress(data?.hostPort) : currentTargetBaseUrl;
+            copyWithFeedback(url, '房间地址已复制');
+        };
     }
 
     // ---------------- 通用 Promise 模态确认弹窗 (替代 window.confirm) ----------------
@@ -1097,14 +1131,14 @@
             msgEl.textContent = message;
             okBtn.textContent = okText;
             okBtn.style.background = okColor;
-            modal.style.display = 'flex';
+            openModal(modal);
             window._appConfirmResolver = resolve;
         });
     };
 
     window.closeAppConfirm = function (result) {
         const modal = document.getElementById('appConfirmModal');
-        if (modal) modal.style.display = 'none';
+        if (modal) closeModal(modal);
         if (window._appConfirmResolver) {
             window._appConfirmResolver(!!result);
             window._appConfirmResolver = null;
@@ -1131,14 +1165,14 @@
             titleEl.textContent = title;
             msgEl.textContent = message;
             okBtn.textContent = okText;
-            modal.style.display = 'flex';
+            openModal(modal);
             window._appAlertResolver = resolve;
         });
     };
 
     window.closeAppAlert = function () {
         const modal = document.getElementById('appAlertModal');
-        if (modal) modal.style.display = 'none';
+        if (modal) closeModal(modal);
         if (window._appAlertResolver) {
             window._appAlertResolver();
             window._appAlertResolver = null;
@@ -1157,9 +1191,12 @@
             updateMyNicknameDisplay(rNick);
 
             const rName = (modalInputRoomName && modalInputRoomName.value.trim()) || `WenBox-${Math.floor(1000 + Math.random() * 9000)}`;
-            const rPin = modalInputRoomPin ? modalInputRoomPin.value.trim() : '';
+            const rPin = document.getElementById('requireRoomPin').checked ? modalInputRoomPin.value.trim() : '';
+            if (document.getElementById('requireRoomPin').checked && !rPin) { const error = document.getElementById('createRoomError'); error.textContent = '请输入入房密码，或关闭密码开关。'; error.hidden = false; modalInputRoomPin.focus(); return; }
             const myPlatform = detectClientPlatform();
 
+            document.getElementById('createRoomError').hidden = true;
+            modalBtnConfirmCreateRoom.setAttribute('aria-busy', 'true');
             modalBtnConfirmCreateRoom.disabled = true;
             modalBtnConfirmCreateRoom.textContent = '正在创建…';
 
@@ -1206,8 +1243,10 @@
                     if (chkSaveFetch && chkSaveFetch.checked && rPin) saveRoomProfile(rName, rPin);
                 }
             } catch (err) {
-                window.showAlertDialog('创建房间失败', err.message || err);
+                const error = document.getElementById('createRoomError');
+                error.textContent = `创建失败：${err.message || err}`; error.hidden = false;
             } finally {
+                modalBtnConfirmCreateRoom.removeAttribute('aria-busy');
                 modalBtnConfirmCreateRoom.disabled = false;
                 modalBtnConfirmCreateRoom.textContent = '创建房间';
             }
@@ -1224,6 +1263,7 @@
                 '#EF4444'
             );
             if (!ok) return;
+            directAutoConnectEnabled = false;
             try {
                 const invoke = getTauriInvoke();
                 if (invoke) {
@@ -1262,6 +1302,7 @@
                 '#F59E0B'
             );
             if (!ok) return;
+            directAutoConnectEnabled = false;
             notifyLeaveRoom();
             roomState.token = '';
             localStorage.removeItem('wenbox_room_token');
@@ -1274,6 +1315,7 @@
     let isPollingRooms = false;
     async function pollDiscoveredRooms() {
         const fetch = fetchWithTimeout;
+        const revision = roomRevision;
         if (isPollingRooms) return;
         if (roomState.mode !== 'client') return;
         isPollingRooms = true;
@@ -1303,6 +1345,7 @@
                     rooms = data.rooms || [];
                 }
             }
+            if (revision !== roomRevision) return;
             renderDiscoveredRooms(rooms || []);
         } catch (e) {
             // ignore
@@ -1313,6 +1356,7 @@
 
     function renderDiscoveredRooms(rooms) {
         rooms = (rooms || []).slice().sort((a, b) => String(a.id || a.roomId).localeCompare(String(b.id || b.roomId)));
+        document.getElementById('roomDiscoverySkeleton').hidden = rooms.length > 0 || Date.now() - discoveryStartedAt >= 3000;
         roomState.discoveredRooms = rooms;
         if (!listChanged(discoveredRoomsContainer, rooms, currentTargetBaseUrl + roomState.mode)) return;
         roomState.discoveredRooms = rooms;
@@ -1321,32 +1365,18 @@
 
         if (rooms.length === 0) {
             discoveredRoomsContainer.innerHTML = '';
-            if (noRoomsDiscoveredPrompt) noRoomsDiscoveredPrompt.style.display = 'block';
+            if (noRoomsDiscoveredPrompt) noRoomsDiscoveredPrompt.hidden = Date.now() - discoveryStartedAt < 3000;
             return;
         }
 
-        if (noRoomsDiscoveredPrompt) noRoomsDiscoveredPrompt.style.display = 'none';
-        discoveredRoomsContainer.innerHTML = rooms.map(r => {
-            const hostUrl = `http://${r.ip}:${r.port}`;
-            const isLock = r.needPassword;
-            return `
-                <div class="room-card" onclick="window.onDiscoveredRoomClicked(${jsAttr(r.roomId)})">
-                    <div class="room-card-header">
-                        <span class="room-card-title">🏠 ${escapeHtml(r.roomName || r.roomId)}</span>
-                        <span class="room-lock-tag ${isLock ? 'locked' : 'open'}">${isLock ? '🔒 需密码' : '🟢 公开免密'}</span>
-                    </div>
-                    <div class="room-card-meta">
-                        <span>👑 房主: ${escapeHtml(r.hostDevice || '主机')} (${escapeHtml(r.hostPlatform || '未知')})</span>
-                        <span style="font-family: monospace; color: #60A5FA;">${escapeHtml(r.ip)}:${Number(r.port)}</span>
-                    </div>
-                    <button class="btn-join-room-action">加入房间 ➔</button>
-                </div>
-            `;
-        }).join('');
+        if (noRoomsDiscoveredPrompt) noRoomsDiscoveredPrompt.hidden = true;
+        discoveredRoomsContainer.innerHTML = rooms.map(room => `
+            <div class="list-row"><span class="room-device-icon">${iconMarkup(/Android|iOS/.test(room.hostPlatform) ? 'smartphone' : 'monitor')}</span><div class="member-details"><strong>${escapeHtml(room.roomName || room.roomId)}</strong><span class="text-2">${escapeHtml(room.hostDevice || '房主')} · ${escapeHtml(room.ip)}:${Number(room.port)}</span><span class="badge">${room.needPassword ? '需要密码' : '公开房间'}</span></div><button class="btn btn--primary btn--sm" type="button" data-action="join-room" data-value="${escapeHtml(room.roomId)}">加入房间</button></div>`).join('');
     }
 
     window.openJoinRoomDialog = function (data) {
         if (!data) return;
+        directAutoConnectEnabled = false;
         const effectiveHostUrl = (data.hostUrl && String(data.hostUrl).trim()) ? String(data.hostUrl).trim().replace(/\/+$/, '') : (isTauriDesktop() ? 'http://127.0.0.1:9527' : window.location.origin);
         pendingJoinRoomData = {
             hostUrl: effectiveHostUrl,
@@ -1362,19 +1392,22 @@
         const pinContainer = document.getElementById('joinPinContainer');
         const pinInput = document.getElementById('modalInputJoinPin');
 
-        if (titleEl) titleEl.textContent = `📱 加入「${pendingJoinRoomData.roomName}」`;
+        if (titleEl) titleEl.textContent = '加入房间';
+        setText(document.getElementById('joinRoomPreview'), pendingJoinRoomData.roomName);
+        setText(document.getElementById('joinRoomDevice'), `${pendingJoinRoomData.hostDevice} · ${pendingJoinRoomData.needPassword ? '密码房间' : '公开房间'}`);
         if (descEl) {
-            descEl.textContent = pendingJoinRoomData.needPassword ? '该房间设置了安全密码，请输入昵称与 PIN 码加入：' : '设置进入房间展示的昵称：';
+            descEl.textContent = pendingJoinRoomData.needPassword ? '确认你的昵称，再输入房主提供的密码。' : '确认你的昵称，加入后即可开始协作。';
         }
         if (nickInput) {
             nickInput.value = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
         }
         if (pinContainer) {
-            pinContainer.style.display = pendingJoinRoomData.needPassword ? 'block' : 'none';
+            pinContainer.hidden = !pendingJoinRoomData.needPassword;
         }
-        if (pinInput) pinInput.value = data.pin || '';
+        if (pinInput) { pinInput.value = data.pin || ''; pinInput.removeAttribute('aria-invalid'); }
+        updatePinSlots(); document.getElementById('joinPinError').hidden = true; updateJoinCooldown();
 
-        if (joinRoomPinModal) joinRoomPinModal.style.display = 'flex';
+        if (joinRoomPinModal) openModal(joinRoomPinModal);
         if (nickInput) setTimeout(() => { nickInput.focus(); nickInput.select(); }, 150);
     };
 
@@ -1405,7 +1438,7 @@
     const modalNickInput = document.getElementById('modalInputJoinNickname');
     if (modalNickInput) {
         modalNickInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && !e.isComposing) {
                 e.preventDefault();
                 if (modalBtnConfirmJoinPin) modalBtnConfirmJoinPin.click();
             }
@@ -1413,7 +1446,7 @@
     }
     if (modalInputJoinPin) {
         modalInputJoinPin.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && !e.isComposing) {
                 e.preventDefault();
                 if (modalBtnConfirmJoinPin) modalBtnConfirmJoinPin.click();
             }
@@ -1427,24 +1460,27 @@
                 showToast('请输入主机 IP 或网址');
                 return;
             }
-            if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
-                rawUrl = 'http://' + rawUrl;
-            }
-            if (!rawUrl.includes(':', 7)) {
-                rawUrl = rawUrl + ':9527';
-            }
-            rawUrl = rawUrl.replace(/\/+$/, '');
+            rawUrl = manualHostUrl(rawUrl);
+            if (!rawUrl) { showToast('请输入有效的 HTTP 主机地址'); return; }
             const pin = modalInputManualPin ? modalInputManualPin.value.trim() : '';
             const nick = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
-            window.closeManualJoinModal();
             executeJoinRoom(rawUrl, pin, '手动连接房间', '远程主机', '', nick);
         });
     }
 
+    for (const [dialogId, button] of [['createRoomModal', modalBtnConfirmCreateRoom], ['manualJoinModal', modalBtnConfirmManualJoin]]) {
+        document.getElementById(dialogId).addEventListener('keydown', event => {
+            if (event.key === 'Enter' && !event.isComposing && event.target.matches('input:not([type="checkbox"])')) {
+                event.preventDefault(); button.click();
+            }
+        });
+    }
     let isJoiningRoom = false;
-    async function executeJoinRoom(hostUrl, pin, roomName, hostDevice, roomId, nickname) {
-        if (isJoiningRoom) return;
-        isJoiningRoom = true;
+    async function executeJoinRoom(hostUrl, pin, roomName, hostDevice, roomId, nickname, automatic = false) {
+        if (isJoiningRoom || cooldown.remaining(joinHostKey(hostUrl))) return;
+        if (!automatic) directAutoConnectEnabled = false;
+        const revision = roomRevision;
+        isJoiningRoom = true; updateJoinCooldown();
         const fetch = fetchWithTimeout;
         try {
             showToast('正在连接房间…');
@@ -1457,7 +1493,8 @@
                 joinRes = await invoke('join_remote_room_cmd', {
                     hostUrl: effectiveHostUrl,
                     pin: pin,
-                    myName: myNick
+                    myName: myNick,
+                    expectedRoomId: automatic ? roomId : null
                 });
             } else {
                 const resp = await fetch(`${effectiveHostUrl}/api/room/join`, {
@@ -1471,34 +1508,78 @@
                 });
                 if (!resp.ok) {
                     const errData = await resp.json().catch(() => ({}));
+                    if (resp.status === 429) cooldown.start(joinHostKey(effectiveHostUrl), errData.retryAfter || Number(resp.headers.get('Retry-After')) || 60);
                     throw new Error(errData.message || `HTTP ${resp.status}`);
                 }
                 joinRes = await resp.json();
             }
 
+            if (automatic) {
+                const current = await invoke('get_room_status_cmd');
+                if (revision !== roomRevision || !directAutoConnectEnabled || !current.canAutoConnect
+                    || document.querySelector('dialog[open]') || document.getElementById('webChatMessageInput')?.value.trim()) return;
+            }
             if (joinRes && joinRes.success) {
                 roomState.token = joinRes.token || '';
                 roomState.memberId = joinRes.memberId || '';
                 localStorage.setItem('wenbox_room_token', roomState.token);
                 localStorage.setItem('wenbox_member_id', roomState.memberId);
                 window.closeJoinPinModal();
+                window.closeManualJoinModal();
                 setRoomMode('joined', {
                     hostUrl: effectiveHostUrl,
                     roomName: joinRes.room ? joinRes.room.roomName : (roomName || '已加入房间'),
                     roomId: joinRes.room ? joinRes.room.roomId : roomId,
-                    hostDevice: joinRes.room ? joinRes.room.hostDevice : hostDevice
+                    hostDevice: joinRes.room ? joinRes.room.hostDevice : hostDevice,
+                    needPassword: !!joinRes.room?.needPassword
                 });
-                showToast(`🎉 成功加入房间！已与「${hostDevice || '房主'}」建立直连`);
+                if (automatic) setText(directConnectionStatus, '网线直连 · 已自动连接');
+                showToast(` 成功加入房间！已与「${hostDevice || '房主'}」建立直连`);
                 updateMyNicknameDisplay(myNick);
             } else {
-                throw new Error(joinRes.message || '入房密码不正确');
+                if (joinRes?.retryAfter > 0) cooldown.start(joinHostKey(effectiveHostUrl), joinRes.retryAfter);
+                throw new Error(joinRes?.message || '入房密码不正确');
             }
         } catch (e) {
-            window.showAlertDialog('加入房间失败', e.message || e);
+            if (automatic) {
+                setText(directConnectionStatus, '网线直连 · 正在重试');
+                directConnectionStatus.title = '请确认对端已打开WenBox，并允许本地网络和防火墙访问';
+                return;
+            }
+            const error = document.getElementById(manualJoinModal.open ? 'manualJoinError' : 'joinPinError');
+            error.hidden = false; error.textContent = String(e.message || e);
+            modalInputJoinPin.setAttribute('aria-invalid', 'true');
         } finally {
-            isJoiningRoom = false;
+            isJoiningRoom = false; updateJoinCooldown();
         }
     }
+
+    const autoConnectDirect = singleFlight(async () => {
+        const invoke = getTauriInvoke();
+        if (!invoke || !directAutoConnectEnabled || roomState.mode === 'joined' || isJoiningRoom || Date.now() < directRetryAt) return;
+        // User interaction always takes priority over background pairing.
+        if (document.querySelector('dialog[open]') || document.getElementById('webChatMessageInput')?.value.trim()) return;
+        const revision = roomRevision;
+        try {
+            const [local, ips, rooms] = await Promise.all([
+                invoke('get_room_status_cmd'), invoke('get_all_lan_ips_cmd'), invoke('get_discovered_rooms_cmd')
+            ]);
+            if (revision !== roomRevision || !directAutoConnectEnabled || roomState.mode === 'joined') return;
+            const hasLink = ips.some(item => window.WenBoxUI.isLinkLocal(typeof item === 'string' ? item : item.ip));
+            directConnectionStatus.hidden = !hasLink;
+            if (!hasLink) return;
+            const ownIps = new Set(ips.map(item => typeof item === 'string' ? item : item.ip));
+            const connected = latestRoomMembers.some(member => window.WenBoxUI.isLinkLocal(member.ip) && !ownIps.has(member.ip));
+            setText(directConnectionStatus, connected ? '网线直连 · 已连接' :
+                (local.canAutoConnect ? '网线直连 · 正在发现对端' : '网线直连 · 房间已就绪'));
+            directConnectionStatus.title = '首次使用时，请允许WenBox的本地网络和防火墙访问';
+            const peer = window.WenBoxUI.selectDirectPeer(local, rooms, ips);
+            if (!peer) return;
+            directRetryAt = Date.now() + 5000;
+            await executeJoinRoom(`http://${peer.ip}:${peer.port}`, '', peer.roomName, peer.hostDevice, peer.roomId,
+                localStorage.getItem('wenbox_nickname') || whoami_device_name_client(), true);
+        } catch (_) { /* Native service may still be starting; the next tick retries. */ }
+    });
 
     function whoami_device_name_client() {
         const storedNick = localStorage.getItem('wenbox_nickname');
@@ -1527,14 +1608,14 @@
         const modal = document.getElementById('editNicknameModal');
         const input = document.getElementById('modalInputEditNickname');
         const currentNick = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
-        if (input) input.value = currentNick;
-        if (modal) modal.style.display = 'flex';
+        if (input) { input.value = currentNick; input.dispatchEvent(new Event("input")); }
+        if (modal) openModal(modal);
         if (input) setTimeout(() => { input.focus(); input.select(); }, 120);
     };
 
     window.closeEditNicknameModal = function () {
         const modal = document.getElementById('editNicknameModal');
-        if (modal) modal.style.display = 'none';
+        if (modal) closeModal(modal);
     };
 
     const btnChangeNicknameBanner = document.getElementById('btnChangeNicknameBanner');
@@ -1546,6 +1627,17 @@
         btnChangeNicknameChat.addEventListener('click', window.openEditNicknameModal);
     }
 
+    const nicknameInput = document.getElementById('modalInputEditNickname');
+    nicknameInput?.addEventListener('input', () => {
+        const name = nicknameInput.value.trim();
+        setText(document.getElementById('nicknamePreview'), name || '我的设备');
+        setText(document.getElementById('nicknameAvatar'), Array.from(name || 'W')[0].toUpperCase());
+        setText(document.getElementById('nicknameCount'), `${nicknameInput.value.length} / 20`);
+        document.getElementById('btnSaveNicknameModal').disabled = !name;
+    });
+    nicknameInput?.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); document.getElementById('btnSaveNicknameModal').click(); }
+    });
     const btnSaveNicknameModal = document.getElementById('btnSaveNicknameModal');
     if (btnSaveNicknameModal) {
         btnSaveNicknameModal.addEventListener('click', async () => {
@@ -1612,8 +1704,6 @@
                             roomState.token = null;
                     roomState.memberId = '';
                     localStorage.removeItem('wenbox_member_id');
-                        roomState.memberId = '';
-                        localStorage.removeItem('wenbox_member_id');
                             showToast('房间已解散或服务端已创建新房间，已自动返回发现大厅');
                             setRoomMode('client');
                             return;
@@ -1623,8 +1713,6 @@
                         roomState.token = null;
                     roomState.memberId = '';
                     localStorage.removeItem('wenbox_member_id');
-                        roomState.memberId = '';
-                        localStorage.removeItem('wenbox_member_id');
                         showToast('房间已解散，已自动返回发现大厅');
                         setRoomMode('client');
                         return;
@@ -1668,21 +1756,9 @@
             members.sort((a, b) => String(a.id).localeCompare(String(b.id)));
             if (revision !== roomRevision) return;
             latestRoomMembers = members;
-            setText(hostMemberCount, (members.length || 1));
             const onlineBadge = document.getElementById('chatOnlineMemberBadge');
-            setText(onlineBadge, `👥 ${members.length || 1} 人在线 · 查看成员`);
-            if (listChanged(hostMembersContainer, members)) {
-                hostMembersContainer.innerHTML = members.map(m => {
-                    const isHost = (m.name || '').includes('房主') || m.id === 'host';
-                    let cleanName = (m.name || '').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim();
-                    if (!cleanName) cleanName = m.name;
-                    return `
-                        <span class="member-pill ${isHost ? 'is-host' : ''}" style="cursor: pointer;" onclick="window.openOnlineMembersModal()">
-                            ${isHost ? '👑 ' : ''}${escapeHtml(cleanName)}${isHost ? ' (房主)' : ''}
-                        </span>
-                    `;
-                }).join('');
-            }
+            setText(onlineBadge, ` ${members.length || 1} 人在线 · 查看成员`);
+
         } catch (e) {
             // ignore
         }
@@ -1746,7 +1822,7 @@
                 if (revision !== roomRevision) return;
                 latestRoomMembers = members;
                 const onlineBadge = document.getElementById('chatOnlineMemberBadge');
-                setText(onlineBadge, `👥 ${members.length} 人在线 · 查看成员`);
+                setText(onlineBadge, ` ${members.length} 人在线 · 查看成员`);
             }
         } catch (_) {}
     }
@@ -1767,74 +1843,24 @@
 
         let members = latestRoomMembers;
         if (!members || members.length === 0) {
-            listEl.innerHTML = `<div style="text-align: center; color: var(--ic-text-sub); padding: 20px 0; font-size: 13px;">暂无在线成员信息</div>`;
-            modal.style.display = 'flex';
+            listEl.innerHTML = `<div class="members-empty">暂无在线成员信息</div>`;
+            openModal(modal);
             return;
         }
 
-        const myName = getClientSenderName();
-        listEl.innerHTML = members.map(m => {
-            const isHost = (m.name || '').includes('房主') || m.id === 'host';
-            let cleanName = (m.name || '局域网成员').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim();
-            if (!cleanName) cleanName = m.name || '局域网成员';
-            const isMe = (roomState.mode === 'host' && isHost)
-                || (roomState.memberId && m.id === roomState.memberId)
-                || (!isHost && cleanName === myName);
-            const ip = m.ip || '127.0.0.1';
-            const accessIp = m.accessIp || '';
-            const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
-
-            let tagHtml = '';
-            let detailsHtml = '';
-
-            if (isHost) {
-                tagHtml = `<span style="font-size: 11px; padding: 1px 6px; background: rgba(16, 185, 129, 0.15); color: #10B981; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.3);">👑 房主 (${escapeHtml(m.platform || '房主')})</span>`;
-                detailsHtml = `
-                    <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">
-                        <span style="color: var(--ic-text-sub);">👑 房主设备 IP: <b style="color: #10B981;">${escapeHtml(ip)}</b></span>
-                        ${accessIp ? `<span style="color: var(--ic-text-sub);">🚪 服务接入网卡: <b style="color: var(--ic-accent-blue);">${escapeHtml(accessIp)}</b></span>` : ''}
-                    </div>
-                `;
-            } else if (isLoopback) {
-                tagHtml = `<span style="font-size: 11px; padding: 1px 6px; background: rgba(59, 130, 246, 0.15); color: #38BDF8; border-radius: 4px; border: 1px solid rgba(59, 130, 246, 0.3);">本机浏览器</span>`;
-                detailsHtml = `
-                    <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">
-                        <span style="color: var(--ic-text-sub);">📍 设备来源: <b style="color: var(--ic-text-main);">本机 (127.0.0.1)</b></span>
-                        ${accessIp ? `<span style="color: var(--ic-text-sub);">🚪 访问入口: <b style="color: var(--ic-accent-blue);">${escapeHtml(accessIp)}</b></span>` : ''}
-                    </div>
-                `;
-            } else {
-                tagHtml = `<span style="font-size: 11px; padding: 1px 6px; background: rgba(245, 158, 11, 0.15); color: #F59E0B; border-radius: 4px; border: 1px solid rgba(245, 158, 11, 0.3);">${escapeHtml(m.platform || '访客设备')}</span>`;
-                detailsHtml = `
-                    <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">
-                        <span style="color: var(--ic-text-sub);">📍 访问设备 IP: <b style="color: #F59E0B;">${escapeHtml(ip)}</b></span>
-                        ${accessIp ? `<span style="color: var(--ic-text-sub);">🚪 访问房主网卡: <b style="color: var(--ic-accent-blue);">${escapeHtml(accessIp)}</b></span>` : ''}
-                    </div>
-                `;
-            }
-
-            return `
-                <div style="display: flex; align-items: center; justify-content: space-between; background: var(--ic-bg-card); border: 1px solid var(--ic-border); border-radius: 6px; padding: 10px 12px; gap: 10px; margin-bottom: 8px;">
-                    <div style="display: flex; flex-direction: column; gap: 4px; overflow: hidden; flex: 1;">
-                        <div style="display: flex; align-items: center; gap: 6px;">
-                            <span style="font-size: 13px; font-weight: 600; color: ${isHost ? '#10B981' : 'var(--ic-text-main)'}; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
-                                ${isHost ? '👑 ' : ''}${isMe ? '（我）' : ''}${escapeHtml(cleanName)}${isHost ? ' (房主)' : ''}
-                            </span>
-                            ${tagHtml}
-                        </div>
-                        ${detailsHtml}
-                    </div>
-                    <button class="btn-copy-mini" style="font-size: 11px; padding: 4px 10px; background: #333333; color: var(--ic-accent-blue); border: 1px solid var(--ic-border); border-radius: 4px; cursor: pointer; flex-shrink: 0; transition: all 0.15s;" onclick="window.copyMemberIp(${jsAttr(ip)})">复制 IP</button>
-                </div>
-            `;
+        setText(document.getElementById('memberCount'), `${members.length} 台在线`);
+        listEl.innerHTML = members.map(member => {
+            const isMe = roomState.memberId && member.id === roomState.memberId;
+            const name = member.name || '未命名设备';
+            return `<div class="member-card"><span class="member-avatar">${escapeHtml(Array.from(name)[0].toUpperCase())}</span><div class="member-details"><strong>${escapeHtml(name)}${isMe ? '<small>你</small>' : ''}</strong><span class="text-2">${escapeHtml(member.platform || '设备')} <span class="member-online">在线</span></span><span class="mono text-3">${escapeHtml(member.ip || '地址未知')}</span></div><button type="button" class="btn btn--ghost btn--icon" title="复制 IP 地址" aria-label="复制 ${escapeHtml(name)} 的 IP 地址" data-action="copy-ip" data-value="${escapeHtml(member.ip || '')}" ${member.ip ? '' : 'disabled'}><svg class="icon"><use href="#i-copy"></use></svg></button></div>`;
         }).join('');
 
-        modal.style.display = 'flex';
+        openModal(modal);
     };
 
     window.closeOnlineMembersModal = function() {
         const modal = document.getElementById('onlineMembersModal');
-        if (modal) modal.style.display = 'none';
+        if (modal) closeModal(modal);
     };
 
     window.copyMemberIp = (ip) => copyWithFeedback(ip, 'IP 地址已复制');
@@ -1887,10 +1913,10 @@
             if (fileListContainer && currentFiles.length === 0) {
                 listChanged(fileListContainer, null, 'error');
                 fileListContainer.innerHTML = `
-                    <div style="text-align:center; padding:24px; color:#EF4444; font-size:13px;">
-                        <div>⚠️ 无法拉取该设备的文件列表 (${escapeHtml(String(err.message || err))})</div>
-                        <div style="color:#6B7280; font-size:12px; margin-top:4px;">请检查对方设备是否在线且已开启 WenBox 服务</div>
-                        <button onclick="window.loadFiles()" style="margin-top:10px; padding:4px 12px; background:#2563EB; color:#fff; border:none; border-radius:4px; cursor:pointer;">点击重试</button>
+                    <div class="file-load-error">
+                        <div> 无法拉取该设备的文件列表 (${escapeHtml(String(err.message || err))})</div>
+                        <div class="file-load-hint">请检查对方设备是否在线且已开启 WenBox 服务</div>
+                        <button data-action="refresh-files" class="file-retry-button">点击重试</button>
                     </div>
                 `;
             }
@@ -1947,11 +1973,11 @@
         fileCount.textContent = `${currentFiles.length} 个文件`;
         if (currentFiles.length === 0) {
             fileListContainer.innerHTML = '';
-            emptyState.style.display = 'block';
+            emptyState.hidden = false;
             return;
         }
 
-        emptyState.style.display = 'none';
+        emptyState.hidden = true;
         fileListContainer.innerHTML = currentFiles.map(file => {
             const icon = getFileIcon(file.name, file.mimeType || '');
             const size = formatBytes(file.size);
@@ -1965,7 +1991,7 @@
                             <div class="file-size">${size} • 对方分享</div>
                         </div>
                     </div>
-                    <button onclick="window.downloadRemoteFile(${jsAttr(file.id)}, ${jsAttr(file.name)})" class="btn-download">
+                    <button data-action="download-file" data-value="${escapeHtml(file.id)}" data-name="${escapeHtml(file.name)}" class="btn btn--secondary btn--sm">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
                         </svg>
@@ -1988,7 +2014,7 @@
             if (invoke) {
                 files = await invoke('fetch_node_files', { baseUrl: '' });
             } else {
-                const res = await fetch(getApiOrigin() + '/api/files?t=' + Date.now());
+                const res = await fetch(getApiOrigin() + '/api/files?t=' + Date.now(), { headers: authHeaders() });
                 if (res.ok) {
                     const data = await res.json();
                     files = data.files || [];
@@ -2035,15 +2061,16 @@
 
     function renderLocalSharedFiles(files) {
         files = (files || []).slice().sort((a, b) => String(a.id || a.roomId).localeCompare(String(b.id || b.roomId)));
+        if (btnClearShareFiles) btnClearShareFiles.hidden = files.length === 0;
         if (!listChanged(localSharedFileListContainer, files, currentTargetBaseUrl + roomState.mode)) return;
         if (!localSharedFileListContainer || !localEmptyState) return;
         if (!files || files.length === 0) {
             localSharedFileListContainer.innerHTML = '';
-            localEmptyState.style.display = 'block';
+            localEmptyState.hidden = false;
             return;
         }
 
-        localEmptyState.style.display = 'none';
+        localEmptyState.hidden = true;
         localSharedFileListContainer.innerHTML = files.map(file => {
             const icon = getFileIcon(file.name, file.mimeType || '');
             const size = formatBytes(file.size);
@@ -2054,18 +2081,18 @@
                     <div class="file-info">
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
-                            <div class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
-                            <div class="file-size">${size} • 本地分享路径: ${escapeHtml(formatDisplayPath(file.path || file.name))}</div>
+                            <div class="file-name" title="${escapeHtml(file.path || file.name)}">${escapeHtml(file.name)}</div>
+                            <div class="file-size">${size} · 已分享</div>
                         </div>
                     </div>
-                    <div style="display: flex; gap: 8px;">
-                        <a href="${dlUrl}" class="btn-download" download="${escapeHtml(file.name)}" title="下载测试">
+                    <div class="file-row-actions">
+                        <a href="${dlUrl}" class="btn btn--secondary btn--sm" download="${escapeHtml(file.name)}" title="保存文件副本">
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
                             </svg>
                             下载
                         </a>
-                        <button onclick="window.removeLocalSharedFile('${file.id}')" class="btn-danger-outline" style="padding: 6px 10px; font-size: 12px;">
+                        <button data-action="remove-file" data-value="${escapeHtml(file.id)}" class="btn-danger-outline file-remove-button" >
                             移除
                         </button>
                     </div>
@@ -2080,7 +2107,7 @@
             if (invoke) {
                 await invoke('remove_share_file', { id: fileId });
             } else {
-                await fetch(getApiOrigin() + `/api/files/remove?id=${encodeURIComponent(fileId)}`, { method: 'POST' });
+                await fetch(getApiOrigin() + `/api/files/remove?id=${encodeURIComponent(fileId)}`, { method: 'POST', headers: authHeaders() });
             }
             showToast('已移除该分享文件');
             loadLocalSharedFiles();
@@ -2100,7 +2127,7 @@
             if (invoke) {
                 files = await invoke('get_received_files');
             } else {
-                const res = await fetch(getApiOrigin() + '/api/received_files?t=' + Date.now());
+                const res = await fetch(getApiOrigin() + '/api/received_files?t=' + Date.now(), { headers: authHeaders() });
                 if (res.ok) {
                     const data = await res.json();
                     files = data.files || [];
@@ -2118,11 +2145,11 @@
         if (!receivedFileListContainer || !receivedEmptyState) return;
         if (!files || files.length === 0) {
             receivedFileListContainer.innerHTML = '';
-            receivedEmptyState.style.display = 'block';
+            receivedEmptyState.hidden = false;
             return;
         }
 
-        receivedEmptyState.style.display = 'none';
+        receivedEmptyState.hidden = true;
         receivedFileListContainer.innerHTML = files.map(file => {
             const icon = getFileIcon(file.name, file.mimeType || '');
             const size = formatBytes(file.size);
@@ -2133,11 +2160,11 @@
                     <div class="file-info">
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
-                            <div class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
-                            <div class="file-size">${size} • 保存路径: ${escapeHtml(formatDisplayPath(file.path || 'Downloads/WenBox'))}</div>
+                            <div class="file-name" title="${escapeHtml(formatDisplayPath(file.path || 'Downloads/WenBox'))}">${escapeHtml(file.name)}</div>
+                            <div class="file-size">${size} · 已保存到下载目录</div>
                         </div>
                     </div>
-                    <a href="${dlUrl}" class="btn-download" download="${escapeHtml(file.name)}">
+                    <a href="${dlUrl}" class="btn btn--secondary btn--sm" download="${escapeHtml(file.name)}">
                         下载
                     </a>
                 </div>
@@ -2151,14 +2178,18 @@
             const invoke = getTauriInvoke();
             if (tauriDialog && invoke) {
                 try {
+                    const revision = roomRevision;
                     const selected = await tauriDialog.open({
                         multiple: true,
                         title: '选择要对外分享的电脑文件'
                     });
-                    if (selected) {
+                    if (selected && revision === roomRevision && roomState.mode === 'host') {
                         const paths = Array.isArray(selected) ? selected : [selected];
                         for (const p of paths) {
-                            await invoke('add_share_file', { pathStr: p });
+                            const file = await invoke('add_share_file', { pathStr: p });
+                            if (roomState.mode === 'host' && revision === roomRevision) {
+                                await sendChatMessageDirect(`[file:${file.name.replace(/[|\[\]]/g, '_')}|${formatBytes(file.size)}|/api/download/${encodeURIComponent(file.id)}]`);
+                            }
                         }
                         showToast(`已添加 ${paths.length} 个电脑文件到分享列表！`);
                         loadLocalSharedFiles();
@@ -2186,7 +2217,7 @@
                 if (invoke) {
                     await invoke('clear_share_files');
                 } else {
-                    await fetch(getApiOrigin() + '/api/files/clear', { method: 'POST' });
+                    await fetch(getApiOrigin() + '/api/files/clear', { method: 'POST', headers: authHeaders() });
                 }
                 showToast('已清空本机所有对外分享文件');
                 loadLocalSharedFiles();
@@ -2239,17 +2270,6 @@
         });
     }
 
-    // 内联 onclick 参数安全编码：JSON 序列化 + HTML 实体转义，
-    // 避免文件名/房间名中的引号、反斜杠破坏 JS 字符串字面量 (导致按钮失效或注入)
-    function jsAttr(value) {
-        return JSON.stringify(value == null ? '' : String(value))
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/\u2028/g, '\\u2028')
-            .replace(/\u2029/g, '\\u2029');
-    }
 
     // 辅助：将 Blob 转为 Base64 字符串
     function blobToBase64(blob) {
@@ -2267,11 +2287,19 @@
     // 日期归档直存：双模驱动 (支持 Tauri 原生桌面端与浏览器端)
     if (btnSelectReimburseDir) {
         btnSelectReimburseDir.addEventListener('click', async () => {
-            if (!currentFiles || currentFiles.length === 0) {
+            const archiveFiles = [...(currentFiles || [])];
+            if (!archiveFiles || archiveFiles.length === 0) {
                 window.showAlertDialog('暂无待传文件', '当前选定设备还没有待传文件，请先在对方设备上添加待传发票或文件！');
                 return;
             }
 
+            const topic = customFolderSuffix.value.trim();
+            if (/[<>:"/\\|?*\x00-\x1f]/.test(topic) || /[. ]$/.test(topic)) {
+                showToast('主题不能包含路径符号或以句点结尾'); customFolderSuffix.focus(); return;
+            }
+            btnSelectReimburseDir.disabled = true;
+            btnSelectReimburseDir.setAttribute('aria-busy', 'true');
+            try {
             const suffix = (customFolderSuffix && customFolderSuffix.value.trim()) ? `_${customFolderSuffix.value.trim()}` : '';
             const dateFolderName = `${getTodayDateStr()}${suffix}`;
 
@@ -2288,14 +2316,14 @@
 
                     if (!selectedPath) return; // 用户取消
 
-                    reimburseStatus.style.display = 'block';
-                    reimburseStatus.textContent = `📁 正在创建目录「${dateFolderName}」并直存文件...`;
+                    reimburseStatus.hidden = false;
+                    reimburseStatus.textContent = ` 正在创建目录「${dateFolderName}」并直存文件...`;
 
                     let successCount = 0;
                     const tauriToken = roomState.token || null;
-                    for (let i = 0; i < currentFiles.length; i++) {
-                        const f = currentFiles[i];
-                        reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${currentFiles.length}]: ${f.name}...`;
+                    for (let i = 0; i < archiveFiles.length; i++) {
+                        const f = archiveFiles[i];
+                        reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${archiveFiles.length}]: ${f.name}...`;
 
                         try {
                             const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : (getApiOrigin() || `http://127.0.0.1:9527`)) + `/api/download/${f.id}`;
@@ -2313,10 +2341,10 @@
                     }
 
                     const sep = detectClientPlatform() === 'Windows' ? '\\' : '/';
-                    reimburseStatus.innerHTML = `✅ <b>归档完成</b> 已将 ${successCount} 个文件直存到 <b>${escapeHtml(selectedPath + sep + dateFolderName)}</b> 目录下！`;
-                    showToast(`已成功直存 ${successCount} 个文件！`);
+                    reimburseStatus.innerHTML = ` <b>${successCount === archiveFiles.length ? "归档完成" : "部分文件保存失败"}</b> · 已保存 ${successCount} / ${archiveFiles.length} 个文件到 <b>${escapeHtml(selectedPath + sep + dateFolderName)}</b> 目录下！`;
+                    showToast(`已保存 ${successCount} / ${archiveFiles.length} 个文件`);
                 } catch (tErr) {
-                    reimburseStatus.style.display = 'block';
+                    reimburseStatus.hidden = false;
                     reimburseStatus.textContent = `直存异常: ${tErr.message || tErr}`;
                 }
                 return;
@@ -2330,16 +2358,16 @@
                         mode: 'readwrite'
                     });
 
-                    reimburseStatus.style.display = 'block';
-                    reimburseStatus.textContent = `📁 正在「${rootDirHandle.name}」中创建文件夹「${dateFolderName}」...`;
+                    reimburseStatus.hidden = false;
+                    reimburseStatus.textContent = ` 正在「${rootDirHandle.name}」中创建文件夹「${dateFolderName}」...`;
 
                     const targetDirHandle = await rootDirHandle.getDirectoryHandle(dateFolderName, { create: true });
 
                     let successCount = 0;
                     const dirPickerToken = getEffectiveRoomToken();
-                    for (let i = 0; i < currentFiles.length; i++) {
-                        const f = currentFiles[i];
-                        reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${currentFiles.length}]: ${f.name}...`;
+                    for (let i = 0; i < archiveFiles.length; i++) {
+                        const f = archiveFiles[i];
+                        reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${archiveFiles.length}]: ${f.name}...`;
 
                         try {
                             const fetchUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}` + (dirPickerToken ? `?token=${encodeURIComponent(dirPickerToken)}` : '');
@@ -2357,11 +2385,11 @@
                         }
                     }
 
-                    reimburseStatus.innerHTML = `✅ <b>归档完成</b> 已将 ${successCount} 个文件直存到 <b>${escapeHtml(rootDirHandle.name + "/" + dateFolderName)}</b> 目录下，无需解压！`;
-                    showToast(`已成功直存 ${successCount} 个文件！`);
+                    reimburseStatus.innerHTML = ` <b>${successCount === archiveFiles.length ? "归档完成" : "部分文件保存失败"}</b> · 已保存 ${successCount} / ${archiveFiles.length} 个文件到 <b>${escapeHtml(rootDirHandle.name + "/" + dateFolderName)}</b> 目录下，无需解压！`;
+                    showToast(`已保存 ${successCount} / ${archiveFiles.length} 个文件`);
                 } catch (err) {
                     if (err.name !== 'AbortError') {
-                        reimburseStatus.style.display = 'block';
+                        reimburseStatus.hidden = false;
                         reimburseStatus.textContent = `直存遇到异常: ${err.message || err}`;
                     }
                 }
@@ -2370,20 +2398,20 @@
 
             // 模式 C：普通浏览器通过局域网 HTTP 访问 (因浏览器安全规范限制，无法直接调取操作系统底层文件夹选择器)
             // 自动降级为【一键批量下载全部文件到浏览器的“下载”目录】
-            reimburseStatus.style.display = 'block';
+            reimburseStatus.hidden = false;
             reimburseStatus.innerHTML = `
-                <div style="margin-bottom:8px; line-height:1.5;">
-                    💡 <b>提示：</b>当前使用纯网页访问（浏览器安全规范限制非 HTTPS 网站直接读写本地磁盘目录）。<br>
+                <div class="archive-notice">
+                     <b>提示：</b>当前使用纯网页访问（浏览器安全规范限制非 HTTPS 网站直接读写本地磁盘目录）。<br>
                     已为您自动开启<b>【批量下载全部文件】</b>至本机的“下载”目录！<br>
-                    <span style="color:#60A5FA;">👉 如需选择电脑任意磁盘位置（如 D:\\发票归档）按日期自动建文件夹直存，推荐直接运行电脑桌面端的 <b>WenBox.exe</b>。</span>
+                    <span class="text-primary"> 如需选择电脑任意磁盘位置（如 D:\\发票归档）按日期自动建文件夹直存，推荐直接运行电脑桌面端的 <b>WenBox.exe</b>。</span>
                 </div>
             `;
 
             let downloadedCount = 0;
             const batchToken = getEffectiveRoomToken();
-            for (let i = 0; i < currentFiles.length; i++) {
-                const f = currentFiles[i];
-                reimburseStatus.innerHTML += `<div style="font-size:12px; color:#9CA3AF;">⏳ 正在下载 [${i + 1}/${currentFiles.length}]: ${escapeHtml(f.name)}...</div>`;
+            for (let i = 0; i < archiveFiles.length; i++) {
+                const f = archiveFiles[i];
+                reimburseStatus.innerHTML += `<div class="archive-progress">⏳ 正在下载 [${i + 1}/${archiveFiles.length}]: ${escapeHtml(f.name)}...</div>`;
                 const dlUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}` + (batchToken ? `?token=${encodeURIComponent(batchToken)}` : '');
 
                 const a = document.createElement('a');
@@ -2398,144 +2426,28 @@
                 await new Promise(r => setTimeout(r, 350));
             }
 
-            reimburseStatus.innerHTML += `<div style="font-size:13px; color:#10B981; margin-top:6px; font-weight:bold;">✅ 已触发全部 ${downloadedCount} 个文件的自动批量下载，请前往电脑浏览器的“下载”目录查看！</div>`;
+            reimburseStatus.innerHTML += `<div class="archive-complete"> 已触发全部 ${downloadedCount} 个文件的自动批量下载，请前往电脑浏览器的“下载”目录查看！</div>`;
             showToast(`已批量下载 ${downloadedCount} 个文件`);
+            } finally {
+                btnSelectReimburseDir.disabled = false;
+                btnSelectReimburseDir.removeAttribute('aria-busy');
+            }
         });
     }
 
-    // 拖拽与投送文件
+    // File objects from picker, drop and chat all enter the same cancellable XHR queue.
+    function uploadFiles(fileList, image = false) {
+        if (roomState.mode === 'client') { showToast('请先创建或加入房间'); return; }
+        for (const file of Array.from(fileList)) uploadQueue.enqueue(file, {
+            url: (currentTargetBaseUrl || getApiOrigin()) + '/api/upload',
+            token: getEffectiveRoomToken(), revision: roomRevision,
+            image: image || file.type.startsWith('image/')
+        });
+        if (fileInput) fileInput.value = '';
+    }
     if (dropZone && fileInput) {
         dropZone.addEventListener('click', () => fileInput.click());
-        ['dragenter', 'dragover'].forEach(eName => {
-            dropZone.addEventListener(eName, (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                dropZone.classList.add('dragover');
-            });
-        });
-        ['dragleave', 'drop'].forEach(eName => {
-            dropZone.addEventListener(eName, (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                dropZone.classList.remove('dragover');
-            });
-        });
-
-        dropZone.addEventListener('drop', (e) => {
-            const files = e.dataTransfer.files;
-            if (files && files.length > 0) uploadFiles(files);
-        });
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files && e.target.files.length > 0) uploadFiles(e.target.files);
-        });
-    }
-
-    async function uploadFiles(fileList) {
-        for (let i = 0; i < fileList.length; i++) {
-            await uploadSingleFile(fileList[i]);
-        }
-        if (fileInput) fileInput.value = '';
-        if (currentTargetBaseUrl === '') {
-            loadLocalSharedFiles();
-        } else {
-            loadFiles();
-        }
-    }
-
-    async function uploadSingleFile(file) {
-        // 如果是在 Tauri 桌面客户端运行
-        const invoke = getTauriInvoke();
-        if (invoke) {
-            // 情况 1：在「本端 (本机)」视图，直接将本地文件添加为对外分享
-            if (currentTargetBaseUrl === '') {
-                if (file.path) {
-                    try {
-                        await invoke('add_share_file', { pathStr: file.path });
-                        showToast(`已添加电脑分享文件: ${file.name}`);
-                        loadLocalSharedFiles();
-                        return;
-                    } catch (e) {
-                        console.warn('add_share_file error:', e);
-                    }
-                }
-            } else {
-                // 情况 2：在「远程设备 (如手机)」视图，调用原生 Rust 客户端进行极速网络流式投送，绕过 Mixed Content
-                if (file.path) {
-                    uploadProgressContainer.style.display = 'block';
-                    uploadFileName.textContent = `正在发送至远程设备: ${file.name} (${formatBytes(file.size)})`;
-                    uploadProgressBar.style.width = '50%';
-                    uploadPercent.textContent = '传输中...';
-                    try {
-                        const msg = await invoke('upload_local_file_to_remote', {
-                            targetBaseUrl: currentTargetBaseUrl,
-                            filePath: file.path,
-                            token: roomState.token || null
-                        });
-                        uploadProgressBar.style.width = '100%';
-                        uploadPercent.textContent = '100%';
-                        showToast(msg || `已成功发送: ${file.name}`);
-                    } catch (e) {
-                        showToast(`向对方发送失败: ${e.message || e}`);
-                    } finally {
-                        setTimeout(() => {
-                            uploadProgressContainer.style.display = 'none';
-                        }, 800);
-                    }
-                    return;
-                }
-            }
-        }
-
-        // 纯浏览器环境 或 无法获取原生路径时的标准 HTTP FormData 上传
-        return new Promise((resolve) => {
-            uploadProgressContainer.style.display = 'block';
-            uploadFileName.textContent = `正在传输: ${file.name} (${formatBytes(file.size)})`;
-            uploadProgressBar.style.width = '0%';
-            uploadPercent.textContent = '0%';
-
-            const xhr = new XMLHttpRequest();
-            const formData = new FormData();
-            formData.append('file', file, file.name);
-
-            xhr.upload.addEventListener('progress', (e) => {
-                if (e.lengthComputable) {
-                    const percent = Math.round((e.loaded / e.total) * 100);
-                    uploadProgressBar.style.width = `${percent}%`;
-                    uploadPercent.textContent = `${percent}%`;
-                }
-            });
-
-            xhr.addEventListener('load', () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    uploadProgressBar.style.width = '100%';
-                    uploadPercent.textContent = '100%';
-                    showToast(`已成功投送: ${file.name}`);
-                } else {
-                    showToast(`上传失败: ${file.name}`);
-                }
-                setTimeout(() => {
-                    uploadProgressContainer.style.display = 'none';
-                    resolve();
-                }, 800);
-            });
-
-            xhr.addEventListener('error', () => {
-                showToast(`上传错误: ${file.name}`);
-                uploadProgressContainer.style.display = 'none';
-                resolve();
-            });
-
-            let uploadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/upload';
-            if (roomState.token) {
-                const sep = uploadUrl.includes('?') ? '&' : '?';
-                uploadUrl += `${sep}token=${encodeURIComponent(roomState.token)}`;
-            }
-            xhr.open('POST', uploadUrl);
-            if (roomState.token) {
-                xhr.setRequestHeader('X-Room-Token', roomState.token);
-            }
-            xhr.send(formData);
-        });
+        fileInput.addEventListener('change', event => uploadFiles(event.target.files));
     }
 
     if (btnRefresh) {
@@ -2643,38 +2555,30 @@
         setRoomMode('client');
     }
 
-    initRoomState();
-    updateMyNicknameDisplay();
+    // Initialization runs after all module bindings and the upload queue are ready.
 
-    setInterval(() => {
-        if (roomState.mode === 'host') {
-            if (!document.hidden && currentActiveTab === 'tab-transfer') {
-                loadLocalSharedFiles();
-                loadReceivedFiles();
-            }
-            pollRoomMembers();
-        } else if (roomState.mode === 'joined') {
-            if (!document.hidden && currentActiveTab === 'tab-transfer') {
-                loadFiles();
-            }
-            pollJoinedMembers();
-        } else {
-            if (!document.hidden && currentActiveTab === 'tab-transfer') {
-                pollDiscoveredRooms();
-            }
+    scheduler.add('members', 2500, async () => {
+        if (roomState.mode === 'host') await pollRoomMembers();
+        else if (roomState.mode === 'joined') await pollJoinedMembers();
+        else if (currentActiveTab === 'view-room') await pollDiscoveredRooms();
+    });
+    scheduler.add('files', 2500, async () => {
+        if (currentActiveTab !== 'view-room') return;
+        if (roomState.mode === 'host') await Promise.all([loadLocalSharedFiles(), loadReceivedFiles()]);
+        else if (roomState.mode === 'joined') await loadFiles();
+    });
+    scheduler.add('server', 6000, checkSelfServerStatus);
+    scheduler.add('direct', 2500, autoConnectDirect);
+    scheduler.add('interface', 1000, () => {
+        updateJoinCooldown();
+        if (roomState.mode === 'client') {
+            const loading = roomState.discoveredRooms.length === 0 && Date.now() - discoveryStartedAt < 3000;
+            document.getElementById('roomDiscoverySkeleton').hidden = !loading;
+            noRoomsDiscoveredPrompt.hidden = loading || roomState.discoveredRooms.length > 0;
         }
-    }, 2500);
-    setInterval(() => { if (!document.hidden) checkSelfServerStatus(); }, 6000);
-
+    });
 
     // ---------------- 模块二：局域网双向即时互发消息 / 聊天室 (需创建或加入房间后才可发送) ----------------
-    const chatLockedState = document.getElementById('chatLockedState');
-    const chatActiveContent = document.getElementById('chatActiveContent');
-    const chatRoomBadge = document.getElementById('chatRoomBadge');
-    const chatRoomPinBadge = document.getElementById('chatRoomPinBadge');
-    const chatRoomSubinfo = document.getElementById('chatRoomSubinfo');
-    const btnChatGoLobby = document.getElementById('btnChatGoLobby');
-    const btnChatCreateRoom = document.getElementById('btnChatCreateRoom');
 
     const webChatMessages = document.getElementById('webChatMessages');
     const webEmptyChat = document.getElementById('webEmptyChat');
@@ -2697,24 +2601,16 @@
     let lastKnownMessageTimestamp = 0;
     const knownMessageIds = new Set();
 
-    async function resetChatRoomHistory() {
+    async function resetChatRoomHistory({ keepCursor = false } = {}) {
         if (webChatMessages) {
             webChatMessages.innerHTML = '';
             if (webEmptyChat) {
-                webEmptyChat.style.display = 'block';
+                webEmptyChat.hidden = false;
                 webChatMessages.appendChild(webEmptyChat);
             }
         }
-        knownMessageIds.clear();
-        lastKnownMessageTimestamp = 0;
-        const invoke = getTauriInvoke();
-        if (invoke) {
-            try {
-                await invoke('clear_chat_messages_cmd');
-            } catch (e) {
-                // ignore
-            }
-        }
+        outbox.clear();
+        if (!keepCursor) { knownMessageIds.clear(); lastKnownMessageTimestamp = 0; chatHasSynced = false; }
     }
 
     let myClientId = sessionStorage.getItem('wenbox_client_id');
@@ -2731,67 +2627,14 @@
         return whoami_device_name_client();
     }
 
-    // 房间模式与聊天室门禁联动
-    function updateChatGatingUi(mode, data) {
-        if (mode === 'host') {
-            if (chatLockedState) chatLockedState.style.display = 'none';
-            if (chatActiveContent) chatActiveContent.style.display = 'flex';
-            if (chatRoomBadge) {
-                chatRoomBadge.textContent = `👑 房主服务中: ${data && data.roomName ? data.roomName : '我的房间'}`;
-                chatRoomBadge.className = 'chat-room-badge';
-            }
-            if (chatRoomPinBadge) {
-                if (data && data.pin) {
-                    chatRoomPinBadge.style.display = 'inline-block';
-                    chatRoomPinBadge.textContent = `🔒 PIN: ${data.pin}`;
-                } else {
-                    chatRoomPinBadge.style.display = 'none';
-                }
-            }
-            if (chatRoomSubinfo) {
-                chatRoomSubinfo.textContent = `同一局域网的成员加入后，即可互发消息、代码、图片和文件。`;
-            }
-            pollChatMessages();
-        } else if (mode === 'joined') {
-            if (chatLockedState) chatLockedState.style.display = 'none';
-            if (chatActiveContent) chatActiveContent.style.display = 'flex';
-            if (chatRoomBadge) {
-                chatRoomBadge.textContent = `📱 已入房: ${data && (data.roomName || data.roomId) ? (data.roomName || data.roomId) : '局域网房间'}`;
-                chatRoomBadge.className = 'chat-room-badge';
-            }
-            if (chatRoomPinBadge) chatRoomPinBadge.style.display = 'none';
-            if (chatRoomSubinfo) {
-                chatRoomSubinfo.textContent = `已连接房主「${data && data.hostDevice ? data.hostDevice : '主机'}」，实时双向通讯通道已建立`;
-            }
-            pollChatMessages();
-        } else {
-            // 未在房间中，锁定聊天室
-            if (chatLockedState) chatLockedState.style.display = 'flex';
-            if (chatActiveContent) chatActiveContent.style.display = 'none';
-        }
-    }
-
-    // 锁屏大厅按钮事件绑定
-    if (btnChatGoLobby) {
-        btnChatGoLobby.addEventListener('click', () => {
-            const transferTabBtn = document.querySelector('.nav-tab[data-tab="tab-transfer"]');
-            if (transferTabBtn) transferTabBtn.click();
-        });
-    }
-
-    if (btnChatCreateRoom) {
-        btnChatCreateRoom.addEventListener('click', () => {
-            if (typeof window.openCreateRoomModal === 'function') {
-                window.openCreateRoomModal();
-            }
-        });
-    }
+    function updateChatGatingUi(mode, data) { updateChatStatusBar(mode, data); }
 
     let joinedDisconnectCount = 0;
     let isPollingChat = false;
 
     // 轮询聊天消息
-    async function pollChatMessages() {
+    const pollChatMessages = singleFlight(pollChatMessagesTask);
+    async function pollChatMessagesTask() {
         if (isPollingChat) return;
         if (roomState.mode === 'client') return;
         isPollingChat = true;
@@ -2830,8 +2673,6 @@
                             roomState.token = null;
                     roomState.memberId = '';
                     localStorage.removeItem('wenbox_member_id');
-                        roomState.memberId = '';
-                        localStorage.removeItem('wenbox_member_id');
                             showToast('房间已解散或权限已失效，已自动返回客户端大厅');
                             setRoomMode('client');
                             return;
@@ -2857,6 +2698,7 @@
 
             if (revision !== roomRevision) return;
             joinedDisconnectCount = 0;
+            chatHasSynced = true;
 
             const nearBottom = !webChatMessages || webChatMessages.scrollHeight - webChatMessages.scrollTop - webChatMessages.clientHeight < 80;
             const firstLoad = knownMessageIds.size === 0;
@@ -2865,6 +2707,7 @@
             messages.forEach(msg => {
                 if (!knownMessageIds.has(msg.id)) {
                     knownMessageIds.add(msg.id);
+                    outbox.reconcile(msg, roomRevision)?.element?.remove();
                     renderChatMessage(msg, batch);
                     hasNew = true;
                     if (msg.timestamp > lastKnownMessageTimestamp) {
@@ -2875,6 +2718,8 @@
 
             if (hasNew && webChatMessages) {
                 webChatMessages.appendChild(batch);
+                while (webChatMessages.querySelectorAll('.chat-item').length > 500) webChatMessages.querySelector('.chat-item').remove();
+                while (knownMessageIds.size > 1000) knownMessageIds.delete(knownMessageIds.values().next().value);
                 if (firstLoad || nearBottom) webChatMessages.scrollTop = webChatMessages.scrollHeight;
             }
         } catch (e) {
@@ -2901,6 +2746,11 @@
 
     // escapeHtml 统一定义在文件上部（此处原有一份重复实现，已删除）
 
+    function authHeaders() {
+        const token = getEffectiveRoomToken();
+        return token ? { 'X-Room-Token': token, ...(roomState.mode === 'host' ? { 'X-Host-Token': token } : {}) } : {};
+    }
+
     function getEffectiveRoomToken() {
         return roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
     }
@@ -2911,7 +2761,7 @@
         if (!rawUrl) return false;
         const value = String(rawUrl).trim();
         if (/^data:image\//i.test(value)) return true;
-        if (value.startsWith('/api/')) return true;
+        if (value.startsWith('/api/download/')) return true;
         if (!/^https?:\/\//i.test(value)) return false;
         try {
             const url = new URL(value);
@@ -2938,24 +2788,17 @@
     }
 
     function getFileIconByExtension(name) {
-        const ext = (name.split('.').pop() || '').toLowerCase();
-        if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2'].includes(ext)) return '📦';
-        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return '🖼️';
-        if (['pdf'].includes(ext)) return '📑';
-        if (['doc', 'docx'].includes(ext)) return '📄';
-        if (['xls', 'xlsx', 'csv'].includes(ext)) return '📊';
-        if (['ppt', 'pptx'].includes(ext)) return '📽️';
-        if (['mp3', 'wav', 'flac', 'aac', 'ogg'].includes(ext)) return '🎵';
-        if (['mp4', 'mkv', 'avi', 'mov', 'wmv'].includes(ext)) return '🎬';
-        if (['apk'].includes(ext)) return '🤖';
-        if (['js', 'ts', 'py', 'rs', 'c', 'cpp', 'java', 'html', 'css', 'json', 'sh', 'sql'].includes(ext)) return '💻';
-        return '📁';
+        const ext = (name || '').split('.').pop().toLowerCase();
+        if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) return 'image';
+        if (['zip', 'rar', '7z', 'gz', 'tar'].includes(ext)) return 'folder';
+        if (['js', 'ts', 'rs', 'py', 'java', 'html', 'css', 'json', 'sql'].includes(ext)) return 'braces';
+        return 'file';
     }
 
     // 格式化渲染富文本消息流 (融合 fagedongxi.com / internal-chat 极简流式排版与 WenBox 富媒体)
     function renderChatMessage(msg, target = webChatMessages) {
         if (!webChatMessages) return;
-        if (webEmptyChat) webEmptyChat.style.display = 'none';
+        if (webEmptyChat) webEmptyChat.hidden = true;
 
         const myName = getClientSenderName();
         const cleanSender = (msg.senderName || '').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim() || (msg.isFromPhone ? '手机用户' : '成员');
@@ -2964,7 +2807,11 @@
 
         // 整体条目: .chat-item (带悬停变色)
         const item = document.createElement('div');
-        item.className = 'chat-item';
+        item.className = 'chat-item' + (isMe ? ' is-me' : '');
+        const senderKey = msg.clientId || `${cleanSender}|${msg.senderIp || ''}`;
+        const previous = target.lastElementChild || webChatMessages.lastElementChild;
+        if (previous?.dataset.sender === senderKey && Number(msg.timestamp) - Number(previous.dataset.timestamp) < 120000) item.classList.add('grouped');
+        item.dataset.sender = senderKey; item.dataset.timestamp = String(msg.timestamp);
 
         // 消息头: .chat-item_user (仅展示纯昵称，不展示不准确的设备图标与IP)
         let senderTitle = cleanSender;
@@ -2974,6 +2821,11 @@
 
         const userHeader = document.createElement('div');
         userHeader.className = `chat-item_user ${isMe ? 'from-me' : 'from-other'}`;
+
+        const avatar = window.WenBoxUI.avatar(cleanSender);
+        const avatarSpan = document.createElement('span'); avatarSpan.className = 'chat-avatar';
+        avatarSpan.dataset.tone = String(avatar.tone); avatarSpan.textContent = avatar.initial; avatarSpan.setAttribute('aria-hidden', 'true');
+        userHeader.appendChild(avatarSpan);
 
         const senderSpan = document.createElement('span');
         senderSpan.className = 'user-name';
@@ -3007,7 +2859,7 @@
             : true;
         const isImage = imageAllowed && (content.startsWith('[image:') && content.endsWith(']'))
             || content.startsWith('data:image/')
-            || (/^https?:\/\/[^\s]+\.(png|jpe?g|gif|webp|bmp|svg)(\?[^\s]*)?$/i.test(content));
+            || (isSafeChatImageUrl(content) && /^https?:\/\/[^\s]+\.(png|jpe?g|gif|webp|bmp|svg)(\?[^\s]*)?$/i.test(content));
 
         if (isImage) {
             let imgSrc = content;
@@ -3028,7 +2880,7 @@
 
             const overlay = document.createElement('span');
             overlay.className = 'chat-img-overlay';
-            overlay.textContent = '🔍 查看原图';
+            overlay.textContent = ' 查看原图';
 
             thumbWrap.appendChild(img);
             thumbWrap.appendChild(overlay);
@@ -3053,7 +2905,7 @@
 
             const fileIcon = document.createElement('div');
             fileIcon.className = 'chat-file-icon';
-            fileIcon.textContent = getFileIconByExtension(fileName);
+            fileIcon.innerHTML = iconMarkup(getFileIconByExtension(fileName));
 
             const fileDetails = document.createElement('div');
             fileDetails.className = 'chat-file-details';
@@ -3075,7 +2927,9 @@
             downloadLink.href = downloadUrl;
             downloadLink.download = fileName;
             downloadLink.target = '_blank';
-            downloadLink.innerHTML = '⬇️ 下载';
+            downloadLink.rel = 'noopener noreferrer';
+            downloadLink.referrerPolicy = 'no-referrer';
+            downloadLink.innerHTML = '⬇ 下载';
             downloadLink.addEventListener('click', (e) => e.stopPropagation());
 
             fileCard.appendChild(fileIcon);
@@ -3115,7 +2969,7 @@
             codeBlocks.forEach((itemBlock, idx) => {
                 const placeholder = `__CODE_BLOCK_${idx}__`;
                 const escapedCode = escapeHtml(itemBlock.code);
-                const blockHtml = `<div class="chat-code-block"><div class="chat-code-header"><span>${escapeHtml(itemBlock.lang.toUpperCase())}</span><button type="button" class="chat-code-copy-btn" onclick="window.copyChatCode(this)">复制代码</button></div><pre class="chat-code-content"><code>${escapedCode}</code></pre></div>`;
+                const blockHtml = `<div class="chat-code-block"><div class="chat-code-header"><span>${escapeHtml(itemBlock.lang.toUpperCase())}</span><button type="button" class="btn btn--ghost btn--sm" data-action="copy-code">复制代码</button></div><pre class="chat-code-content"><code>${escapedCode}</code></pre></div>`;
                 processed = processed.replace(placeholder, blockHtml);
             });
 
@@ -3143,6 +2997,7 @@
         item.appendChild(userHeader);
         item.appendChild(contentWrap);
         target.appendChild(item);
+        return item;
     }
 
     // 全局复制消息辅助函数
@@ -3172,62 +3027,85 @@
         }
     };
 
-    // 底层通用发送消息函数
-    async function sendChatMessageDirect(text) {
-        if (!text || !text.trim() || roomState.mode === 'client') return false;
-        const content = text.trim();
-        const myName = getClientSenderName();
-        const isHost = roomState.mode === 'host';
-        const myIp = isHost ? (selfDeviceInfo.ip || null) : null;
+    function renderDelivery(entry) {
+        if (!entry.element?.isConnected) return;
+        entry.element.dataset.delivery = entry.status;
+        let status = entry.element.querySelector('.chat-delivery');
+        if (!status) {
+            status = document.createElement('div'); status.className = 'chat-delivery';
+            status.setAttribute('role', 'status'); entry.element.appendChild(status);
+        }
+        status.replaceChildren();
+        const text = document.createElement('span');
+        text.textContent = ['sending', 'checking'].includes(entry.status) ? '发送中…' : entry.status === 'sent' ? '已发送' : '未确认送达';
+        status.appendChild(text);
+        if (entry.status === 'failed') {
+            const button = document.createElement('button'); button.type = 'button';
+            button.className = 'btn btn--ghost btn--sm'; button.textContent = '重试';
+            button.dataset.action = 'retry-message'; button.dataset.value = entry.id;
+            button.title = '网络中断时消息可能已经送达，重试可能重复发送';
+            status.appendChild(button);
+        }
+    }
 
+    async function transmitMessage(entry) {
+        if (entry.revision !== roomRevision || !outbox.get(entry.id)) return;
+        entry.status = 'sending'; renderDelivery(entry);
         try {
             const invoke = getTauriInvoke();
             if (invoke) {
                 await invoke('send_node_message', {
-                    baseUrl: currentTargetBaseUrl,
-                    senderName: myName,
-                    content: content,
-                    token: roomState.token || null,
-                    clientId: myClientId,
-                    senderIp: myIp
+                    baseUrl: entry.baseUrl, senderName: entry.senderName, content: entry.content,
+                    token: entry.token || null, clientId: entry.clientId, senderIp: entry.senderIp
                 });
-                pollChatMessages();
-                return true;
-            }
-
-            const effectiveToken = roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
-            const tokenParam = effectiveToken ? `?token=${encodeURIComponent(effectiveToken)}` : '';
-            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + `/api/messages${tokenParam}`;
-            const headers = { 'Content-Type': 'application/json; charset=utf-8' };
-            if (effectiveToken) {
-                headers['X-Room-Token'] = effectiveToken;
-                headers['X-Host-Token'] = effectiveToken;
-            }
-
-            const resp = await fetch(api, {
-                method: 'POST',
-                headers: headers,
-                signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(3000) : undefined,
-                body: JSON.stringify({
-                    content: content,
-                    senderName: myName,
-                    clientId: myClientId,
-                    senderIp: myIp || undefined
-                })
-            });
-            if (resp.ok) {
-                pollChatMessages();
-                return true;
             } else {
-                if (resp.status === 401 || resp.status === 403) {
-                    showToast('发送失败：房间未授权或已重置');
-                } else {
-                    showToast('发送失败');
-                }
+                const headers = { 'Content-Type': 'application/json; charset=utf-8' };
+                if (entry.token) { headers['X-Room-Token'] = entry.token; headers['X-Host-Token'] = entry.token; }
+                const resp = await fetchWithTimeout((entry.baseUrl || getApiOrigin()) + '/api/messages', {
+                    method: 'POST', headers,
+                    signal: typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(5000) : undefined,
+                    body: JSON.stringify({ content: entry.content, senderName: entry.senderName, clientId: entry.clientId, senderIp: entry.senderIp || undefined })
+                });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const result = await resp.json();
+                if (result.success === false) throw new Error(result.message || '发送失败');
             }
-        } catch (e) {
-            showToast('发送失败，请检查连接后重试');
+            if (entry.revision !== roomRevision || !outbox.get(entry.id)) return;
+            entry.status = 'sent'; renderDelivery(entry);
+            await pollChatMessages();
+        } catch (_) {
+            if (entry.revision !== roomRevision || !outbox.get(entry.id)) return;
+            entry.status = 'failed'; renderDelivery(entry);
         }
+    }
+
+    async function retryMessage(id) {
+        const entry = outbox.get(id);
+        if (!entry || entry.status !== 'failed' || entry.revision !== roomRevision) return;
+        // Reconcile a possibly delivered request before explicitly retrying it.
+        entry.status = 'checking'; renderDelivery(entry);
+        await pollChatMessages();
+        if (entry.revision === roomRevision && outbox.get(id)) await transmitMessage(entry);
+    }
+
+    // A true result means the message is in the visible outbox. Delivery failures keep their own retry action.
+    async function sendChatMessageDirect(text) {
+        if (!text?.trim() || roomState.mode === 'client') return false;
+        const revision = roomRevision;
+        if (!chatHasSynced) await pollChatMessages();
+        if (revision !== roomRevision || roomState.mode === 'client') return false;
+        if (!chatHasSynced) { showToast('暂时无法同步聊天，请检查连接后重试'); return false; }
+        const entry = outbox.add(text.trim(), myClientId, revision);
+        Object.assign(entry, {
+            baseUrl: currentTargetBaseUrl,
+            token: roomState.token || sessionStorage.getItem('wenbox_host_token') || '',
+            senderName: getClientSenderName(), senderIp: roomState.mode === 'host' ? selfDeviceInfo.ip || null : null
+        });
+        entry.element = renderChatMessage({ ...entry, timestamp: Date.now() });
+        renderDelivery(entry);
+        webChatMessages.scrollTop = webChatMessages.scrollHeight;
+        void transmitMessage(entry);
+        return true;
     }
 
     // 发送输入框中的消息
@@ -3257,74 +3135,8 @@
     }
 
     // 发送图片文件 (截图或选择的图片)
-    async function sendChatImageFile(file) {
-        if (!file) return;
-        showToast('正在发送图片...');
-
-        // 128KB 以下才走 Base64 内联：400KB 文件 base64 后约 533KB 会进入消息历史，
-        // 每个客户端首轮全量拉取时都要传一遍，代价过高。
-        if (file.size < 128 * 1024) {
-            const reader = new FileReader();
-            reader.onload = async () => {
-                const dataUrl = reader.result;
-                await sendChatMessageDirect(`[image:${dataUrl}]`);
-            };
-            reader.readAsDataURL(file);
-        } else {
-            // 大图通过上传接口分发
-            try {
-                const res = await uploadFileBlobToRoom(file, file.name || 'image.png');
-                const downloadUrl = `/api/download/${res.fileId || encodeURIComponent(res.fileName)}`;
-                await sendChatMessageDirect(`[image:${downloadUrl}]`);
-            } catch (e) {
-                showToast('图片上传发送失败');
-            }
-        }
-    }
-
-    // 发送通用文件卡片
-    async function sendChatDocFile(file) {
-        if (!file) return;
-        showToast(`正在上传发送文件: ${file.name}...`);
-        try {
-            const res = await uploadFileBlobToRoom(file, file.name);
-            const downloadUrl = `/api/download/${res.fileId || encodeURIComponent(res.fileName)}`;
-            const cardMsg = `[file:${file.name}|${formatBytes(file.size)}|${downloadUrl}]`;
-            await sendChatMessageDirect(cardMsg);
-            showToast(`已成功发送文件「${file.name}」到聊天室`);
-        } catch (e) {
-            showToast(`发送文件失败: ${file.name}`);
-        }
-    }
-
-    // 上传 Blob 到当前活动房间的服务端
-    async function uploadFileBlobToRoom(blob, fileName) {
-        const formData = new FormData();
-        formData.append('file', blob, fileName);
-
-        let uploadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/upload';
-        if (roomState.token) {
-            const sep = uploadUrl.includes('?') ? '&' : '?';
-            uploadUrl += `${sep}token=${encodeURIComponent(roomState.token)}`;
-        }
-
-        const headers = {};
-        if (roomState.token) headers['X-Room-Token'] = roomState.token;
-
-        const res = await fetch(uploadUrl, {
-            method: 'POST',
-            headers: headers,
-            body: formData
-        });
-
-        if (!res.ok) throw new Error('上传失败');
-        const data = await res.json();
-        return {
-            fileId: data.fileId || data.id || '',
-            fileName: data.name || fileName,
-            size: data.size || blob.size
-        };
-    }
+    async function sendChatImageFile(file) { if (file) uploadFiles([file], true); }
+    async function sendChatDocFile(file) { if (file) uploadFiles([file]); }
 
     // 图片全屏预览 Modal
     function openChatImageModal(src) {
@@ -3343,11 +3155,11 @@
             }
             chatModalDownloadBtn.download = `wenbox_img_${Date.now()}.${ext}`;
         }
-        chatImageModal.style.display = 'flex';
+        openModal(chatImageModal);
     }
 
     function closeChatImageModal() {
-        if (chatImageModal) chatImageModal.style.display = 'none';
+        if (chatImageModal) closeModal(chatImageModal);
         if (chatModalImage) chatModalImage.src = '';
     }
 
@@ -3435,74 +3247,44 @@
 
     if (webBtnClearChat) {
         webBtnClearChat.addEventListener('click', async () => {
-            await resetChatRoomHistory();
+            await resetChatRoomHistory({ keepCursor: true });
             showToast('已清空当前聊天记录');
         });
     }
 
-    // 聊天室文件拖拽发送
-    const chatPane = document.getElementById('tab-chat');
-    if (chatPane && chatDropOverlay) {
-        let dragCounter = 0;
-
-        chatPane.addEventListener('dragenter', (e) => {
-            e.preventDefault();
-            dragCounter++;
-            if (roomState.mode !== 'client') {
-                chatDropOverlay.style.display = 'flex';
-            }
-        });
-
-        chatPane.addEventListener('dragleave', (e) => {
-            e.preventDefault();
-            dragCounter--;
-            if (dragCounter <= 0) {
-                chatDropOverlay.style.display = 'none';
-                dragCounter = 0;
-            }
-        });
-
-        chatPane.addEventListener('dragover', (e) => {
-            e.preventDefault();
-        });
-
-        chatPane.addEventListener('drop', async (e) => {
-            e.preventDefault();
-            dragCounter = 0;
-            chatDropOverlay.style.display = 'none';
-
-            if (roomState.mode === 'client') {
-                showToast('请先创建或加入房间后再发送文件');
-                return;
-            }
-
-            const files = e.dataTransfer && e.dataTransfer.files;
-            if (files && files.length > 0) {
-                for (let i = 0; i < files.length; i++) {
-                    const f = files[i];
-                    if (f.type.startsWith('image/')) {
-                        await sendChatImageFile(f);
-                    } else {
-                        await sendChatDocFile(f);
-                    }
-                }
-            }
-        });
-    }
-
-    // 初始化聊天室锁屏状态联动
-    updateChatGatingUi(roomState.mode, roomState.roomInfo);
-
-    // 启动轮询获取最新消息
-    pollChatMessages();
-    setInterval(() => { if (!document.hidden && currentActiveTab === 'tab-chat') pollChatMessages(); }, 2000);
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) {
-            checkSelfServerStatus();
-            if (currentActiveTab === 'tab-chat') pollChatMessages();
+    uploadQueue = window.WenBox.createUploadQueue({
+        container: document.getElementById('uploadQueue'), history: document.getElementById('sentUploadList'), count: document.getElementById('sentUploadCount'),
+        onComplete: async (result, file, context) => {
+            if (context.revision !== roomRevision) return;
+            const url = `/api/download/${encodeURIComponent(result.fileId || result.id)}`;
+            // Escape the card delimiter in file names; preserve a readable name in the queue.
+            const name = file.name.replace(/[|\[\]]/g, '_');
+            const content = context.image ? `[image:${url}]` : `[file:${name}|${formatBytes(file.size)}|${url}]`;
+            if (!await sendChatMessageDirect(content)) throw new Error('消息发送失败');
+            if (roomState.mode === 'host') loadReceivedFiles();
         }
     });
-
+    let dragDepth = 0;
+    document.addEventListener('dragenter', event => {
+        if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+        event.preventDefault(); dragDepth++;
+        if (roomState.mode !== 'client') chatDropOverlay.hidden = false;
+    });
+    document.addEventListener('dragover', event => {
+        if (Array.from(event.dataTransfer?.types || []).includes('Files')) event.preventDefault();
+    });
+    document.addEventListener('dragleave', event => {
+        event.preventDefault(); dragDepth = Math.max(0, dragDepth - 1);
+        if (!dragDepth) chatDropOverlay.hidden = true;
+    });
+    document.addEventListener('drop', event => {
+        event.preventDefault(); dragDepth = 0; chatDropOverlay.hidden = true;
+        if (event.dataTransfer?.files.length) uploadFiles(event.dataTransfer.files);
+    });
+    window.addEventListener('blur', () => { dragDepth = 0; chatDropOverlay.hidden = true; });
+    scheduler.add('messages', 2000, async () => {
+        if (currentActiveTab === 'view-room') await pollChatMessages();
+    });
 
     // ---------------- 模块三：JSON 格式化与校验 ----------------
     const webJsonInput = document.getElementById('webJsonInput');
@@ -3540,12 +3322,12 @@
         try {
             const obj = JSON.parse(text);
             webJsonInput.value = JSON.stringify(obj, null, indent);
-            if (webJsonError) webJsonError.style.display = 'none';
+            if (webJsonError) webJsonError.hidden = true;
             showToast('格式化成功');
         } catch (e) {
             if (webJsonError) {
-                webJsonError.style.display = 'block';
-                webJsonError.textContent = `❌ JSON 格式错误: ${e.message}`;
+                webJsonError.hidden = false;
+                webJsonError.textContent = ` JSON 格式错误: ${e.message}`;
             }
         }
     }
@@ -3558,12 +3340,12 @@
         try {
             const obj = JSON.parse(text);
             webJsonInput.value = JSON.stringify(obj);
-            if (webJsonError) webJsonError.style.display = 'none';
+            if (webJsonError) webJsonError.hidden = true;
             showToast('已精简为单行');
         } catch (e) {
             if (webJsonError) {
-                webJsonError.style.display = 'block';
-                webJsonError.textContent = `❌ JSON 格式错误: ${e.message}`;
+                webJsonError.hidden = false;
+                webJsonError.textContent = ` JSON 格式错误: ${e.message}`;
             }
         }
     }
@@ -3574,7 +3356,7 @@
     if (webBtnLoadSampleJson) {
         webBtnLoadSampleJson.addEventListener('click', () => {
             if (webJsonInput) webJsonInput.value = SAMPLE_JSON;
-            if (webJsonError) webJsonError.style.display = 'none';
+            if (webJsonError) webJsonError.hidden = true;
             showToast('已载入示例 JSON');
         });
     }
@@ -3588,7 +3370,7 @@
     if (webBtnClearJson) {
         webBtnClearJson.addEventListener('click', () => {
             if (webJsonInput) webJsonInput.value = '';
-            if (webJsonError) webJsonError.style.display = 'none';
+            if (webJsonError) webJsonError.hidden = true;
         });
     }
 
@@ -4043,46 +3825,7 @@
     if (webCronInput) {
         updateCronUI(webCronInput.value);
     }
-    const modalFocus = new WeakMap();
-    const visibleModal = () => Array.from(document.querySelectorAll('.modal-overlay'))
-        .reverse().find(modal => modal.style.display !== 'none');
-    const focusable = modal => Array.from(modal.querySelectorAll('button, input, textarea, select, a[href], [tabindex="0"]'))
-        .filter(element => !element.disabled && element.getClientRects().length);
-    document.querySelectorAll('.modal-overlay').forEach(modal => {
-        modal.setAttribute('role', 'dialog');
-        modal.setAttribute('aria-modal', 'true');
-        const title = modal.querySelector('.modal-header h3, .modal-header h2');
-        if (title) {
-            if (!title.id) title.id = `${modal.id}Title`;
-            modal.setAttribute('aria-labelledby', title.id);
-        }
-        new MutationObserver(() => {
-            if (modal.style.display !== 'none') {
-                if (!modalFocus.has(modal)) modalFocus.set(modal, document.activeElement);
-                if (!modal.contains(document.activeElement)) (focusable(modal)[0] || modal).focus();
-            } else {
-                const previous = modalFocus.get(modal);
-                modalFocus.delete(modal);
-                if (previous?.isConnected) previous.focus({ preventScroll: true });
-            }
-        }).observe(modal, { attributes: true, attributeFilter: ['style'] });
-    });
-    document.addEventListener('keydown', event => {
-        const modal = visibleModal();
-        if (!modal || event.isComposing) return;
-        if (event.key === 'Escape') {
-            modal.querySelector('.modal-close')?.click();
-        } else if (event.key === 'Tab') {
-            const controls = focusable(modal);
-            const first = controls[0], last = controls[controls.length - 1];
-            if (!first) return;
-            if (event.shiftKey && document.activeElement === first) {
-                event.preventDefault(); last.focus();
-            } else if (!event.shiftKey && document.activeElement === last) {
-                event.preventDefault(); first.focus();
-            }
-        }
-    });
+
     [document.getElementById('chatOnlineMemberBadge'), dropZone].filter(Boolean).forEach(element => {
         element.setAttribute('role', 'button');
         element.tabIndex = 0;
@@ -4092,6 +3835,23 @@
             }
         });
     });
+
+    if (window.visualViewport) {
+        const resize = () => {
+            document.documentElement.style.setProperty('--viewport-height', `${window.visualViewport.height}px`);
+            document.body.classList.toggle('keyboard-open', window.innerHeight - window.visualViewport.height > 120);
+        };
+        window.visualViewport.addEventListener('resize', resize); resize();
+    }
+    document.addEventListener('keydown', event => {
+        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && currentActiveTab === 'view-tools') {
+            if (!document.getElementById('tab-json').hidden) { event.preventDefault(); webBtnFormatJson2?.click(); }
+            else if (!document.getElementById('tab-cron').hidden) { event.preventDefault(); updateCronUI(webCronInput.value); }
+        }
+    });
+    initRoomState();
+    updateMyNicknameDisplay();
+    window.WenBoxTheme?.init();
 
     // 主题切换按钮在 DOM 就绪后初始化
     if (document.readyState === 'loading') {

@@ -23,9 +23,7 @@ import com.landrop.server.FileManager
 import com.landrop.server.RoomManager
 import com.landrop.service.TransferService
 import com.landrop.ui.MainViewModel
-import com.landrop.ui.fragment.ConverterFragment
-import com.landrop.ui.fragment.CronFragment
-import com.landrop.ui.fragment.JsonFragment
+import com.landrop.ui.fragment.ToolsFragment
 import com.landrop.ui.fragment.TransferFragment
 import com.landrop.utils.NetworkUtils
 
@@ -117,9 +115,7 @@ class MainActivity : AppCompatActivity() {
             // 重建后回调不会指向已经销毁的 Fragment (A4)
             override fun createFragment(position: Int): Fragment = when (position) {
                 0 -> TransferFragment()
-                1 -> JsonFragment()
-                2 -> ConverterFragment()
-                else -> CronFragment()
+                else -> ToolsFragment()
             }
         }
 
@@ -129,9 +125,7 @@ class MainActivity : AppCompatActivity() {
             override fun onPageSelected(position: Int) {
                 val menuId = when (position) {
                     0 -> R.id.nav_transfer
-                    1 -> R.id.nav_json
-                    2 -> R.id.nav_converter
-                    3 -> R.id.nav_cron
+                    1 -> R.id.nav_tools
                     else -> R.id.nav_transfer
                 }
                 if (binding.bottomNavigation.selectedItemId != menuId) {
@@ -148,16 +142,8 @@ class MainActivity : AppCompatActivity() {
                     binding.viewPager.setCurrentItem(0, false)
                     true
                 }
-                R.id.nav_json -> {
+                R.id.nav_tools -> {
                     binding.viewPager.setCurrentItem(1, false)
-                    true
-                }
-                R.id.nav_converter -> {
-                    binding.viewPager.setCurrentItem(2, false)
-                    true
-                }
-                R.id.nav_cron -> {
-                    binding.viewPager.setCurrentItem(3, false)
                     true
                 }
                 else -> false
@@ -224,6 +210,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
-        private const val NAV_ITEM_COUNT = 4
+        private const val NAV_ITEM_COUNT = 2
     }
 }

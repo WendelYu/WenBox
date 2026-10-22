@@ -1,0 +1,46 @@
+name: Build WenBox macOS native client
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test shared UI and native network backend
+        run: |
+          node --check app/src/main/assets/web/app.js
+          npm test
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Build Intel and Apple Silicon application
+        run: npx --yes @tauri-apps/cli@1.5 build --target universal-apple-darwin --bundles app
+      - name: Check local network permission description
+        run: |
+          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSExceptionDomains:169.254.0.0/16:NSExceptionAllowsInsecureHTTPLoads' src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/Info.plist
+      - name: Preserve app permissions in ZIP
+        if: github.event_name == 'workflow_dispatch'
+        run: ditto -c -k --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app WenBox-macOS-universal.zip
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: WenBox-macOS-universal
+          path: WenBox-macOS-universal.zip
+          retention-days: 7

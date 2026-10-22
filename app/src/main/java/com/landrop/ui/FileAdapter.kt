@@ -3,18 +3,21 @@ package com.landrop.ui
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.ListAdapter
+import androidx.recyclerview.widget.DiffUtil
 import com.landrop.databinding.ItemFileBinding
 import com.landrop.model.SharedFile
 import java.text.DecimalFormat
 
 class FileAdapter(
-    private var fileList: List<SharedFile>,
+    initialFiles: List<SharedFile>,
     private val onRemoveClick: (SharedFile) -> Unit
-) : RecyclerView.Adapter<FileAdapter.FileViewHolder>() {
+) : ListAdapter<SharedFile, FileAdapter.FileViewHolder>(DIFF) {
+
+    init { submitList(initialFiles.toList()) }
 
     fun updateList(newList: List<SharedFile>) {
-        fileList = newList
-        notifyDataSetChanged()
+        submitList(newList.toList())
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): FileViewHolder {
@@ -23,10 +26,16 @@ class FileAdapter(
     }
 
     override fun onBindViewHolder(holder: FileViewHolder, position: Int) {
-        holder.bind(fileList[position])
+        holder.bind(getItem(position))
     }
 
-    override fun getItemCount(): Int = fileList.size
+
+    companion object {
+        private val DIFF = object : DiffUtil.ItemCallback<SharedFile>() {
+            override fun areItemsTheSame(old: SharedFile, new: SharedFile) = old.id == new.id
+            override fun areContentsTheSame(old: SharedFile, new: SharedFile) = old == new
+        }
+    }
 
     inner class FileViewHolder(private val binding: ItemFileBinding) : RecyclerView.ViewHolder(binding.root) {
         fun bind(file: SharedFile) {

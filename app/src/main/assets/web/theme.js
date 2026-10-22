@@ -58,6 +58,9 @@
         }
     }
 
+    // Resolve the saved theme before styles paint, avoiding a dark/light launch flash.
+    apply(readPreference());
+
     window.WenBoxTheme = {
         init,
         get preference() { return readPreference(); },

@@ -3,6 +3,8 @@ package com.landrop.server
 import com.landrop.model.ChatMessage
 import java.util.ArrayDeque
 import java.util.UUID
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 object MessageManager {
 
@@ -12,6 +14,8 @@ object MessageManager {
     // ArrayDeque + 显式加锁：CopyOnWriteArrayList 每次写入都要整表复制，消息多时开销很大
     private val messages = ArrayDeque<ChatMessage>()
     private val lock = Any()
+    private val _messageFlow = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val messageFlow = _messageFlow.asStateFlow()
 
     var onMessageReceivedListener: ((ChatMessage) -> Unit)? = null
 
@@ -32,6 +36,7 @@ object MessageManager {
             while (messages.size > MAX_MESSAGES) {
                 messages.removeFirst()
             }
+            _messageFlow.value = messages.toList()
         }
         onMessageReceivedListener?.invoke(msg)
     }
@@ -91,6 +96,6 @@ object MessageManager {
     }
 
     fun clearAll() {
-        synchronized(lock) { messages.clear() }
+        synchronized(lock) { messages.clear(); _messageFlow.value = emptyList() }
     }
 }

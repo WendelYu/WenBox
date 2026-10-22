@@ -99,26 +99,23 @@
         const tasks = new Map();
         let timer = null;
         let revision = 0;
+        let running = false;
 
-        function schedule() {
-            if (timer !== null || tasks.size === 0) return;
+        function schedule(delay) {
+            if (timer !== null || running || tasks.size === 0 || (typeof document !== 'undefined' && document.hidden)) return;
             const interval = Math.min(...[...tasks.values()].map(t => t.interval));
             timer = setTimer(async () => {
                 timer = null;
-                if (typeof document !== 'undefined' && document.hidden) {
-                    schedule();
-                    return;
-                }
+                if (typeof document !== 'undefined' && document.hidden) return;
+                running = true;
                 const current = revision;
-                for (const task of [...tasks.values()]) {
-                    if (current !== revision) return schedule();
-                    if (!task.due()) continue;
-                    try {
-                        await task.run();
-                    } catch (_) { /* 单个任务失败不影响其它轮询 */ }
-                }
-                schedule();
-            }, interval);
+                try {
+                    // A slow file request must not hold up heartbeats or chat polling.
+                    await Promise.allSettled([...tasks.values()].filter(task => task.due()).map(async task => {
+                        if (current === revision) await task.run();
+                    }));
+                } finally { running = false; schedule(); }
+            }, delay ?? interval);
         }
 
         return {
@@ -148,6 +145,13 @@
             },
             runNow() {
                 for (const task of tasks.values()) task.next = 0;
+                if (timer !== null) clearTimer(timer);
+                timer = null;
+                schedule(0);
+            },
+            pause() {
+                if (timer !== null) clearTimer(timer);
+                timer = null;
             },
             dispose() {
                 tasks.clear();
@@ -171,9 +175,9 @@
     // 页面重新可见时立刻补跑，避免用户切回来看到过期数据
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
         document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && window.WenBox && window.WenBox.scheduler) {
-                window.WenBox.scheduler.runNow();
-            }
+            if (!window.WenBox?.scheduler) return;
+            if (document.hidden) window.WenBox.scheduler.pause();
+            else window.WenBox.scheduler.runNow();
         });
     }
 

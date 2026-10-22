@@ -229,14 +229,44 @@ WenBox/
 
 本项目配置了完整的 **GitHub Actions CI/CD** 全自动多平台流水线：
 
-每次提交版本标签（例如 `v1.3.0`），云端流水线将全自动交叉编译并发布至 [GitHub Releases](https://github.com/WendelYu/WenBox/releases)：
+每次提交版本标签（例如 `v1.3.0`），云端流水线将分别在对应平台构建并发布至 [GitHub Releases](https://github.com/WendelYu/WenBox/releases)：
 
 | 平台 | 格式 | 说明 |
 | :--- | :--- | :--- |
 | **Android** | `WenBox-Android.apk` | 支持 Android 8.0+，纯局域网免流量直传，前台服务稳定保活 |
-| **Windows** | `WenBox-Windows-x64.exe` | **超轻量独立单文件**，仅 **3~5 MB**，双击即开，内置完整服务 |
-| **Windows** | `WenBox-Windows-Installer.exe` | 带安装向导与开始菜单快捷方式的标准安装程序 |
-| **任意设备** | Web 浏览器 | 手机/平板/Mac/Linux 浏览器直接访问 `http://[房主IP]:9527` 即可使用全部功能 |
+| **Windows** | `WenBox-Windows-x64.exe` | 仅应用程序；需要电脑已安装 WebView2。离线现场请使用 Installer 安装包 |
+| **Windows** | `WenBox-Windows-Installer.exe` | 包含离线 WebView2 安装器，无需现场联网下载运行时 |
+| **macOS** | `WenBox-macOS-universal.dmg` / `.zip` | Intel 与 Apple Silicon 通用，macOS 12.3+；DMG 拖入“应用程序”即可安装 |
+| **macOS** | `SHA256SUMS-macOS.txt` | 用于核对 DMG / ZIP 下载完整性 |
+| **任意设备** | Web 浏览器 | 访问 `http://[房主IP]:9527` 使用网页客户端；目录保存等功能受浏览器权限限制 |
+
+发布附件同时覆盖 Android、Windows 和 macOS。标签发布与自动发布共用 macOS 打包工作流，Release 正文使用维护在 [本次更新说明](docs/RELEASE_NOTES.md) 中的内容。
+
+### 本次更新重点
+
+- USB 网卡加网线直连：支持 `169.254.x.x`、自动发现、热插拔和断线重连。
+- WenBox 全新桌面 UI：昵称名片、成员卡片、创建/加入房间、日期归档与文件传输状态。
+- 动效与键盘交互统一；修复 WebKit 焦点恢复，增加三引擎回归。
+- Windows 安装包携带离线 WebView2，macOS 增加通用 DMG/ZIP。
+
+## macOS 提示“已损坏，无法打开”怎么办？
+
+当前流水线未配置 Apple Developer ID 签名与公证，首次启动可能被 Gatekeeper 拦截。请仅对从本项目 Release 下载且确认可信的 WenBox 使用下述办法。
+
+1. 先将 `WenBox.app` 拖到“应用程序”，不要直接在 DMG 中运行。
+2. 打开“终端”，粘贴执行：
+
+   ```bash
+   xattr -dr com.apple.quarantine "/Applications/WenBox.app"
+   ```
+
+3. 回到“应用程序”，重新双击 WenBox。若提示“Operation not permitted”，确认应用归当前用户所有；安装到 `~/Applications` 时将命令中的路径换成 `"$HOME/Applications/WenBox.app"`。受单位管理的设备请联系管理员，不要关闭系统安全机制。
+
+此命令只移除 WenBox 的下载隔离标记，不会修复真正损坏的文件，也不等同于 Apple 公证。若提示“无法验证开发者”，可先到“系统设置 → 隐私与安全性 → 仍要打开”。若提示会损坏电脑/发现恶意软件，不要绕过。
+
+如果是 **DMG 本身无法挂载** 或以上方法无效，请重新下载或改用 ZIP，并与同页 `SHA256SUMS-macOS.txt` 核对校验值；不要反复执行解除隔离命令。
+
+参考：[Apple 安全打开应用说明](https://support.apple.com/102445)、[Tauri macOS 签名与公证](https://v1.tauri.app/v1/guides/distribution/sign-macos/)。
 
 ---
 
@@ -250,21 +280,39 @@ WenBox/
 
 ### 2. 桌面端编译 (Rust / Tauri，面向 Windows)
 - 前置依赖：
-  - [Rust 环境](https://rustup.rs/) (Stable 1.70+)
-  - [Node.js](https://nodejs.org/) (v18+)
+  - [Rust 环境](https://rustup.rs/)（当前 stable）
+  - [Node.js](https://nodejs.org/)（推荐 v24，与 CI 一致）
 - 编译命令：
   ```bash
   # 安装依赖
   npm install
 
   # 编译生成超轻量单文件 exe 及安装包
-  npx @tauri-apps/cli build
+  npx --yes @tauri-apps/cli@1.5 build
   ```
 - 编译产物位于：`src-tauri/target/release/wenbox.exe`。
+
+### 3. macOS 通用包编译
+
+在 Mac 上安装 Xcode Command Line Tools、Rust 与 Node.js 后执行：
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+npx --yes @tauri-apps/cli@1.5 build --target universal-apple-darwin --bundles app,dmg
+```
+
+应用和镜像位于 `src-tauri/target/universal-apple-darwin/release/bundle/`。CI 还会使用 `ditto` 生成保留应用权限的 ZIP，并验证两种 CPU 架构。当前未配置 Developer ID 签名与公证；解除下载隔离仅是可信应用的临时安装办法。
+
 
 ---
 
 ## 开发验证
+
+### USB 网卡加网线直连（Windows 10 / macOS 原生客户端）
+
+两端通过 USB 网卡与网线连接，保持自动获取 IPv4；系统分配 `169.254.x.x` 后，默认免密房间会自动发现并选定同一个房主，另一端自动加入。支持启动后插入网卡和拔线重连，可同时保留原有办公/工控网络。首次使用需允许系统的本地网络和防火墙访问；已有会话、手动房间和密码房会保留当前状态。
+
+此功能使用 Tauri 网络后台，Electron 包不能独立提供。硬件、平台验收及配置说明见 [USB 网卡直连指南](docs/USB_ETHERNET_DIRECT.md)。新增 macOS 工作流可构建 Intel / Apple Silicon 通用客户端；真实 Win10 与 Mac 的 USB 网卡互传仍需现场验收。
 
 共享 Web 界面的回归检查无需安装 npm 依赖（需要 Node.js 18 及以上）：
 
@@ -274,7 +322,17 @@ node --check app/src/main/assets/web/app.js
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
+界面一级导航为“快传 / 工具”。快传同时展示会话与文件，平板使用文件抽屉，手机使用聊天/文件分段。拖放、选择文件与聊天附件共用可取消、可重试的上传队列。Android 底部同样保留快传和工具两项，工具页内切换 JSON、进制和 Cron。
+
+浏览器回归可在提供 Playwright 模块后执行 `node scripts/check-web-ui.cjs`。脚本启动本地模拟服务，生成四种宽度的截图，不访问真实房间或用户文件。可通过 `PLAYWRIGHT_MODULE` 与 `BROWSER_EXECUTABLE` 指定本机运行时，详情见 [界面截图说明](docs/ui-screens/phase-3/README.md)。
+
 剪贴板适配按 Tauri 原生接口、Electron 隔离桥接、浏览器接口、选中文本回退的顺序处理。打包时需同时包含 `runtime.js`；Electron 打包还需包含 `preload.js`。Tauri 仅开启文本写入剪贴板权限。
+
+Electron 运行时锁定为 44.8.0，electron-builder 为 26.15.3，开发环境需要 Node ≥22.12.0。Electron 界面通过仅绑定本机的 HTTP 服务加载，保持上下文隔离、沙箱和 CSP；不再使用会产生 Origin:null 的 file:// 页面。Electron 包不内置 Rust 传输后台：手动加入其他设备可直接连接，本机建房和自动发现需要运行 Tauri 的本机服务。完整桌面功能优先使用 Tauri 包。
+
+Web 支持密码开关、PIN 分格/完整密码输入、限流倒计时，以及消息发送状态与失败重试。上传完成状态与消息送达状态独立显示。
+
+Android 常用房间密码使用系统 Keystore 加密保存；聊天附件在应用内下载，令牌仅经请求头发送。聊天与文件列表使用差异更新，大 JSON 在后台处理。
 
 桌面网络和文件命令在后台执行；HTTP 状态请求与文件传输使用独立的工作队列。上传文件采用流式读写，空文件可正常接收，同名文件会另存为新名称，避免覆盖已有文件。
 
@@ -297,3 +355,11 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 欢迎提交 Issue 与 Pull Request 共同建设！
 
 Crafted with ❤️ by [Wendel](https://github.com/WendelYu)
+
+### 桌面兼容性与离线部署
+
+Windows 和 macOS 的正式桌面构建统一使用 Tauri。Windows 安装包配置为 `offlineInstaller`，包含完整 WebView2 安装器；裸 EXE 不包含运行时，不能用于缺少 WebView2 的离线电脑。已有运行时的版本与单位安装策略仍需在目标 Win10 机器上验收。
+
+macOS 安装最低版本设为 12.3，以匹配原生 dialog 等 WebKit 功能要求。Intel/Apple Silicon 通用包由 macOS CI 构建；当前本机验证为 Apple Silicon。Android APK 仍使用 Kotlin 原生界面（最低 Android 8.0），不是 Tauri 桌面 UI。
+
+网页回归支持 `BROWSER_ENGINE=chromium|webkit|firefox`，需安装对应 Playwright 引擎；可用 `BROWSER_EXECUTABLE` 指定已有 Chrome。CI 对三个引擎运行创建/加入/退出、PIN、上传取消重试、下载、工具以及浅深色和响应式布局测试。浏览器引擎测试不替代 Windows WebView2 实机、Android 真机及 USB 网卡双机验收。

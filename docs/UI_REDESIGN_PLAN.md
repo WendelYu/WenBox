@@ -4,6 +4,10 @@
 > 前置条件：先完成 `docs/BUG_FIX_PLAN.md` 的 Batch 1–2。UI 重构会大面积改动 `app.js` 和 `TransferFragment.kt`，和修 bug 并行做容易冲突。
 > 设计方向：**安静、可信的工具感**。WenBox 是高频工具，不是营销页。目标是"一眼看懂当前状态、两步完成传输"，不追求炫技。
 
+> 2026-10-16 接续：Phase 3 核心改造与 Chrome 四宽度截图已落地，详细验证、实现取舍及剩余验收见 [实施报告](IMPLEMENTATION_REPORT.md#2026-10-16-接续记录以本节为准)。本计划仍作为目标规格，不能把核心改造视为所有细节验收通过。
+
+> 2026-10-16 第三轮：Web PIN/429/骨架/头像/消息重试与 Electron 44.8.0 升级已落地，Node 29 / Rust 28 / Android 33 项测试通过，本机 Electron 源码与打包应用启动通过；Windows 与真机验收仍待。最新细节见 [实施报告](IMPLEMENTATION_REPORT.md)。
+
 ## 1. 现状诊断（附依据）
 
 ### 1.1 设计体系分裂

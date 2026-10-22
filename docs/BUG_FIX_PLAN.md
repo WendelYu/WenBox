@@ -4,6 +4,10 @@
 > 方法：静态读码 + `npm test`（11/11 通过）。**未编译 APK / Tauri，未真机复现**，标注"疑似"的条目需执行者先复现。
 > 行号以审计时工作区为准，改动后可能偏移，请用代码片段定位。
 
+> 2026-10-16 第二轮接续：Android P2 的 PIN 加密、应用内附件下载、消息/文件差异列表、JSON 后台处理与 Cron 恢复已实现；具体取舍、33 项单测及未完成真机验收见 [实施报告](IMPLEMENTATION_REPORT.md)。加密使用平台 Keystore + AES-GCM，未增加 security-crypto 依赖。
+
+> 2026-10-16 第三轮：Web PIN/429/骨架/头像/消息重试与 Electron 44.8.0 升级已落地，Node 29 / Rust 28 / Android 33 项测试通过，本机 Electron 源码与打包应用启动通过；Windows 与真机验收仍待。最新细节见 [实施报告](IMPLEMENTATION_REPORT.md)。
+
 ## 0. 给执行 Agent 的约定
 
 - 按批次（Batch）顺序执行，每批一个独立提交，提交信息 `fix(<端>): <摘要>`。

@@ -9,11 +9,20 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import com.landrop.R
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.core.widget.addTextChangedListener
 import com.landrop.databinding.FragmentJsonBinding
 import com.landrop.json.JsonHelper
 
 class JsonFragment : Fragment() {
 
+    private var formatJob: Job? = null
+    private var inputRevision = 0
     private var _binding: FragmentJsonBinding? = null
     private val binding get() = _binding!!
 
@@ -30,35 +39,13 @@ class JsonFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         initListeners()
         // 初始填充演示示例
-        binding.etJsonInput.setText(JsonHelper.SAMPLE_JSON)
+        if (savedInstanceState == null) binding.etJsonInput.setText(JsonHelper.SAMPLE_JSON)
     }
 
     private fun initListeners() {
-        binding.btnFormatJson.setOnClickListener {
-            val raw = binding.etJsonInput.text.toString()
-            val (success, result) = JsonHelper.formatJson(raw, 2)
-            if (success) {
-                binding.etJsonInput.setText(result)
-                binding.tvJsonError.visibility = View.GONE
-                Toast.makeText(context, "格式化成功", Toast.LENGTH_SHORT).show()
-            } else {
-                binding.tvJsonError.text = result
-                binding.tvJsonError.visibility = View.VISIBLE
-            }
-        }
-
-        binding.btnMinifyJson.setOnClickListener {
-            val raw = binding.etJsonInput.text.toString()
-            val (success, result) = JsonHelper.minifyJson(raw)
-            if (success) {
-                binding.etJsonInput.setText(result)
-                binding.tvJsonError.visibility = View.GONE
-                Toast.makeText(context, "已压缩为单行", Toast.LENGTH_SHORT).show()
-            } else {
-                binding.tvJsonError.text = result
-                binding.tvJsonError.visibility = View.VISIBLE
-            }
-        }
+        binding.etJsonInput.addTextChangedListener { inputRevision++ }
+        binding.btnFormatJson.setOnClickListener { transformJson(minify = false) }
+        binding.btnMinifyJson.setOnClickListener { transformJson(minify = true) }
 
         binding.btnLoadSample.setOnClickListener {
             binding.etJsonInput.setText(JsonHelper.SAMPLE_JSON)
@@ -83,7 +70,39 @@ class JsonFragment : Fragment() {
         }
     }
 
+    private fun transformJson(minify: Boolean) {
+        formatJob?.cancel()
+        val current = binding
+        val raw = current.etJsonInput.text.toString()
+        val revision = inputRevision
+        current.btnFormatJson.isEnabled = false
+        current.btnMinifyJson.isEnabled = false
+        formatJob = viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val (success, result) = withContext(Dispatchers.Default) {
+                    if (minify) JsonHelper.minifyJson(raw) else JsonHelper.formatJson(raw, 2)
+                }
+                if (_binding !== current || inputRevision != revision) return@launch
+                if (success) {
+                    current.etJsonInput.setText(result)
+                    current.tvJsonError.visibility = View.GONE
+                    Toast.makeText(context, if (minify) R.string.json_minified else R.string.json_formatted, Toast.LENGTH_SHORT).show()
+                } else {
+                    current.tvJsonError.text = result
+                    current.tvJsonError.visibility = View.VISIBLE
+                }
+            } finally {
+                if (_binding === current) {
+                    current.btnFormatJson.isEnabled = true
+                    current.btnMinifyJson.isEnabled = true
+                }
+            }
+        }
+    }
+
     override fun onDestroyView() {
+        formatJob?.cancel()
+        formatJob = null
         super.onDestroyView()
         _binding = null
     }
