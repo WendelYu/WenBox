@@ -40,7 +40,7 @@ jobs:
           mkdir -p release-macos
           ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app release-macos/WenBox-macOS-universal.zip
           cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg release-macos/WenBox-macOS-universal.dmg
-          lipo -verify_arch arm64 x86_64 src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/MacOS/WenBox
+          lipo src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/MacOS/WenBox -verify_arch arm64 x86_64
           cd release-macos
           shasum -a 256 WenBox-macOS-universal.dmg WenBox-macOS-universal.zip > SHA256SUMS-macOS.txt
       - uses: actions/upload-artifact@v4
