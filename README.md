@@ -1,253 +1,103 @@
-# WenBox (文盒) - 跨平台局域网高速传输与全能多端百宝箱
+# WenBox — 内网文件互传与现场实施工具
 
 <p align="center">
-  <img src="app/src/main/assets/web/logo.png" alt="WenBox Logo" width="96" height="96" style="border-radius: 16px;">
+  <img src="app/src/main/assets/web/logo.png" alt="WenBox Logo" width="96" height="96">
 </p>
 
 <p align="center">
-  <b>专注于局域网跨平台高速文件双向互传、即时通讯协作与实用开发辅助的轻量全能工具箱</b><br>
-  零云端依赖 · 100% 局域网传输 · 多网卡并发穿透 · 访客免安装秒用
+  本地打包，直接传到现场电脑。连接一直在，不再来回插拔 U 盘。<br>
+  Windows · macOS · Android · Web ｜ 局域网传输 ｜ 无需云盘或账号
 </p>
 
 <p align="center">
-  <a href="https://github.com/WendelYu/WenBox/releases"><img src="https://img.shields.io/github/v/release/WendelYu/WenBox?color=38BDF8&label=Release&logo=github" alt="GitHub release"></a>
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Android%20%7C%20Web-10B981" alt="Platform">
-  <img src="https://img.shields.io/badge/Rust-1.70%2B-orange?logo=rust" alt="Rust">
-  <img src="https://img.shields.io/badge/Tauri-1.5-blue?logo=tauri" alt="Tauri">
-  <img src="https://img.shields.io/badge/Android-8.0%2B%20(API%2026%2B)-green?logo=android" alt="Android">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/WendelYu/WenBox/releases"><img src="https://img.shields.io/github/v/release/WendelYu/WenBox?label=Release" alt="GitHub release"></a>
 </p>
 
----
+## 为什么做 WenBox
 
-## 📖 项目简介
+最初是为了解决我自己的两个需求：**内网互传文件**，以及**现场实施时反复更新程序**。
 
-**WenBox (文盒)** 是一款为现代局域网协作、移动办公以及工程开发量身打造的跨平台多端全能工具箱。
+现场调试经常是这样的：在自己的电脑上修改代码、打包，把程序复制到 U 盘，拔下来插到现场电脑，再复制过去运行。发现问题后继续改、继续打包，再把 U 盘拿回来重来一遍。一次两次还好，需要多次修改时，来回拷贝和插拔就很麻烦。
 
-在日常办公与团队局域网协作中，我们经常面临如下痛点：
-1. **传输受限**：微信/QQ 发送大文件被压缩、限速、或者需要频繁登录账号；
-2. **多网卡环境失效**：电脑同时插网线并连 Wi-Fi，或开启虚拟机/热点时，常见局域网传输软件经常“找不到对方”；
-3. **访客门槛高**：给同事或客户传文件时，必须要求对方也下载安装对应客户端；
-4. **整理繁琐**：报销发票、现场照片、测试文档需要手动解压、命名建文件夹；
-5. **开发工具分散**：查 Cron 表达式、格式化 JSON、进制转换需要在各类网页广告插件间来回切换。
+现场电脑也不一定有 Wi-Fi，已有网口可能正连接工控设备，没有多余网口可用。所以我想让两台电脑通过 **USB 网卡加网线** 保持连接：自己的电脑负责开发和打包，现场电脑接收新程序。线可以一直插着，每次打包后把新文件发过去即可；现场的日志、截图和配置文件也能传回来。
 
-**WenBox** 采用**自研房间制拓扑架构**与**多网卡独立并发探测协议**，彻底解决以上所有痛点。不管是 Windows / macOS 桌面端、Android 手机端，还是任意未安装客户端的浏览器设备（手机、平板、Linux），均能实现秒级发现、满速传输、即时文字/截图交流与高效开发辅助。
+WenBox 围绕这个流程提供文件互传、文字和截图交流，并把 JSON、进制转换、Cron 等现场常用的小工具放在一起。
 
----
+## 现场怎么用
 
-## 🏗️ 整体技术架构图
+### 有局域网：直接互传
 
-### 1. 系统多端拓扑架构
+1. 两台设备接入同一可互通的局域网，打开 WenBox 桌面客户端。
+2. 桌面客户端启动时会开启本机服务并创建默认免密房间。普通局域网不会自动把两端合并；可在一端解散默认房间，然后从发现大厅选择另一端的房间加入。
+3. 也可以在房主的“连接详情”中复制地址，让另一端通过地址加入；手机或未安装客户端的电脑可用浏览器访问 `http://房主IP:9527`。
+4. 在房间内拖入或选择文件发送，也可添加共享文件供对方下载。
 
-```mermaid
-flowchart TD
-    subgraph Host["👑 房主服务节点 (Host Mode - Port 9527)"]
-        H_Engine["核心网络引擎 (Rust tiny_http / Android NanoHTTPD)"]
-        H_Discovery["多网卡主动广播 & 组播监听器 (UDP 9528)"]
-        H_State["会话状态机 (RoomManager / Token / 成员心跳 15s)"]
-        H_FS["原生文件系统流式读写 (Downloads / 日期直存)"]
-        H_Engine --> H_State
-        H_Engine --> H_FS
-        H_Discovery --> H_Engine
-    end
+### 没有空闲网口或 Wi-Fi：USB 网卡加网线直连
 
-    subgraph Desktop["💻 桌面端 (WenBox Client - Windows / macOS)"]
-        D_Tauri["Tauri 容器 (WebView2 + Rust 后台)"]
-        D_UI["现代暗色 Web SPA (HTML5 + CSS Variables + Vanilla JS)"]
-        D_Tauri <--> D_UI
-    end
-
-    subgraph Mobile["📱 Android 移动端 (WenBox App)"]
-        M_Native["Kotlin + Jetpack Fragment"]
-        M_KeepAlive["前台常驻服务 (Foreground Service + WakeLock)"]
-        M_HTTP["OkHttp3 客户端 + 协程轮询"]
-        M_Native --> M_KeepAlive
-        M_Native --> M_HTTP
-    end
-
-    subgraph Browser["🌐 任意局域网访客浏览器 (Guest Web)"]
-        B_SPA["Zero-Install Web 页面 (扫码 / IP 直连)"]
-        B_FSA["File System Access API (零压缩直存)"]
-        B_SPA --> B_FSA
-    end
-
-    Desktop -- "UDP 组播探测 / HTTP 1.1 直连" --> Host
-    Mobile -- "UDP 广播探测 / HTTP 1.1 直连" --> Host
-    Browser -- "HTTP 1.1 REST API & 文件分块流" --> Host
-```
-
----
-
-### 2. 房间发现与 P2P 直连时序图
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Guest as 访客设备 (Android / Web / Win)
-    participant Lobby as 发现大厅 (Client Discovery)
-    participant Host as 房主节点 (Port 9527)
-
-    Note over Host: 房主点击【创建房间】<br/>启动 HTTP(9527) + UDP(9528)
-    Host->>Host: 遍历物理网卡，广播自身房间信息 (Port 9528)
-    
-    Note over Guest,Lobby: 客户端默认处于大厅静默监听
-    Guest->>Lobby: 发送主动探测帧 (wenbox_search_room)
-    Host-->>Lobby: 单播响应房间元数据 (名称、PIN 码要求、网卡 IP)
-    Lobby->>Guest: 界面动态刷新房间卡片
-
-    Guest->>Host: POST /api/room/join (携带自定义昵称 + PIN 码)
-    Host->>Host: 校验 PIN 码并分配独立 UUID client_token
-    Host-->>Guest: 200 OK (下发 token、房间名、房主设备名)
-
-    par 持续心跳与成员同步 (每 2.5s)
-        Guest->>Host: POST /api/room/heartbeat (Token + 昵称 + 访问入口)
-        Host->>Host: 更新最后在线时间戳，剔除 15s 超时成员
-        Guest->>Host: GET /api/room/members
-        Host-->>Guest: 返回最新权威成员列表 (来源 IP 与目标网卡 IP)
-    and 双向即时通讯 & 满速流式互传
-        Guest->>Host: GET /api/messages (轮询拉取最新消息/图片)
-        Guest->>Host: POST /api/upload (流式直推文件到房主机器)
-    end
-```
-
----
-
-## 🌟 核心功能模块
-
-### 1. 🏠 创新房间制局域网传输架构
-
-- **默认客户端发现大厅 (Client Discovery Mode)**：
-  - 启动后**默认处于客户端大厅**，仅监听网络广播，不占用服务端口、不广播无用数据、零资源消耗。
-  - **多网卡智能并发绑定与主动探测**：后台同时枚举并绑定所有可用物理/虚拟网卡（Wi-Fi、以太网有线口、热点网卡），结合子网定向广播、`255.255.255.255` 全局广播与 `239.255.255.250` 组播。支持双向 Ping-Pong 探测帧（`wenbox_search_room`），彻底解决插网线+连无线多网卡环境下“搜不到房间”的行业痛点。
-- **打开软件即自动建房 (零操作上手)**：
-  - 软件启动后自动创建一个**免密房间**并立即对外广播，无需点击任何按钮；
-  - 现场其他设备通过 IP 访问后在发现大厅一键加入，打开即可互传文件与报错信息。
-- **一键建房变身服务端 (Host Mode)**：
-  - 任意设备点击**【➕ 创建房间】**即可变身服务端，自由设置房间名称与入房 PIN 码（支持留空免密）；
-  - 支持保存多个**常用密码房**配置 (房间名 + PIN)，创建时可一键填入，随时切换不同密码房；
-  - 创建后本机**动态激活为服务端主机 (Port 9527)**，并向所有网卡广播宣告自身房间。
-  - 主机控制台提供直观的**【📱 扫码秒进】二维码**（纯前端本地生成，完全离线可用）、**【📋 复制入房直链】**、**【👥 实时在线成员与访问 IP】**与**【⏹️ 解散房间】**操作。
-- **自定义入房昵称与真实 IP 追溯**：
-  - 加入房间时支持手动输入个性化昵称（如 `研发-小张`、`现场工程师`）。
-  - 房间内所有成员统一以 **`昵称 (IP)`** 格式清晰展示，谁在线、谁发的消息一目了然。
-- **双向互传与局域网千兆满速**：
-  - 双方进入房间后即建立端到端直连：客户端可浏览并下载房主分享的文件，也可将手机/电脑端文件直接推送到对方电脑的 `Downloads/WenBox/` 目录。
-  - 采用原生流式 HTTP 传输，无任何协议封包损耗，轻松跑满千兆 Wi-Fi (100MB/s+)。
-
----
-
-### 2. 💬 局域网即时通讯与在线协作
-
-- **全平台自研原生/Web 优雅弹窗**：
-  - 彻底告别系统原生丑陋且具有阻塞风险的 `alert()` / `confirm()`，全平台统一采用自主设计的深色卡片式对话框，操作流畅丝滑。
-  - 解散房间、退出房间均具备二次防误触确认机制。
-- **实时在线成员与访问网卡透视**：
-  - 顶部清晰展示当前**实时在线人数**（如 `👥 在线: 3 人`），点击即可呼出**【👥 房间在线成员与 IP】**弹窗。
-  - 支持清晰显示**客户端设备真实 IP** 与 **命中的房主服务网卡 IP**，并支持一键复制。
-- **即时互发消息与富文本气泡**：
-  - 消息气泡自动带上发送端设备标签、昵称与发送者 IP（如 `[💻 Windows] (192.168.1.100) • 14:32:05`）。
-  - 支持 **Ctrl+V 粘贴截图** 直接发送图片并全屏预览，支持拖拽与选择文件发送快传卡片。
-- **移动端前台保活与桌面防雪崩自愈**：
-  - **Android 端**：配置无超时前台保活服务、不间断 WakeLock 与低延迟 Wi-Fi 锁，手机息屏时网络不中断、服务不被杀。
-  - **Windows 桌面端**：引入请求防雪崩队列锁（In-flight concurrency guard）与 2.5s 网络超时熔断机制，即便网络断开或房主关闭也绝不崩溃死锁。
-  - 房主解散房间时向所有网卡广播下线通知，客户端平滑断开并自动返回大厅。
-
----
-
-### 3. 📁 灵活的日期归档直存模式 (照片/文档/报销整理利器)
-
-- **免压缩包、零解压**：基于现代浏览器标准 File System Access API，无需打包与反复解压。
-- **自定义归类主题**：
-  - 在电脑端指定存放总根目录，可自由输入文件夹后缀（默认 `报销`，可自由自定义为 `发票`、`现场照片`、`文档归档` 或留空）。
-  - 程序自动在所选根目录下创建当天格式的子文件夹（例如 `2026-09-24_现场照片/`）。
-  - 上传的文件直接整齐存入该日期目录下，一步到位。
-
----
-
-### 4. 🛠️ 工程师与开发者全能百宝箱
-
-#### 4.1 📋 JSON 格式化与语法校验
-- **多层级美化排版**：支持 2 空格 / 4 空格层级美化排版，精准标红语法错误与行列位置。
-- **单行精简压缩**：一键剔除多余空白与换行，便于复制到报文或配置文件中。
-- **模板与快捷操作**：内置丰富示例模板，支持一键全选复制与清空。
-
-#### 4.2 ⚙️ 多进制秒级联动互转 (HEX / DEC / BIN / OCT / ASCII)
-- **秒级多向联动**：在 16 进制 (HEX)、10 进制 (DEC)、2 进制 (BIN)、8 进制 (OCT)、ASCII 文本任意框内输入，其余进制秒级自动联动换算。
-- **优雅分段排版**：HEX 自动按两两字节分组（如 `1A 3F`），BIN 自动按 4 位分组，支持单独一键复制各进制结果。
-
-#### 4.3 ⏱️ Cron 表达式全能工作台
-- **30+ 常用与高级调度模板**：
-  - 秒级与分钟级高频调度（`* * * * * ?`、`0/2 * * * * ?`、`0 0/2 * * * ?`、`0 */5 * * * ?` 等）；
-  - 每天与特定时间段调度（整点、每天 10:15、每天 10点/14点/16点、14点每分钟、14点至14:05等）；
-  - 工作日与周周期调度（工作日 09:00、工作日 18:00、每周一 10:00、周三中午 12:00、9点至17点每半小时等）；
-  - 月度/季度/年度高级规则（每月 1 日、每月 15 日、每月最后一天 `0 0 0 L * ?`、每月第3个星期五 `0 15 10 ? * 6#3`、每季度首日 `0 0 0 1 1,4,7,10 ?`、历史指定年份 `0 15 10 * * ? 2005` 等）。
-- **自然语言通俗大白话反解**：智能反解 Quartz / Linux 5~7 字段表达式，秒懂执行周期。
-- **未来时刻精确推演**：精准推演并列出接下来的 **5 次预计触发时刻**（精确到秒）。
-
----
-
-## 💻 技术栈
-
-| 模块 | 技术方案 | 优势 |
-| :--- | :--- | :--- |
-| **桌面端核心 (Windows / macOS / Linux)** | Rust + Tauri 1.5 + tiny_http | 编译产物仅 **3~5 MB**，内存占用仅 **~15MB**，极速启动 |
-| **移动端 (Android)** | Kotlin + Android Jetpack + OkHttp3 | 原生 Android 8.0+ 支持，前台常驻保活，息屏低功耗 |
-| **前端展现层 (Web SPA)** | HTML5 + CSS3 (Variables) + Vanilla JS | 零框架依赖、加载速度 < 50ms，跨浏览器零兼容包袱 |
-| **局域网协议层** | UDP 组播/多播广播 + HTTP/1.1 流式传输 | 跨子网多网卡穿透，无需互联网，跑满千兆硬件上限 |
-
----
-
-## 📂 源码目录结构
+连接方式为：
 
 ```text
-WenBox/
-├── README.md                     # 项目完整说明文档与架构设计
-├── package.json                  # 项目依赖与版本管理配置
-├── src-tauri/                    # 桌面端 (Rust / Tauri, Windows / macOS 通用)
-│   ├── Cargo.toml                # Rust 依赖与版本定义
-│   ├── tauri.conf.json           # Tauri 桌面应用窗口与构建配置
-│   └── src/
-│       └── main.rs               # Rust 核心后端 (HTTP 服务、UDP 多网卡广播、聊天与文件 API)
-├── app/                          # Android 原生客户端 (Kotlin)
-│   ├── build.gradle              # Android 模块级编译脚本
-│   └── src/main/
-│       ├── AndroidManifest.xml   # Android 权限与服务声明
-│       ├── java/com/landrop/     # Kotlin 原生源码 (Activity/Fragment/Server/CronHelper)
-│       └── assets/web/           # 共享 Web SPA 资源 (纯前端 HTML/CSS/JS)
-│           ├── index.html        # 统一 UI 视图层
-│           ├── app.js            # 核心业务交互、即时通讯、Cron 解析器
-│           └── style.css         # 质感暗色主题样式
-└── .github/workflows/            # GitHub Actions CI/CD 流水线 (全自动打包发布)
-    ├── release.yml               # 打 Tag 自动编译发布 Android APK & Windows EXE
-    ├── build-apk.yml             # Android 独立构建验证
-    └── build-windows-exe.yml     # Windows 独立构建验证
+开发电脑 ─ USB 网卡（USB-A / USB-C 转 RJ45）─ 网线 ─ 现场电脑的网口
 ```
 
----
+如果两边都没有空闲网口，两边各接一个 USB 网卡，中间用网线连接。**这里的“USB 网线”是 USB 转以太网适配器加网线，不是普通 USB 数据线直接连接两台电脑。**
 
-## 📦 下载与自动发布 (Releases)
+1. 提前准备目标系统能识别的 USB 网卡。离线现场应选系统自带驱动可用的型号，或提前装好驱动；WenBox 不包含网卡驱动。
+2. 两端新增网卡保持“自动获取 IPv4”，无需路由器或网络共享，原有工控网口可以继续使用。
+3. 两端打开 WenBox。无 DHCP 服务时，等待系统给新增网卡分配 `169.254.x.x` 地址；分配速度取决于系统，不保证插线后立即完成。
+4. 当只有一个符合条件的对端，且本机是空闲的默认免密房间时，客户端会自动发现并选定房主，另一端加入。连接后即可传文件。
+5. 网线保持连接。每次本地重新打包完成，再选择新的程序包发送或共享，现场电脑接收后按原有流程替换、安装或运行。
 
-本项目配置了完整的 **GitHub Actions CI/CD** 全自动多平台流水线：
+WenBox 当前负责**传输**，不监听构建目录、不自动发送新产物，也不自动覆盖或部署现场程序。同名文件的保存策略可能生成新名称，更新程序前请确认接收到的是本次构建。
 
-每次提交版本标签（例如 `v1.3.0`），云端流水线将分别在对应平台构建并发布至 [GitHub Releases](https://github.com/WendelYu/WenBox/releases)：
+手动房间、密码房或已有内容的会话不会被自动离开；手动退出后也不会立即被自动拉回。更多连接条件、重连行为和排查方法见 [USB 网卡直连指南](docs/USB_ETHERNET_DIRECT.md)。
 
-| 平台 | 格式 | 说明 |
-| :--- | :--- | :--- |
-| **Android** | `WenBox-Android.apk` | 支持 Android 8.0+，纯局域网免流量直传，前台服务稳定保活 |
-| **Windows** | `WenBox-Windows-x64.exe` | 仅应用程序；需要电脑已安装 WebView2。离线现场请使用 Installer 安装包 |
-| **Windows** | `WenBox-Windows-Installer.exe` | 包含离线 WebView2 安装器，无需现场联网下载运行时 |
-| **macOS** | `WenBox-macOS-universal.dmg` / `.zip` | Intel 与 Apple Silicon 通用，macOS 12.3+；DMG 拖入“应用程序”即可安装 |
-| **macOS** | `SHA256SUMS-macOS.txt` | 用于核对 DMG / ZIP 下载完整性 |
-| **任意设备** | Web 浏览器 | 访问 `http://[房主IP]:9527` 使用网页客户端；目录保存等功能受浏览器权限限制 |
+### 发现不到或连不上
 
-发布附件同时覆盖 Android、Windows 和 macOS。标签发布与自动发布共用 macOS 打包工作流，Release 正文使用维护在 [本次更新说明](docs/RELEASE_NOTES.md) 中的内容。
+- 确认网卡已识别、网线链路正常，两端地址可互通。
+- Windows 防火墙需允许 WenBox 在实际使用的网络上通信；直连可能被识别为公用网络。macOS 需允许本地网络访问和入站连接。
+- 本机服务使用 **TCP 9527**，自动发现使用 **UDP 9528**。不要在同一电脑同时运行多个网络后台。
+- 自动发现受广播域、防火墙和网络隔离影响；可尝试通过对方地址加入。WenBox 不提供跨子网穿透或绕过企业网络策略的功能。
 
-### 本次更新重点
+## 现在能做什么
 
-- USB 网卡加网线直连：支持 `169.254.x.x`、自动发现、热插拔和断线重连。
-- WenBox 全新桌面 UI：昵称名片、成员卡片、创建/加入房间、日期归档与文件传输状态。
-- 动效与键盘交互统一；修复 WebKit 焦点恢复，增加三引擎回归。
-- Windows 安装包携带离线 WebView2，macOS 增加通用 DMG/ZIP。
+### 文件与消息
+
+- 房主分享文件，其他成员浏览、下载；成员也可向房主上传文件。
+- 桌面端接收文件保存到系统下载目录下的 `WenBox` 文件夹；同名文件避免直接覆盖。
+- 支持文字、文件卡片和图片预览；桌面/Web 可通过选择、拖放或粘贴截图发送，受当前系统与浏览器权限限制。
+- 上传队列支持取消和重试，区分排队、发送进度、等待对方确认、送达与失败。
+- 支持昵称名片、在线成员查看、IP 复制、房间地址及二维码分享。
+- 可创建密码房，保存常用房间配置。默认房间为免密房，有访问控制需求时请手动创建密码房。
+
+传输由房主服务协调，不是所有成员之间分别建立直连。实际速度取决于网卡、USB 接口、网线、磁盘和网络环境，不承诺固定速率。
+
+### 日期归档
+
+桌面/Web 工具页可将当前设备分享的文件按“日期_主题”保存，例如 `2026-10-23_现场照片`。支持快捷主题、文件夹预览、名称校验和保存结果反馈。
+
+- Tauri 桌面端使用原生目录选择与文件保存。
+- 支持目录选择 API 且满足安全上下文要求的浏览器可选择目录。
+- 普通局域网 HTTP 网页无法保证任意目录直存，会回退为浏览器下载；浏览器可能要求允许多个文件下载。
+
+### 随手工具
+
+- **JSON**：格式化、压缩、语法错误提示和复制。
+- **进制转换**：HEX、DEC、BIN、OCT 与 ASCII 的常用转换。
+- **Cron**：常用模板、表达式解释和后续触发时间预览。预览有搜索范围限制，不应替代目标调度器的校验。
+
+桌面/Web 使用共享的浅深色界面，包含“快传 / 工具”导航和减少动态效果支持。Android APK 使用独立 Kotlin 原生界面，工具页包含 JSON、进制与 Cron，并非桌面界面的完整复制。
+
+## 下载与安装
+
+前往 [GitHub Releases](https://github.com/WendelYu/WenBox/releases)，选择已成功发布的版本。源码或工作流更新不代表所有平台安装包已经构建完成。
+
+- **Windows 10 / 11**：优先下载文件名含 `Installer` 的 EXE，安装包配置为携带离线 WebView2 安装器。裸 EXE 需要电脑已安装 WebView2，不适合缺少运行时的离线现场。单位安装策略仍需事先确认。
+- **macOS 12.3+**：下载 `WenBox-macOS-universal.dmg`，打开后拖入“应用程序”；也可解压同名 ZIP。通用包包含 Intel 与 Apple Silicon 两种架构，附有 `SHA256SUMS-macOS.txt`。
+- **Android 8.0+**：下载 APK 安装。当前工作流输出 Debug APK；后台传输会受系统电池优化和厂商策略影响，不保证永久保活。
+- **浏览器**：访问房主的 `http://IP:9527`，无需单独安装。浏览器访问的是房主提供的网页，不会独立启动 UDP 发现服务。Linux / iPhone / iPad 可使用可用的现代浏览器，当前不提供对应原生安装包。
+
+自动发布附件可能带版本号，标签发布附件使用固定名称，以 Release 页面实际文件为准。
 
 ## macOS 提示“已损坏，无法打开”怎么办？
 
@@ -268,98 +118,101 @@ WenBox/
 
 参考：[Apple 安全打开应用说明](https://support.apple.com/102445)、[Tauri macOS 签名与公证](https://v1.tauri.app/v1/guides/distribution/sign-macos/)。
 
----
+## 技术实现与代码位置
 
-## 🛠️ 本地编译构建指引
+- **Windows / macOS**：Rust + Tauri 1.x。Windows 使用 WebView2，macOS 使用系统 WKWebView；HTTP 文件服务使用 `tiny_http`，UDP 承担发现与广播。
+- **Android**：Kotlin、Jetpack、协程与 NanoHTTPD，使用原生页面及前台传输服务。
+- **共享网页**：HTML、CSS 和原生 JavaScript，供桌面客户端及房主的浏览器访客使用。
+- **会话**：房间、成员心跳、PIN 和令牌；文件与消息通过房主 HTTP API 交换。桌面服务启动时就监听端口，不是点击建房后才启动。
 
-### 1. Android 端编译
-- 使用 **Android Studio** 打开工程根目录；
-- 等待 Gradle 同步完成；
-- 菜单栏点击 **Build -> Build Bundle(s) / APK(s) -> Build APK(s)**；
-- 编译产物位于：`app/build/outputs/apk/debug/app-debug.apk`。
+```text
+src-tauri/src/main.rs             桌面房间、HTTP 文件服务和原生命令
+src-tauri/src/network.rs          IPv4、子网匹配与发现网络接口
+src-tauri/tauri.conf.json         窗口、离线 WebView2 与 macOS 最低版本
+app/src/main/assets/web/          共享 UI、上传队列与交互逻辑
+app/src/main/java/com/landrop/    Android 原生界面与网络服务
+app/src/test/                    Android 单元测试
+tests/                           JavaScript 回归测试
+scripts/check-web-ui.cjs          三浏览器引擎交互回归
+scripts/check-direct-connection.cjs  模拟双端直连回归
+.github/workflows/               平台构建、兼容性检查与发布
+```
 
-### 2. 桌面端编译 (Rust / Tauri，面向 Windows)
-- 前置依赖：
-  - [Rust 环境](https://rustup.rs/)（当前 stable）
-  - [Node.js](https://nodejs.org/)（推荐 v24，与 CI 一致）
-- 编译命令：
-  ```bash
-  # 安装依赖
-  npm install
+仓库保留 Electron 相关开发入口，但正式 Windows / macOS 发布使用 Tauri。`npm start` 启动的是 Electron 外壳，不等于完整的 Tauri 传输客户端。
 
-  # 编译生成超轻量单文件 exe 及安装包
-  npx --yes @tauri-apps/cli@1.5 build
-  ```
-- 编译产物位于：`src-tauri/target/release/wenbox.exe`。
+## 本地构建与验证
 
-### 3. macOS 通用包编译
+### 桌面端
 
-在 Mac 上安装 Xcode Command Line Tools、Rust 与 Node.js 后执行：
+使用当前 Rust stable 与 Node.js 24。Windows 构建还需 MSVC C++ 构建工具及 Windows SDK；Mac 需 Xcode Command Line Tools。首次安装依赖和准备离线运行时需要构建机器联网，不是在现场安装时下载。
+
+```bash
+npm ci
+npx --yes @tauri-apps/cli@1.5 dev
+# 生成当前平台安装包
+npx --yes @tauri-apps/cli@1.5 build
+```
+
+Windows 输出位于 `src-tauri/target/release/` 及其 `bundle/` 子目录。在 Mac 上生成通用包：
 
 ```bash
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 npx --yes @tauri-apps/cli@1.5 build --target universal-apple-darwin --bundles app,dmg
 ```
 
-应用和镜像位于 `src-tauri/target/universal-apple-darwin/release/bundle/`。CI 还会使用 `ditto` 生成保留应用权限的 ZIP，并验证两种 CPU 架构。当前未配置 Developer ID 签名与公证；解除下载隔离仅是可信应用的临时安装办法。
+通用包输出位于 `src-tauri/target/universal-apple-darwin/release/bundle/`。
 
+### Android
 
----
+使用 Android Studio 打开项目，配置 **JDK 17、Android SDK 34、Gradle 8.2**。可从 IDE 构建 APK；命令行环境缺少 `gradlew` 时先用 Gradle 8.2 生成 wrapper：
 
-## 开发验证
+```bash
+gradle wrapper --gradle-version 8.2
+./gradlew assembleDebug testDebugUnitTest lintDebug
+```
 
-### USB 网卡加网线直连（Windows 10 / macOS 原生客户端）
+Windows 使用 `gradlew.bat`。APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。
 
-两端通过 USB 网卡与网线连接，保持自动获取 IPv4；系统分配 `169.254.x.x` 后，默认免密房间会自动发现并选定同一个房主，另一端自动加入。支持启动后插入网卡和拔线重连，可同时保留原有办公/工控网络。首次使用需允许系统的本地网络和防火墙访问；已有会话、手动房间和密码房会保留当前状态。
-
-此功能使用 Tauri 网络后台，Electron 包不能独立提供。硬件、平台验收及配置说明见 [USB 网卡直连指南](docs/USB_ETHERNET_DIRECT.md)。新增 macOS 工作流可构建 Intel / Apple Silicon 通用客户端；真实 Win10 与 Mac 的 USB 网卡互传仍需现场验收。
-
-共享 Web 界面的回归检查无需安装 npm 依赖（需要 Node.js 18 及以上）：
+### 回归检查
 
 ```bash
 npm test
-node --check app/src/main/assets/web/app.js
+npm run lint:css
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-界面一级导航为“快传 / 工具”。快传同时展示会话与文件，平板使用文件抽屉，手机使用聊天/文件分段。拖放、选择文件与聊天附件共用可取消、可重试的上传队列。Android 底部同样保留快传和工具两项，工具页内切换 JSON、进制和 Cron。
+浏览器测试使用模拟服务，不访问真实房间或用户文件：
 
-浏览器回归可在提供 Playwright 模块后执行 `node scripts/check-web-ui.cjs`。脚本启动本地模拟服务，生成四种宽度的截图，不访问真实房间或用户文件。可通过 `PLAYWRIGHT_MODULE` 与 `BROWSER_EXECUTABLE` 指定本机运行时，详情见 [界面截图说明](docs/ui-screens/phase-3/README.md)。
+```bash
+npm install --no-save --package-lock=false playwright@1.62.1
+npx playwright install chromium webkit firefox
+BROWSER_ENGINE=chromium UI_SCREEN_DIR=dist/compat-chromium node scripts/check-web-ui.cjs
+BROWSER_ENGINE=webkit UI_SCREEN_DIR=dist/compat-webkit node scripts/check-web-ui.cjs
+BROWSER_ENGINE=firefox UI_SCREEN_DIR=dist/compat-firefox node scripts/check-web-ui.cjs
+node scripts/check-direct-connection.cjs
+```
 
-剪贴板适配按 Tauri 原生接口、Electron 隔离桥接、浏览器接口、选中文本回退的顺序处理。打包时需同时包含 `runtime.js`；Electron 打包还需包含 `preload.js`。Tauri 仅开启文本写入剪贴板权限。
+以上环境变量写法适用于 macOS/Linux shell。也可用 `PLAYWRIGHT_MODULE` 指定 Playwright 模块，用 `BROWSER_EXECUTABLE` 指定已有浏览器。
 
-Electron 运行时锁定为 44.8.0，electron-builder 为 26.15.3，开发环境需要 Node ≥22.12.0。Electron 界面通过仅绑定本机的 HTTP 服务加载，保持上下文隔离、沙箱和 CSP；不再使用会产生 Origin:null 的 file:// 页面。Electron 包不内置 Rust 传输后台：手动加入其他设备可直接连接，本机建房和自动发现需要运行 Tauri 的本机服务。完整桌面功能优先使用 Tauri 包。
+当前版本已完成本机 Mac 构建、三引擎界面回归和共享逻辑、Rust、Android 单元测试。Android lint 仍有警告。模拟回归不能替代 Win10 离线安装、实际 WebView2、Intel Mac、Android 真机和 USB 网卡双机验收。
 
-Web 支持密码开关、PIN 分格/完整密码输入、限流倒计时，以及消息发送状态与失败重试。上传完成状态与消息送达状态独立显示。
+## 更新与发布
 
-Android 常用房间密码使用系统 Keystore 加密保存；聊天附件在应用内下载，令牌仅经请求头发送。聊天与文件列表使用差异更新，大 JSON 在后台处理。
+当前代码版本为 **v1.4.0**，详细变更见 [更新说明](docs/RELEASE_NOTES.md)。本轮主要增加 USB 网卡直连、网卡热插拔与重连支持，重做房间、昵称、成员、归档和传输 UI，修复 WebKit 焦点恢复，并配置 macOS 通用包与 Windows 离线运行时。
 
-桌面网络和文件命令在后台执行；HTTP 状态请求与文件传输使用独立的工作队列。上传文件采用流式读写，空文件可正常接收，同名文件会另存为新名称，避免覆盖已有文件。
+- `auto-release.yml`：main/master 的非纯文档更新触发多平台构建，成功后按 `package.json` 版本发布；发布新版本前应同步提升各端版本号。
+- `release.yml`：推送 `v*` 标签或手动选择标签发布。
+- `release-macos.yml`：两个发布入口共用的 macOS 通用 DMG/ZIP 打包、架构检查与校验文件生成。
+- `web-compatibility.yml`：Chromium、WebKit、Firefox 交互回归。
 
-发布前在 macOS 和 Windows 原生应用中分别检查消息、代码、链接、JSON 和 Cron 的复制，再用局域网 HTTP 浏览器检查复制回退。多设备互传时检查心跳、窗口操作和断网重连；Windows 的实际流畅度需要在目标机器上验证。
+发布正文来自 `docs/RELEASE_NOTES.md`。修改 README 不会自动更新已发布版本的说明或重新生成安装包。
 
----
+## 使用边界与隐私
 
-## 🔒 安全与隐私声明
+文件和消息在设备之间通过局域网 HTTP 传输，不需要云存储或外部账号。当前传输不是端到端加密通道，PIN/令牌用于房间访问控制，不能替代网络加密；请在可信或受控的网络中使用。默认免密房间可被可达设备加入，有需要时改用密码房。
 
-- **100% 局域网传输**：WenBox 所有数据传输与通讯均在设备所在局域网内直接点对点进行；
-- **零云端依赖**：不依赖任何外部中心化服务器或云存储；
-- **零数据收集**：无任何遥测（Telemetry）、无统计上报、无用户跟踪；
-- **访问控制**：房主建房可自由设置 PIN 码，桌面端 / Android 端 / Web 服务端三端均强制校验房间令牌，文件列表、下载与上传接口对未授权设备一律拒绝；只有输入正确密码或扫码授权的设备方可连入。
+WenBox 不负责现场程序的安装、进程重启、回滚或构建目录同步。它解决的是反复搬运文件的过程：**线保持连接，修改完成后直接传输，部署步骤仍由使用者确认执行。**
 
----
+## 作者
 
-## 📄 开源许可证
-
-本项目遵循 [MIT License](LICENSE) 开源协议。  
-欢迎提交 Issue 与 Pull Request 共同建设！
-
-Crafted with ❤️ by [Wendel](https://github.com/WendelYu)
-
-### 桌面兼容性与离线部署
-
-Windows 和 macOS 的正式桌面构建统一使用 Tauri。Windows 安装包配置为 `offlineInstaller`，包含完整 WebView2 安装器；裸 EXE 不包含运行时，不能用于缺少 WebView2 的离线电脑。已有运行时的版本与单位安装策略仍需在目标 Win10 机器上验收。
-
-macOS 安装最低版本设为 12.3，以匹配原生 dialog 等 WebKit 功能要求。Intel/Apple Silicon 通用包由 macOS CI 构建；当前本机验证为 Apple Silicon。Android APK 仍使用 Kotlin 原生界面（最低 Android 8.0），不是 Tauri 桌面 UI。
-
-网页回归支持 `BROWSER_ENGINE=chromium|webkit|firefox`，需安装对应 Playwright 引擎；可用 `BROWSER_EXECUTABLE` 指定已有 Chrome。CI 对三个引擎运行创建/加入/退出、PIN、上传取消重试、下载、工具以及浅深色和响应式布局测试。浏览器引擎测试不替代 Windows WebView2 实机、Android 真机及 USB 网卡双机验收。
+[Wendel](https://github.com/WendelYu)
