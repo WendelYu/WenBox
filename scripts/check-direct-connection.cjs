@@ -20,6 +20,7 @@ async function main() {
                     const f = window.fixture;
                     switch (command) {
                         case 'get_room_status_cmd': return { ...local };
+                        case 'close_room_cmd': local.isActive = false; local.isTauriHost = false; return true;
                         case 'get_all_lan_ips_cmd': return f.ips;
                         case 'get_local_ip': return f.ips[0]?.ip || '127.0.0.1';
                         case 'get_discovered_rooms_cmd': return f.rooms;
@@ -103,6 +104,26 @@ async function main() {
         await busy.evaluate(() => { fixture.local.canAutoConnect = false; });
         await busy.waitForTimeout(1000);
         assert.equal(await busy.evaluate(() => document.body.dataset.roomMode), 'host');
+        // Hosts can browse WiFi peers without dissolving; duplicate room IDs keep their endpoint.
+        const manual = await client('manual', '192.168.8.2');
+        await manual.evaluate(rooms => { fixture.rooms = rooms; }, [peer('win', '169.254.18.3'), peer('win', '192.168.8.9')]);
+        await manual.locator('#btnBrowseRooms').click();
+        await manual.locator('[data-action="join-room"]').nth(1).waitFor();
+        assert.equal(await manual.evaluate(() => document.body.dataset.roomMode), 'host');
+        assert.equal(await manual.locator('#roomLobby').isVisible(), true);
+        await manual.locator('[data-action="join-room"]').nth(1).click();
+        await manual.locator('#modalBtnConfirmJoinPin').click();
+        await manual.waitForFunction(() => fixture.joins.length === 1);
+        assert.equal(await manual.evaluate(() => fixture.joins[0].hostUrl), 'http://192.168.8.9:9527');
+        // Closing a local room still allows manual joining through the chosen WiFi endpoint.
+        const closed = await client('closed', '192.168.8.2');
+        await closed.evaluate(rooms => { fixture.rooms = rooms; }, [peer('win', '192.168.8.9')]);
+        await closed.locator('#btnCloseRoom').click();
+        await closed.locator('#appConfirmOkBtn').click();
+        await closed.locator('[data-action="join-room"]').click();
+        await closed.locator('#modalBtnConfirmJoinPin').click();
+        await closed.waitForFunction(() => document.body.dataset.roomMode === 'joined');
+        assert.equal(await closed.evaluate(() => fixture.joins[0].hostUrl), 'http://192.168.8.9:9527');
         assert.deepEqual(errors, []);
         console.log('Direct connection UI: election, hotplug, disconnect/reconnect, explicit leave and in-flight room use passed.');
     } finally { await browser?.close(); await server.close(); }

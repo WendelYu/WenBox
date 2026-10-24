@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod network;
+#[cfg(windows)]
+mod windows_network;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -186,13 +188,26 @@ enum PinGate {
 /// 因此不再假设所有网络都是 /24 (S6/Rust 其它: 子网广播写死为 /24)。
 fn get_network_interfaces() -> Vec<(String, std::net::Ipv4Addr, std::net::Ipv4Addr)> {
     let mut list = Vec::new();
-    for iface in if_addrs::get_if_addrs().unwrap_or_default() {
-        let if_addrs::IfAddr::V4(v4) = iface.addr else { continue };
+    let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
+    for iface in &interfaces {
+        let if_addrs::IfAddr::V4(v4) = &iface.addr else { continue };
         let ip = v4.ip;
         if !network::usable_ipv4(ip) {
             continue;
         }
-        list.push((iface.name, ip, network::effective_mask(ip, v4.netmask)));
+        list.push((iface.name.clone(), ip, network::effective_mask(ip, v4.netmask)));
+    }
+    #[cfg(windows)]
+    match windows_network::ipv4_rows() {
+        Ok(rows) => {
+            let extra = rows.into_iter().map(|(index, ip, mask)| {
+                let name = interfaces.iter().find(|iface| iface.index == Some(index))
+                    .map(|iface| iface.name.clone()).unwrap_or_else(|| format!("网络接口 {}", index));
+                (name, ip, mask)
+            });
+            network::merge_interfaces(&mut list, extra);
+        }
+        Err(error) => eprintln!("Windows IPv4 table enumeration failed: {}", error),
     }
     list
 }
@@ -643,7 +658,7 @@ fn join_remote_room_expected(host_url: String, pin: String, my_name: String, sta
         .send_string(&body.to_string());
     let resp = match resp {
         Ok(response) | Err(ureq::Error::Status(_, response)) => response,
-        Err(error) => return Err(format!("连接房间失败: {}", error)),
+        Err(error) => return Err(format!("无法连接 {}。请确认对端 WenBox 已打开、该地址属于当前网卡，且 Windows 防火墙允许 WenBox 的 TCP 9527 / UDP 9528（包括网线直连使用的公用网络）。详细原因: {}", clean, error)),
     };
 
     let val: serde_json::Value = resp.into_json().map_err(|e| format!("解析房间响应失败: {}", e))?;
@@ -2260,6 +2275,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     "all_ips": all_ips,
                     "port": port,
                     "running": true,
+                    "version": env!("CARGO_PKG_VERSION"),
                     "platform": desktop_platform(),
                     "room": {
                         "isActive": room.is_active,
@@ -2331,6 +2347,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     "all_ips": get_all_lan_ips(),
                     "port": port,
                     "running": true,
+                    "version": env!("CARGO_PKG_VERSION"),
                     "platform": desktop_platform(),
                     "room": {
                         "isActive": room.is_active,

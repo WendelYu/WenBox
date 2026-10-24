@@ -173,3 +173,7 @@ body { padding: var(--sp-4) var(--sp-6); align-items: flex-start; }
     .room-skeleton { animation: room-loading 1.5s ease-in-out infinite alternate; }
     @keyframes room-loading { to { opacity: .5; } }
 }
+
+body:not([data-room-mode="client"]):not([data-discovery-open="true"]) #roomLobby { display: none; }
+body[data-discovery-open="true"] .room-workspace,
+body[data-discovery-open="true"] .room-mobile-tabs { display: none; }

@@ -58,5 +58,11 @@
         // An already used host keeps its room when the other end restarts or reconnects.
         return peer.canAutoConnect === false || local.roomId > peer.roomId ? peer : null;
     }
-    root.WenBoxUI = { createCooldown, avatar, createOutbox, isLinkLocal, selectDirectPeer };
+    function selectLocalAddress(ips, selected) {
+        const address = item => typeof item === 'string' ? item : item.ip;
+        if (selected && (ips || []).some(item => address(item) === selected)) return selected;
+        const preferred = (ips || []).find(item => item.is_preferred || item.isPreferred);
+        return address(preferred || (ips || [])[0] || { ip: '127.0.0.1' });
+    }
+    root.WenBoxUI = { createCooldown, avatar, createOutbox, isLinkLocal, selectDirectPeer, selectLocalAddress };
 })(typeof window === 'undefined' ? globalThis : window);

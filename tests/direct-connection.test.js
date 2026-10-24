@@ -46,3 +46,13 @@ test('link-local detection rejects malformed and reserved auto-configuration ran
         assert.equal(isLinkLocal(ip), false);
     }
 });
+
+test('automatic address selection prefers LAN while explicit VPN selection remains available', () => {
+    const ips = [{ ip: '100.75.104.20', is_preferred: false }, { ip: '192.168.1.3', is_preferred: true }, { ip: '169.254.66.73', is_preferred: true }];
+    const select = context.WenBoxUI.selectLocalAddress;
+    assert.equal(select(ips), '192.168.1.3');
+    assert.equal(select(ips, '100.75.104.20'), '100.75.104.20');
+    assert.equal(select(ips, '169.254.99.99'), '192.168.1.3');
+    assert.equal(select(ips, '169.254.66.73'), '169.254.66.73');
+    assert.equal(select([]), '127.0.0.1');
+});

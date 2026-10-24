@@ -8,6 +8,14 @@
     let chatHasSynced = false;
     let directAutoConnectEnabled = true;
     let directRetryAt = 0;
+    let discoveryOpen = false;
+    document.getElementById('btnBrowseRooms').addEventListener('click', () => {
+        discoveryOpen = !discoveryOpen;
+        directAutoConnectEnabled = false;
+        document.body.dataset.discoveryOpen = String(discoveryOpen);
+        document.getElementById('btnBrowseRooms').textContent = discoveryOpen ? '返回会话' : '附近房间';
+        if (discoveryOpen) { discoveryStartedAt = Date.now(); pollDiscoveredRooms(); }
+    });
     const directConnectionStatus = document.getElementById('directConnectionStatus');
     const toast = document.getElementById('toast');
     let toastTimer;
@@ -895,7 +903,7 @@
 
     function renderMultiIpPills(ips, activeIp) {
         if (!multiIpSelectorContainer) return;
-        multiIpSelectorContainer.hidden = !ips || ips.length <= 1;
+        multiIpSelectorContainer.hidden = !ips || ips.length === 0;
         const select = document.getElementById('hostAddressSelect');
         if (!select || !listChanged(select, ips, activeIp)) return;
         select.replaceChildren(...(ips || []).map(item => {
@@ -964,7 +972,7 @@
 
                 const ips = await invoke('get_all_lan_ips_cmd');
                 selfLanIps = ips || [];
-                const primary = await invoke('get_local_ip');
+
 
                 const hasSelected = userSelectedIp && selfLanIps.some(item => {
                     const s = typeof item === 'string' ? item : (item && item.ip);
@@ -976,7 +984,7 @@
                 } else {
                     userSelectedIp = null;
                     localStorage.removeItem('wenbox_selected_ip');
-                    selfDeviceInfo.ip = primary || (selfLanIps.length > 0 ? (selfLanIps[0].ip || selfLanIps[0]) : '127.0.0.1');
+                    selfDeviceInfo.ip = window.WenBoxUI.selectLocalAddress(selfLanIps);
                 }
 
                 if (selfDeviceInfo.ip) {
@@ -1080,6 +1088,9 @@
         const changed = roomState.mode !== mode || roomState.roomInfo?.roomId !== data?.roomId;
         if (changed) { resetChatRoomHistory(); uploadQueue?.clear(); outbox.clear(); }
         if (mode === 'client') discoveryStartedAt = Date.now();
+        discoveryOpen = false;
+        document.body.dataset.discoveryOpen = 'false';
+        document.getElementById('btnBrowseRooms').textContent = '附近房间';
         roomRevision++; scheduler.bump();
         latestRoomMembers = [];
         roomState.mode = mode;
@@ -1317,7 +1328,7 @@
         const fetch = fetchWithTimeout;
         const revision = roomRevision;
         if (isPollingRooms) return;
-        if (roomState.mode !== 'client') return;
+        if (roomState.mode !== 'client' && !discoveryOpen) return;
         isPollingRooms = true;
         try {
             const invoke = getTauriInvoke();
@@ -1325,7 +1336,7 @@
                 // 只有当本机 Tauri UI 是房主时才同步切为 host 模式
                 try {
                     const rStatus = await invoke('get_room_status_cmd');
-                    if (rStatus && rStatus.isActive && rStatus.isTauriHost) {
+                    if (roomState.mode === 'client' && rStatus && rStatus.isActive && rStatus.isTauriHost) {
                         setRoomMode('host', rStatus);
                         return;
                     }
@@ -1371,7 +1382,7 @@
 
         if (noRoomsDiscoveredPrompt) noRoomsDiscoveredPrompt.hidden = true;
         discoveredRoomsContainer.innerHTML = rooms.map(room => `
-            <div class="list-row"><span class="room-device-icon">${iconMarkup(/Android|iOS/.test(room.hostPlatform) ? 'smartphone' : 'monitor')}</span><div class="member-details"><strong>${escapeHtml(room.roomName || room.roomId)}</strong><span class="text-2">${escapeHtml(room.hostDevice || '房主')} · ${escapeHtml(room.ip)}:${Number(room.port)}</span><span class="badge">${room.needPassword ? '需要密码' : '公开房间'}</span></div><button class="btn btn--primary btn--sm" type="button" data-action="join-room" data-value="${escapeHtml(room.roomId)}">加入房间</button></div>`).join('');
+            <div class="list-row"><span class="room-device-icon">${iconMarkup(/Android|iOS/.test(room.hostPlatform) ? 'smartphone' : 'monitor')}</span><div class="member-details"><strong>${escapeHtml(room.roomName || room.roomId)}</strong><span class="text-2">${escapeHtml(room.hostDevice || '房主')} · ${escapeHtml(room.ip)}:${Number(room.port)}</span><span class="badge">${room.needPassword ? '需要密码' : '公开房间'}</span></div><button class="btn btn--primary btn--sm" type="button" data-action="join-room" data-value="${escapeHtml(JSON.stringify([room.roomId, room.ip, room.port]))}">加入房间</button></div>`).join('');
     }
 
     window.openJoinRoomDialog = function (data) {
@@ -1411,8 +1422,8 @@
         if (nickInput) setTimeout(() => { nickInput.focus(); nickInput.select(); }, 150);
     };
 
-    window.onDiscoveredRoomClicked = function (roomId) {
-        const r = roomState.discoveredRooms.find(x => x.roomId === roomId);
+    window.onDiscoveredRoomClicked = function (key) {
+        const r = roomState.discoveredRooms.find(x => JSON.stringify([x.roomId, x.ip, x.port]) === key);
         if (!r) return;
         window.openJoinRoomDialog({
             hostUrl: `http://${r.ip}:${r.port}`,
@@ -2560,7 +2571,7 @@
     scheduler.add('members', 2500, async () => {
         if (roomState.mode === 'host') await pollRoomMembers();
         else if (roomState.mode === 'joined') await pollJoinedMembers();
-        else if (currentActiveTab === 'view-room') await pollDiscoveredRooms();
+        if (currentActiveTab === 'view-room' && (roomState.mode === 'client' || discoveryOpen)) await pollDiscoveredRooms();
     });
     scheduler.add('files', 2500, async () => {
         if (currentActiveTab !== 'view-room') return;
@@ -2571,7 +2582,7 @@
     scheduler.add('direct', 2500, autoConnectDirect);
     scheduler.add('interface', 1000, () => {
         updateJoinCooldown();
-        if (roomState.mode === 'client') {
+        if (roomState.mode === 'client' || discoveryOpen) {
             const loading = roomState.discoveredRooms.length === 0 && Date.now() - discoveryStartedAt < 3000;
             document.getElementById('roomDiscoverySkeleton').hidden = !loading;
             noRoomsDiscoveredPrompt.hidden = loading || roomState.discoveredRooms.length > 0;

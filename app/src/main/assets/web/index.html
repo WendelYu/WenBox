@@ -104,6 +104,7 @@
                 <div class="connection-meta"><span id="roomLock" class="only-in-room"></span><button id="chatOnlineMemberBadge" class="btn btn--ghost btn--sm only-in-room" type="button">查看成员</button><span id="directConnectionStatus" role="status" hidden></span><span class="only-client">连接同一网络，或使用 USB 网卡加网线直连</span></div>
             </div>
             <div class="room-status-actions">
+                <button id="btnBrowseRooms" class="btn btn--secondary btn--sm only-in-room" type="button">附近房间</button>
                 <button id="btnOpenCreateRoomModal" class="btn btn--primary btn--sm only-client" type="button"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-plus"></use></svg>创建房间</button>
                 <button id="btnOpenManualJoinModal" class="btn btn--secondary btn--sm only-client" type="button">输入地址</button>
                 <details id="connectionDetails" class="connection-details only-in-room">
@@ -118,7 +119,7 @@
                 <button id="btnLeaveRoom" class="btn btn--ghost btn--sm only-joined room-exit" type="button"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-log-out"></use></svg>退出</button>
                 <button id="btnToggleFiles" class="btn btn--secondary btn--sm only-in-room" type="button" aria-expanded="false" aria-controls="filePanel"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-folder"></use></svg>文件</button>
             </div>
-        </section><main id="view-room" class="primary-view active" aria-label="快传"><div class="card lobby only-client" id="roomLobby">
+        </section><main id="view-room" class="primary-view active" aria-label="快传"><div class="card lobby" id="roomLobby">
                     <div class="section-title row row--between mb-2">
                         <span class="fs-md fw-semibold text-1"> 局域网可用房间 (<span id="discoveredRoomsCount">0</span>)</span>
                         <button id="btnRefreshDiscoveredRooms" class="btn btn--ghost btn--sm" type="button"> 刷新房间</button>

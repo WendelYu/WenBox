@@ -216,3 +216,14 @@ WenBox 不负责现场程序的安装、进程重启、回滚或构建目录同�
 ## 作者
 
 [Wendel](https://github.com/WendelYu)
+
+### 网卡地址缺失或加入超时
+
+Windows 已有 `169.254.x.x` 地址但 WenBox 没显示时，请先升级到 v1.4.1 或更新版本。新版通过 Windows IPv4 地址表补充枚举网卡；开房后可点击“附近房间”，同时查看 WiFi 和网线发现的房间。
+
+保持 Windows 端 WenBox 打开，在命令提示符执行 `ipconfig` 和 `netstat -ano | findstr :9527`，再在该电脑浏览器打开 `http://127.0.0.1:9527/api/status`：
+
+- `all_ips` 应包含网线的 `169.254.x.x` 地址；`version` 可确认运行版本。
+- `0.0.0.0:9527 LISTENING` 表示服务监听所有 IPv4 接口，但不能证明其他电脑能通过防火墙访问。
+- 多网卡时，请选择卡片上实际可达的地址；WiFi 和网线使用各自的地址，直连地址不需要默认网关。
+- 如地址齐全但仍超时，检查 Windows 防火墙是否允许当前 WenBox 程序在对应网络配置文件上接收 TCP 9527 和 UDP 9528，以及 macOS 是否允许 WenBox 访问本地网络。无需关闭整个防火墙。

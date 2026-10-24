@@ -40,10 +40,12 @@ pub fn matching_interface(
 pub fn discovery_sender(ip: Ipv4Addr) -> std::io::Result<UdpSocket> {
     let socket = UdpSocket::bind((ip, 0))?;
     socket.set_broadcast(true)?;
-    socket.set_multicast_loop_v4(false)?;
-    socket.set_multicast_ttl_v4(1)?;
+    let _ = socket.set_multicast_loop_v4(false);
+    let _ = socket.set_multicast_ttl_v4(1);
     // Binding the source address alone does not select the multicast egress on all OSes.
-    socket2::SockRef::from(&socket).set_multicast_if_v4(&ip)?;
+    // Some adapters reject multicast options but still support broadcast/unicast.
+    // Keep those discovery paths available instead of dropping the entire interface.
+    let _ = socket2::SockRef::from(&socket).set_multicast_if_v4(&ip);
     Ok(socket)
 }
 
@@ -145,5 +147,36 @@ mod tests {
         let (len, source) = listener.recv_from(&mut bytes).unwrap();
         assert_eq!(&bytes[..len], b"wenbox_search_room");
         assert_eq!(source.ip(), std::net::IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+}
+
+/// Merge the independent Windows IPv4 table without hiding WiFi or duplicating addresses.
+#[cfg(any(windows, test))]
+pub fn merge_interfaces(
+    interfaces: &mut Vec<(String, Ipv4Addr, Ipv4Addr)>,
+    extra: impl IntoIterator<Item = (String, Ipv4Addr, Ipv4Addr)>,
+) {
+    for (name, ip, mask) in extra {
+        if usable_ipv4(ip) && !interfaces.iter().any(|(_, existing, _)| *existing == ip) {
+            interfaces.push((name, ip, effective_mask(ip, mask)));
+        }
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    #[test]
+    fn supplements_missing_windows_apipa_without_losing_wifi_or_vpn() {
+        let wifi = Ipv4Addr::new(192, 168, 1, 3);
+        let usb = Ipv4Addr::new(169, 254, 66, 73);
+        let vpn = Ipv4Addr::new(100, 75, 104, 20);
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        let mut rows = vec![("WLAN".into(), wifi, mask), ("Tailscale".into(), vpn, Ipv4Addr::BROADCAST)];
+        merge_interfaces(&mut rows, [("WLAN".into(), wifi, mask), ("本地接口".into(), usb, mask), ("loopback".into(), Ipv4Addr::LOCALHOST, mask)]);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2], ("本地接口".into(), usb, Ipv4Addr::new(255, 255, 0, 0)));
+        assert!(rows.iter().any(|(_, ip, _)| *ip == wifi));
+        assert!(rows.iter().any(|(_, ip, _)| *ip == vpn));
     }
 }
