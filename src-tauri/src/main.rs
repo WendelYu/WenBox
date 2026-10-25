@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod network;
+mod native_transport;
 #[cfg(windows)]
 mod windows_network;
 
@@ -258,6 +259,7 @@ fn get_download_dir() -> PathBuf {
 }
 
 // ---------------- Tauri 供前端调用的命令 ----------------
+
 #[tauri::command]
 async fn get_local_ip(state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
     let state = state.inner().clone();
@@ -3016,6 +3018,12 @@ fn main() {
     tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
+            native_transport::native_request,
+            native_transport::native_upload_begin,
+            native_transport::native_upload_chunk,
+            native_transport::native_upload_finish,
+            native_transport::native_upload_progress,
+            native_transport::native_upload_cancel,
             get_local_ip,
             get_all_lan_ips_cmd,
             set_room_host_ip_cmd,

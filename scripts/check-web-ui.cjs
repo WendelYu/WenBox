@@ -64,6 +64,11 @@ async function main() {
             if (name.startsWith('slow-')) setTimeout(finish, 1800); else finish();
             return;
         }
+        if (url.pathname === '/api/download/preview') {
+            if (url.searchParams.get('token') !== 'guest-token') { res.writeHead(401); return res.end(); }
+            res.writeHead(200, { 'Content-Type': 'image/png' });
+            return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64'));
+        }
         if (url.pathname.startsWith('/api/download/')) { res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Disposition': 'attachment; filename="fixture.txt"' }); return res.end('WenBox fixture download'); }
         failures.push(req.url); return send({ error: 'unknown fixture route' }, 404);
     });
@@ -228,6 +233,22 @@ async function main() {
         await page.waitForFunction(() => !document.getElementById('modalBtnConfirmJoinPin').disabled);
         await page.locator('#modalBtnConfirmJoinPin').click();
         await page.waitForFunction(() => document.body.dataset.roomMode === 'joined');
+        await page.locator('#joinRoomPinModal').waitFor({ state: 'hidden' });
+        for (const width of [1280, 1440]) {
+            await page.setViewportSize({ width, height: 900 });
+            const heading = await page.locator('#currentViewingDeviceTitle').boundingBox();
+            assert.ok(heading.width >= 100 && heading.height < 55, 'file heading must not collapse into one Chinese character per line');
+        }
+        for (const src of ['/api/download/preview', origin + '/api/download/preview']) {
+            messages.push({ id: String(++serial), senderName: 'Mac 图片测试', senderIp: '169.254.142.249', content: `[image:${src}]`, timestamp: Date.now() + serial });
+        }
+        await page.evaluate(() => WenBox.scheduler.runNow());
+        await page.waitForFunction(() => [...document.querySelectorAll('.chat-img-thumb')].filter(img => img.naturalWidth > 0).length === 2);
+        await page.locator('.chat-img-thumb').last().click();
+        await page.locator('#chatImageModal').waitFor({ state: 'visible' });
+        await page.keyboard.press('Escape');
+        await page.locator('#chatImageModal').waitFor({ state: 'hidden' });
+        await page.screenshot({ path: path.join(screenshots, 'joined-file-sidebar.png') });
         await page.waitForFunction(() => !document.getElementById('joinRoomPinModal').open);
         await page.locator('#webChatMessageInput').fill('加入后仍能发送消息'); await page.locator('#webBtnSendMessage').click();
         await page.locator('.chat-text').filter({ hasText: '加入后仍能发送消息' }).waitFor();

@@ -1,6 +1,6 @@
 [package]
 name = "wenbox"
-version = "1.4.1"
+version = "1.4.2"
 description = "WenBox - 局域网跨设备互传与多端百宝箱"
 authors = ["Wendel"]
 edition = "2021"
@@ -24,6 +24,7 @@ mime_guess = "2.0"
 ureq = { version = "2.12", default-features = false, features = ["json"] }
 url = "2.5"
 dirs-next = "2.0"
+tempfile = "=3.27.0"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.59.0", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }

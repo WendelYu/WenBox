@@ -1,6 +1,6 @@
 // Classic-script factory also works in Electron's file:// renderer and older Android WebViews.
 (function (root) {
-    function createUploadQueue({ container, history, count, onComplete, createXHR = () => new XMLHttpRequest(), now = () => Date.now(), concurrency = 3 }) {
+    function createUploadQueue({ container, history, count, onComplete, createXHR = () => new XMLHttpRequest(), now = () => Date.now(), concurrency = 3, sendNative = null }) {
         const items = new Map();
         let serial = 0, active = 0, generation = 0;
         const bytes = value => value >= 1048576 ? `${(value / 1048576).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
@@ -12,11 +12,11 @@
             const progress = item.row.querySelector('progress');
             progress.value = item.state === 'done' ? 1 : item.total ? item.loaded / item.total : 0;
             const phase = item.row.querySelector('.upload-phase');
-            if (phase) phase.textContent = ({ queued: '排队中', uploading: item.loaded >= item.total && item.total > 0 ? '确认中' : `${Math.round(progress.value * 100)}%`, done: '已送达', cancelled: '已取消', failed: '未送达' })[item.state];
+            if (phase) phase.textContent = item.state === 'uploading' && item.phase === 'preparing' ? '读取中' : ({ queued: '排队中', uploading: item.loaded >= item.total && item.total > 0 ? '确认中' : `${Math.round(progress.value * 100)}%`, done: '已送达', cancelled: '已取消', failed: '未送达' })[item.state];
             const elapsed = Math.max((now() - item.started) / 1000, .001);
             const speed = item.loaded / elapsed;
             const remaining = speed ? Math.ceil((item.total - item.loaded) / speed) : 0;
-            status.textContent = ({ queued: '等待发送', done: '已发送', cancelled: '已取消', failed: item.error })[item.state]
+            status.textContent = item.state === 'uploading' && item.phase === 'preparing' ? '正在读取文件…' : ({ queued: '等待发送', done: '已发送', cancelled: '已取消', failed: item.error })[item.state]
                 || (item.total > 0 && item.loaded >= item.total ? '上传完成，等待对方确认接收…' : `${bytes(item.loaded)} / ${bytes(item.total)} · ${bytes(speed)}/s · 剩余 ${remaining} 秒`);
             const button = item.row.querySelector('button');
             button.hidden = item.state === 'done';
@@ -49,6 +49,19 @@
         function start(item) {
             item.state = 'uploading'; item.started = now(); active++;
             try {
+                if (sendNative) {
+                    const controller = new AbortController();
+                    item.xhr = { abort: () => controller.abort() };
+                    sendNative(item.file, item.context, (loaded, total, phase) => {
+                        if (item.state !== 'uploading') return;
+                        item.loaded = loaded; item.total = total; item.phase = phase; render(item);
+                    }, controller.signal).then(result => {
+                        if (item.state !== 'uploading') return;
+                        if (result.success === false || !(result.fileId || result.id)) throw new Error('服务端未确认文件，请重试');
+                        item.result = result; item.loaded = item.total; settle(item, 'done');
+                    }).catch(error => settle(item, controller.signal.aborted ? 'cancelled' : 'failed', String(error.message || error)));
+                    render(item); return;
+                }
                 const xhr = item.xhr = createXHR();
                 xhr.upload.addEventListener('progress', event => {
                     if (item.state !== 'uploading' || !event.lengthComputable) return;

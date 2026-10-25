@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const vm = require('node:vm');
 
-function setup() {
+function setup({ sendNative } = {}) {
     const requests = [], completed = [], timers = [];
     class XHR {
         constructor() { this.handlers = {}; this.upload = { addEventListener() {} }; requests.push(this); }
@@ -16,9 +16,9 @@ function setup() {
             this.status = status; this.responseText = JSON.stringify(data); this.handlers.load();
         }
     }
-    const context = { FormData, setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {} };
+    const context = { FormData, AbortController, setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {} };
     vm.runInNewContext(readFileSync('app/src/main/assets/web/upload-queue.js', 'utf8'), context);
-    const queue = context.WenBox.createUploadQueue({ createXHR: () => new XHR(), concurrency: 2, onComplete: (...args) => completed.push(args) });
+    const queue = context.WenBox.createUploadQueue({ createXHR: () => new XHR(), concurrency: 2, sendNative, onComplete: (...args) => completed.push(args) });
     const add = (name = '中文 | sample.txt', extra = {}) => {
         const file = new Blob(['hello']); file.name = name;
         return queue.enqueue(file, { url: '/api/upload', token: 'room-token', revision: 1, ...extra });
@@ -77,5 +77,22 @@ test('empty files succeed but a 200 response without a file id does not publish 
     assert.equal(queue.getState(id), 'failed'); assert.equal(completed.length, 0);
     queue.retry(id); requests[1].finish(200, { success: true, fileId: 'empty-file', size: 0 });
     await Promise.resolve();
+    assert.equal(queue.getState(id), 'done'); assert.equal(completed.length, 1);
+});
+
+test('native queue preserves captured credentials and cancels without publishing late completion', async () => {
+    const pending = [];
+    const { queue, add, requests, completed } = setup({ sendNative: (file, context, progress, signal) => new Promise(resolve => pending.push({ file, context, progress, signal, resolve })) });
+    const id = add('截图.png', { url: 'http://169.254.1.2:9527/api/upload', token: 'private-token' });
+    assert.equal(requests.length, 0);
+    assert.equal(pending[0].context.token, 'private-token');
+    queue.cancel(id); assert.equal(pending[0].signal.aborted, true);
+    pending[0].resolve({ success: true, fileId: 'late' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(completed.length, 0);
+    queue.retry(id);
+    assert.equal(pending[1].context.url, 'http://169.254.1.2:9527/api/upload');
+    pending[1].resolve({ success: true, fileId: 'retry' });
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(queue.getState(id), 'done'); assert.equal(completed.length, 1);
 });

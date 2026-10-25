@@ -29,7 +29,7 @@ function setup({ native, browser, execResult = true, fetchImpl = fetch, document
             body: { appendChild() {} }, execCommand: () => { events.push(['copy', field.value]); return execResult; },
             ...documentExtra
         },
-        fetch: fetchImpl, AbortController, Response, setTimeout, clearTimeout
+        fetch: fetchImpl, URL, Headers, Uint8Array, atob, btoa, DOMException, AbortController, Response, setTimeout, clearTimeout
     };
     vm.runInNewContext(source, context);
     return { ...context.window.WenBox, events, window: context.window, document: context.document };
@@ -248,4 +248,33 @@ test('scheduler bump discards in-flight polling state', () => {
     assert.equal(scheduler.revision, before + 1, '房间切换应递增 revision');
     scheduler.dispose();
     assert.equal(scheduler.revision, before + 1);
+});
+
+test('secure Tauri APIs and images use IPC without browser network requests', async () => {
+    const api = setup({ fetchImpl: () => { throw Error('browser networking must not be used'); } });
+    api.window.location = { protocol: 'https:', hostname: 'tauri.localhost' };
+    const calls = [];
+    api.window.__TAURI__ = { invoke: async (command, args) => {
+        calls.push([command, args]);
+        return { status: 200, headers: { 'content-type': args.image ? 'image/png' : 'application/json' }, body: btoa(args.image ? 'bytes' : '{}') };
+    } };
+    const target = 'http://169.254.1.2:9527/api/download/a?token=abc';
+    assert.equal(await api.resolveRequestUrl(target), 'data:image/png;base64,' + btoa('bytes'));
+    await api.fetchWithTimeout('http://169.254.1.2:9527/api/room/heartbeat', { method: 'POST', body: '{}' });
+    assert.equal(calls[0][0], 'native_request');
+    assert.equal(calls[0][1].url, target);
+    assert.equal(calls[1][1].body, '{}');
+});
+
+test('native image history limits concurrent loads and releases failed slots', async () => {
+    const api = setup();
+    api.window.location = { protocol: 'https:', hostname: 'tauri.localhost' };
+    let active = 0, peak = 0;
+    api.window.__TAURI__ = { invoke: async () => {
+        active++; peak = Math.max(peak, active);
+        await new Promise(resolve => setTimeout(resolve, 5)); active--;
+        return { status: 200, headers: { 'content-type': 'image/png' }, body: btoa('image') };
+    } };
+    await Promise.all(Array.from({ length: 9 }, (_, i) => api.resolveRequestUrl(`http://169.254.1.2/api/download/${i}`)));
+    assert.equal(peak, 3); assert.equal(active, 0);
 });

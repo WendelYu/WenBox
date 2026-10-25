@@ -82,6 +82,12 @@ jobs:
         with:
           node-version: 24
 
+      - name: Verify secure WebView native image and file transport
+        run: |
+          npm install --ignore-scripts --no-save --package-lock=false playwright@1.62.1
+          npx playwright install chromium
+          node scripts/check-native-transport.cjs
+
       - name: Build Tauri Windows EXE
         run: npx @tauri-apps/cli@1.5 build
 

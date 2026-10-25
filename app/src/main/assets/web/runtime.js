@@ -69,7 +69,82 @@
         }
     }
 
+    function nativeInvoke(command, args) {
+        const invoke = window.__TAURI__?.invoke?.bind(window.__TAURI__) || window.__TAURI_INVOKE__;
+        return invoke(command, args);
+    }
+    function needsNativeTransport() {
+        return !!(window.__TAURI__?.invoke || window.__TAURI_INVOKE__)
+            && (window.location?.protocol === 'tauri:' || window.location?.hostname === 'tauri.localhost');
+    }
+    function nativeApiUrl(url) { return needsNativeTransport() && /^http:\/\//i.test(String(url)) && new URL(url).pathname.startsWith('/api/'); }
+    async function nativeResponse(url, options = {}, image = false) {
+        const headers = Object.fromEntries(new Headers(options.headers || {}).entries());
+        const result = await nativeInvoke('native_request', { url: String(url), method: options.method || 'GET', headers,
+            body: options.body == null ? null : String(options.body), image });
+        const bytes = Uint8Array.from(atob(result.body), c => c.charCodeAt(0));
+        return new Response([204, 205, 304].includes(result.status) ? null : bytes, { status: result.status, headers: result.headers });
+    }
+    let activeImages = 0;
+    const imageWaiters = [];
+    async function resolveRequestUrl(url) {
+        if (!nativeApiUrl(url)) return url;
+        if (activeImages >= 3) await new Promise(resolve => imageWaiters.push(resolve));
+        else activeImages++;
+        try {
+        const response = await nativeResponse(url, {}, true);
+        if (!response.ok) throw new Error(`图片加载失败（HTTP ${response.status}）`);
+        const type = (response.headers.get('content-type') || '').split(';')[0];
+        if (!type.startsWith('image/')) throw new Error('文件不是可预览的图片');
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        return 'data:' + type + ';base64,' + encodeBytes(bytes);
+        } finally {
+            const next = imageWaiters.shift();
+            if (next) next(); else activeImages--;
+        }
+    }
+    function encodeBytes(bytes) {
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+        return btoa(binary);
+    }
+    async function nativeUpload(file, context, onProgress, signal) {
+        let id, timer;
+        const check = () => { if (signal.aborted) throw new DOMException('已取消', 'AbortError'); };
+        const cancel = () => { if (id) nativeInvoke('native_upload_cancel', { id }).catch(() => {}); };
+        signal.addEventListener('abort', cancel, { once: true });
+        try {
+            check();
+            id = await nativeInvoke('native_upload_begin', { url: context.url, name: file.name, size: file.size, token: context.token || null });
+            check(); onProgress(0, file.size, 'preparing');
+            for (let offset = 0; offset < file.size; offset += 512 * 1024) {
+                check();
+                const bytes = new Uint8Array(await file.slice(offset, offset + 512 * 1024).arrayBuffer());
+                check();
+                await nativeInvoke('native_upload_chunk', { id, offset, bytes: encodeBytes(bytes) });
+            }
+            check();
+            onProgress(0, file.size, 'uploading');
+            timer = setInterval(() => nativeInvoke('native_upload_progress', { id }).then(loaded => { if (!signal.aborted) onProgress(loaded, file.size); }).catch(() => {}), 250);
+            const result = await nativeInvoke('native_upload_finish', { id });
+            check(); onProgress(file.size, file.size); return result;
+        } finally {
+            clearInterval(timer); signal.removeEventListener('abort', cancel); cancel();
+        }
+    }
     async function fetchOnce(url, options = {}, timeout = 4000) {
+        if (nativeApiUrl(url)) {
+            const signal = options.signal;
+            if (signal?.aborted) throw new DOMException('已取消', 'AbortError');
+            let timer, abort;
+            try {
+                return await Promise.race([nativeResponse(url, options), new Promise((_, reject) => {
+                    abort = () => reject(new DOMException('已取消', 'AbortError'));
+                    signal?.addEventListener('abort', abort, { once: true });
+                    timer = setTimeout(() => reject(new Error('请求超时')), timeout);
+                })]);
+            } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+        }
         if (options.signal) return fetch(url, options);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeout);
@@ -183,6 +258,9 @@
 
     window.WenBox = {
         copyText,
+        resolveRequestUrl,
+        needsNativeTransport,
+        nativeUpload,
         singleFlight,
         fetchWithTimeout,
         fetchOnce,

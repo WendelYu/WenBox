@@ -1,6 +1,7 @@
 (function () {
     // ---------------- 全局通知 Toast ----------------
-    const { copyText, singleFlight, fetchWithTimeout, listChanged, scheduler } = window.WenBox;
+    const { copyText, singleFlight, fetchWithTimeout, listChanged, scheduler, resolveRequestUrl } = window.WenBox;
+    const fetch = fetchWithTimeout;
     let uploadQueue = null;
     const cooldown = window.WenBoxUI.createCooldown();
     const outbox = window.WenBoxUI.createOutbox();
@@ -1065,7 +1066,7 @@
             const url = `${currentTargetBaseUrl}/api/room/leave`;
             const payload = JSON.stringify({ token: roomState.token });
             try {
-                if (navigator.sendBeacon) {
+                if (navigator.sendBeacon && !window.WenBox.needsNativeTransport()) {
                     const blob = new Blob([payload], { type: 'application/json' });
                     navigator.sendBeacon(url, blob);
                 } else {
@@ -1939,7 +1940,9 @@
 
     // 远程文件下载
     window.downloadRemoteFile = async function(fileId, fileName) {
-        const tokenQuery = roomState.token ? `?token=${encodeURIComponent(roomState.token)}` : '';
+        const token = getEffectiveRoomToken();
+        const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+        const downloadBase = currentTargetBaseUrl || getApiOrigin() || window.location.origin;
         const tauriDialog = getTauriDialog();
         const invoke = getTauriInvoke();
         if (tauriDialog && invoke) {
@@ -1953,22 +1956,23 @@
                 const dir = savePath.substring(0, Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')));
                 const name = savePath.substring(Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')) + 1);
 
-                const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : (getApiOrigin() || 'http://127.0.0.1:9527')) + `/api/download/${fileId}${tokenQuery}`;
+                const downloadUrl = downloadBase + `/api/download/${encodeURIComponent(fileId)}${tokenQuery}`;
                 await invoke('save_remote_file_to_directory', {
                     downloadUrl: downloadUrl,
                     dirPath: dir,
                     folderName: '',
                     fileName: name,
-                    token: roomState.token || null
+                    token: token || null
                 });
                 showToast(`已成功保存到: ${savePath}`);
                 return;
             } catch (e) {
-                console.error('Tauri save remote file error:', e);
+                showToast(`保存失败：${e.message || e}`);
+                return;
             }
         }
 
-        const dlUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + `/api/download/${fileId}${tokenQuery}`;
+        const dlUrl = downloadBase + `/api/download/${encodeURIComponent(fileId)}${tokenQuery}`;
         const a = document.createElement('a');
         a.href = dlUrl;
         a.download = fileName;
@@ -2785,17 +2789,18 @@
         }
     }
 
-    function resolveChatUrl(url) {
-        if (!url) return '';
-        if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) return url;
-        const base = currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin();
-        let resolved = base.replace(/\/+$/, '') + (url.startsWith('/') ? url : '/' + url);
-        // 密码保护房间里，聊天图片/文件链接必须携带房间令牌，否则访客端全部 401
-        const token = getEffectiveRoomToken();
-        if (token && resolved.includes('/api/')) {
-            resolved += (resolved.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
-        }
-        return resolved;
+    function resolveChatUrl(value) {
+        if (!value) return '';
+        if (value.startsWith('data:')) return value;
+        const base = (currentTargetBaseUrl || getApiOrigin() || window.location.origin).replace(/\/+$/, '');
+        try {
+            const url = new URL(value, base + '/');
+            const token = getEffectiveRoomToken();
+            if (token && url.origin === new URL(base).origin && url.pathname.startsWith('/api/download/')) {
+                url.searchParams.set('token', token);
+            }
+            return url.href;
+        } catch (_) { return ''; }
     }
 
     function getFileIconByExtension(name) {
@@ -2885,22 +2890,41 @@
 
             const img = document.createElement('img');
             img.className = 'chat-img-thumb';
-            img.src = imgSrc;
             img.alt = '聊天图片';
             img.loading = 'lazy';
 
             const overlay = document.createElement('span');
             overlay.className = 'chat-img-overlay';
-            overlay.textContent = ' 查看原图';
+            overlay.textContent = '加载中…';
+            let imageFailed = false;
+            const loadImage = async () => {
+                imageFailed = false; overlay.textContent = '加载中…';
+                try { img.src = await resolveRequestUrl(imgSrc); }
+                catch (error) { imageFailed = true; overlay.textContent = '加载失败，点击重试'; thumbWrap.title = String(error.message || error); }
+            };
+            img.addEventListener('load', () => { imageFailed = false; overlay.textContent = '查看原图'; thumbWrap.title = '点击查看大图'; });
+            img.addEventListener('error', () => { imageFailed = true; overlay.textContent = '加载失败，点击重试'; });
+            loadImage();
 
             thumbWrap.appendChild(img);
             thumbWrap.appendChild(overlay);
             thumbWrap.addEventListener('click', (e) => {
                 e.stopPropagation();
-                openChatImageModal(imgSrc);
+                if (imageFailed) loadImage();
+                else openChatImageModal(img.src, imgSrc);
             });
 
             contentWrap.appendChild(thumbWrap);
+            if (getTauriInvoke() && /^https?:/.test(imgSrc) && new URL(imgSrc).pathname.startsWith('/api/download/')) {
+                const save = document.createElement('button');
+                save.type = 'button'; save.className = 'btn btn--ghost btn--sm'; save.textContent = '保存图片';
+                save.addEventListener('click', () => {
+                    const type = /^data:image\/([a-z0-9.+-]+)/i.exec(img.src)?.[1];
+                    const ext = type === 'jpeg' ? 'jpg' : (type || 'png');
+                    window.downloadRemoteFile(decodeURIComponent(new URL(imgSrc).pathname.slice('/api/download/'.length)), `wenbox_img_${Date.now()}.${ext}`);
+                });
+                contentWrap.appendChild(save);
+            }
         }
         // 2. 判断是否为文件卡片消息 [file:name|size|url]
         else if (content.startsWith('[file:') && content.endsWith(']')) {
@@ -2909,7 +2933,7 @@
             const fileName = parts[0] || '未知文件';
             const fileSize = parts[1] || '';
             const rawUrl = parts[2] || '';
-            const downloadUrl = resolveChatUrl(rawUrl);
+            const downloadUrl = isSafeChatImageUrl(rawUrl) && !/^data:/i.test(rawUrl) ? resolveChatUrl(rawUrl) : '';
 
             const fileCard = document.createElement('div');
             fileCard.className = 'chat-file-card';
@@ -2935,13 +2959,20 @@
 
             const downloadLink = document.createElement('a');
             downloadLink.className = 'chat-file-download-btn';
-            downloadLink.href = downloadUrl;
+            downloadLink.href = downloadUrl || '#';
             downloadLink.download = fileName;
             downloadLink.target = '_blank';
             downloadLink.rel = 'noopener noreferrer';
             downloadLink.referrerPolicy = 'no-referrer';
             downloadLink.innerHTML = '⬇ 下载';
-            downloadLink.addEventListener('click', (e) => e.stopPropagation());
+            downloadLink.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (!downloadUrl) { e.preventDefault(); showToast('文件地址无效或不属于当前房间'); return; }
+                if (getTauriInvoke() && isSafeChatImageUrl(rawUrl) && new URL(downloadUrl).pathname.startsWith('/api/download/')) {
+                    e.preventDefault();
+                    window.downloadRemoteFile(decodeURIComponent(new URL(downloadUrl).pathname.slice('/api/download/'.length)), fileName);
+                }
+            });
 
             fileCard.appendChild(fileIcon);
             fileCard.appendChild(fileDetails);
@@ -3150,11 +3181,17 @@
     async function sendChatDocFile(file) { if (file) uploadFiles([file]); }
 
     // 图片全屏预览 Modal
-    function openChatImageModal(src) {
+    function openChatImageModal(src, original = src) {
         if (!chatImageModal || !chatModalImage) return;
         chatModalImage.src = src;
         if (chatModalDownloadBtn) {
             chatModalDownloadBtn.href = src;
+            chatModalDownloadBtn.onclick = event => {
+                if (getTauriInvoke() && /^https?:/.test(original) && new URL(original).pathname.startsWith('/api/download/')) {
+                    event.preventDefault();
+                    window.downloadRemoteFile(decodeURIComponent(new URL(original).pathname.slice('/api/download/'.length)), chatModalDownloadBtn.download);
+                }
+            };
             let ext = 'png';
             const mimeMatch = /data:image\/([a-z0-9.+-]+)[;,]/i.exec(src || '');
             if (mimeMatch) {
@@ -3186,8 +3223,15 @@
         chatModalCopyBtn.addEventListener('click', async () => {
             try {
                 if (chatModalImage && chatModalImage.src) {
-                    const response = await fetch(chatModalImage.src);
-                    const blob = await response.blob();
+                    let blob;
+                    if (chatModalImage.src.startsWith('data:')) {
+                        const [header, payload] = chatModalImage.src.split(',');
+                        const type = header.slice(5).split(';')[0];
+                        blob = new Blob([Uint8Array.from(atob(payload), c => c.charCodeAt(0))], { type });
+                    } else {
+                        const response = await fetch(chatModalImage.src);
+                        blob = await response.blob();
+                    }
                     await navigator.clipboard.write([
                         new ClipboardItem({ [blob.type]: blob })
                     ]);
@@ -3265,6 +3309,7 @@
 
     uploadQueue = window.WenBox.createUploadQueue({
         container: document.getElementById('uploadQueue'), history: document.getElementById('sentUploadList'), count: document.getElementById('sentUploadCount'),
+        sendNative: window.WenBox.needsNativeTransport() ? window.WenBox.nativeUpload : null,
         onComplete: async (result, file, context) => {
             if (context.revision !== roomRevision) return;
             const url = `/api/download/${encodeURIComponent(result.fileId || result.id)}`;
