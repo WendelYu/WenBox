@@ -446,6 +446,7 @@ class LanServer(
                         put("port", serverPort)
                         put("running", true)
                         put("platform", "Android")
+                        put("version", com.landrop.BuildConfig.VERSION_NAME)
                         put("room", roomJson)
                     }
                     newFixedLengthResponse(
@@ -923,6 +924,7 @@ class LanServer(
             put("port", serverPort)
             put("running", true)
             put("platform", "Android")
+            put("version", com.landrop.BuildConfig.VERSION_NAME)
         }
         val respBytes = respJson.toString().toByteArray(Charsets.UTF_8)
         return newFixedLengthResponse(

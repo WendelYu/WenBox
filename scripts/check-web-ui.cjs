@@ -34,7 +34,7 @@ async function main() {
         const chunks = []; for await (const chunk of req) chunks.push(chunk);
         const body = Buffer.concat(chunks);
         const json = () => { try { return JSON.parse(body.toString()); } catch (_) { return {}; } };
-        if (url.pathname === '/api/status') return send({ ip: '192.168.1.8', all_ips: ['192.168.1.8', '192.168.2.8'], device: '测试电脑', port: 9527, platform: 'macOS' });
+        if (url.pathname === '/api/status') return send({ running: true, version: require('../package.json').version, ip: '192.168.1.8', all_ips: ['192.168.1.8', '192.168.2.8'], device: '测试电脑', port: 9527, platform: 'macOS' });
         if (url.pathname === '/api/room/status') return send({ ...room, isActive: active, isHost: req.headers['x-host-token'] === 'host-token' });
         if (url.pathname === '/api/discovered_rooms') { if (++discoveries === 1) await new Promise(resolve => setTimeout(resolve, 900)); return send({ rooms: [{ ...room, ip: '127.0.0.1', port: server.address().port, hostPlatform: 'macOS' }] }); }
         if (url.pathname === '/api/room/create') { active = true; Object.assign(room, json()); return send({ ...room, hostToken: 'host-token' }); }
@@ -169,6 +169,14 @@ async function main() {
         await row('retry-report.txt').locator('[data-action="retry-upload"]').click();
         await page.waitForFunction(() => document.querySelectorAll('#uploadQueue [data-state="done"]').length === 2);
         assert.equal(await row('slow-cancel.txt').getAttribute('data-state'), 'cancelled');
+        await page.evaluate(() => {
+            const data = new DataTransfer();
+            data.items.add(new File(['drag fixture'], '拖入文件.txt', { type: 'text/plain' }));
+            document.dispatchEvent(new DragEvent('dragenter', { bubbles: true, dataTransfer: data }));
+            document.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
+        });
+        await page.waitForFunction(() => [...document.querySelectorAll('#uploadQueue .upload-row')].some(row => row.textContent.includes('拖入文件.txt') && row.dataset.state === 'done'));
+        assert.equal(await page.locator('#chatDropOverlay').isVisible(), false);
         await page.locator('.chat-file-card').first().waitFor();
         const downloadEvent = page.waitForEvent('download');
         await page.locator('.chat-file-download-btn').first().click();

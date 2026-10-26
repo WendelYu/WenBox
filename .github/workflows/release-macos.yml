@@ -37,12 +37,13 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSExceptionDomains:169.254.0.0/16:NSExceptionAllowsInsecureHTTPLoads' src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/Info.plist
       - name: Package universal macOS downloads
         run: |
+          VERSION=$(node -p "require('./package.json').version")
           mkdir -p release-macos
-          ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app release-macos/WenBox-macOS-universal.zip
-          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg release-macos/WenBox-macOS-universal.dmg
+          ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app release-macos/WenBox-macOS-v${VERSION}-universal.zip
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg release-macos/WenBox-macOS-v${VERSION}-universal.dmg
           lipo src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/MacOS/WenBox -verify_arch arm64 x86_64
           cd release-macos
-          shasum -a 256 WenBox-macOS-universal.dmg WenBox-macOS-universal.zip > SHA256SUMS-macOS.txt
+          shasum -a 256 WenBox-macOS-v${VERSION}-universal.dmg WenBox-macOS-v${VERSION}-universal.zip > SHA256SUMS-macOS-v${VERSION}.txt
       - uses: actions/upload-artifact@v4
         with:
           name: macos-app

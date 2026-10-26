@@ -143,6 +143,9 @@ jobs:
           name: macos-app
           path: release-assets
 
+      - name: Prepare current version release notes
+        run: node scripts/release-notes.cjs
+
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         env:
@@ -152,6 +155,6 @@ jobs:
           name: Release ${{ inputs.tag || github.ref_name }}
           draft: false
           prerelease: false
-          body_path: docs/RELEASE_NOTES.md
-          generate_release_notes: true
+          body_path: release_notes.md
+          generate_release_notes: false
           files: release-assets/*

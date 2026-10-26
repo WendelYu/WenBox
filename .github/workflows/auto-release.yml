@@ -158,7 +158,7 @@ jobs:
           echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Prepare Release Notes
-        run: cp docs/RELEASE_NOTES.md release_notes.md
+        run: node scripts/release-notes.cjs
 
       - name: Create or Update Release
         uses: softprops/action-gh-release@v2

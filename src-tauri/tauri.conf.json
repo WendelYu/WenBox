@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "WenBox",
-    "version": "1.4.2"
+    "version": "1.4.3"
   },
   "tauri": {
     "allowlist": {
@@ -76,7 +76,8 @@
         "minWidth": 800,
         "minHeight": 600,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "fileDropEnabled": false
       }
     ]
   }

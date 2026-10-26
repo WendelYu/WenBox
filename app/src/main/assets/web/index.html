@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
+    <meta name="wenbox-version" content="1.4.3">
     <title>WenBox · 文件与消息直传</title>
     <script src="theme.js"></script>
     <link rel="icon" type="image/png" href="logo.png">
@@ -92,7 +93,7 @@
         <header class="header">
             <div class="workspace-heading"><h1 id="workspaceTitle">快传工作台</h1><p id="workspaceSubtitle">文件与消息，在设备间轻松流转</p></div>
             <div class="device-status">
-                <span class="local-label"><span class="status-dot"></span><span id="phoneName">本地直传</span></span>
+                <span class="local-label" id="serviceHealth" role="status" aria-live="polite" data-state="checking"><span class="status-dot"></span><span id="clientVersion"></span><span id="serviceHealthText">正在检查服务…</span></span><button id="retryServiceHealth" class="btn btn--ghost btn--sm" type="button" hidden>重新检测</button><span id="phoneName" hidden></span>
                 <button id="btnThemeToggle" class="btn btn--ghost btn--icon" type="button" title="切换深色 / 浅色主题" aria-label="切换深色或浅色主题"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-sun"></use></svg></button>
                 <button id="btnChangeNicknameChat" class="btn btn--ghost btn--sm identity-button" type="button" aria-label="修改昵称"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-user"></use></svg><span id="chatMyNicknameDisplay">我的昵称</span></button>
             </div>
@@ -672,14 +673,16 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="runtime.js"></script>
-    <script src="upload-queue.js"></script><script src="ui-state.js"></script>
-    <script src="app.js"></script>
 <div id="chatDropOverlay" class="chat-drop-overlay" hidden>
                     <div class="chat-drop-content">
                         <span class="chat-drop-icon"></span>
                         <p>释放文件以直接发送到聊天室</p>
                         <span>支持任意图片、工程文档、安装包或压缩文件</span>
                     </div>
-                </div></body>
+                </div>
+    <script src="runtime.js"></script>
+    <script src="upload-queue.js"></script><script src="ui-state.js"></script>
+    <script src="app.js"></script>
+    <script src="service-health.js"></script>
+</body>
 </html>

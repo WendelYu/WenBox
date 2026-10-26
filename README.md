@@ -94,7 +94,7 @@ WenBox 当前负责**传输**，不监听构建目录、不自动发送新产物
 前往 [GitHub Releases](https://github.com/WendelYu/WenBox/releases)，选择已成功发布的版本。源码或工作流更新不代表所有平台安装包已经构建完成。
 
 - **Windows 10 / 11**：优先下载文件名含 `Installer` 的 EXE，安装包配置为携带离线 WebView2 安装器。裸 EXE 需要电脑已安装 WebView2，不适合缺少运行时的离线现场。单位安装策略仍需事先确认。
-- **macOS 12.3+**：下载 `WenBox-macOS-universal.dmg`，打开后拖入“应用程序”；也可解压同名 ZIP。通用包包含 Intel 与 Apple Silicon 两种架构，附有 `SHA256SUMS-macOS.txt`。
+- **macOS 12.3+**：下载 `WenBox-macOS-v版本号-universal.dmg`，打开后拖入“应用程序”；也可解压同名 ZIP。通用包包含 Intel 与 Apple Silicon 两种架构，附有 `SHA256SUMS-macOS-v版本号.txt`。
 - **Android 8.0+**：下载 APK 安装。当前工作流输出 Debug APK；后台传输会受系统电池优化和厂商策略影响，不保证永久保活。
 - **浏览器**：访问房主的 `http://IP:9527`，无需单独安装。浏览器访问的是房主提供的网页，不会独立启动 UDP 发现服务。Linux / iPhone / iPad 可使用可用的现代浏览器，当前不提供对应原生安装包。
 
@@ -115,7 +115,7 @@ WenBox 当前负责**传输**，不监听构建目录、不自动发送新产物
 
 此命令只移除 WenBox 的下载隔离标记，不会修复真正损坏的文件，也不等同于 Apple 公证。若提示“无法验证开发者”，可先到“系统设置 → 隐私与安全性 → 仍要打开”。若提示会损坏电脑/发现恶意软件，不要绕过。
 
-如果是 **DMG 本身无法挂载** 或以上方法无效，请重新下载或改用 ZIP，并与同页 `SHA256SUMS-macOS.txt` 核对校验值；不要反复执行解除隔离命令。
+如果是 **DMG 本身无法挂载** 或以上方法无效，请重新下载或改用 ZIP，并与同页 `SHA256SUMS-macOS-v版本号.txt` 核对校验值；不要反复执行解除隔离命令。
 
 参考：[Apple 安全打开应用说明](https://support.apple.com/102445)、[Tauri macOS 签名与公证](https://v1.tauri.app/v1/guides/distribution/sign-macos/)。
 
@@ -229,3 +229,5 @@ Windows 已有 `169.254.x.x` 地址但 WenBox 没显示时，请先升级到 v1.
 - `0.0.0.0:9527 LISTENING` 表示服务监听所有 IPv4 接口，但不能证明其他电脑能通过防火墙访问。
 - 多网卡时，请选择卡片上实际可达的地址；WiFi 和网线使用各自的地址，直连地址不需要默认网关。
 - 如地址齐全但仍超时，检查 Windows 防火墙是否允许当前 WenBox 程序在对应网络配置文件上接收 TCP 9527 和 UDP 9528，以及 macOS 是否允许 WenBox 访问本地网络。无需关闭整个防火墙。
+
+客户端顶部显示当前版本，并每 5 秒检查服务状态。显示“服务未就绪”时可点击“重新检测”；服务版本与客户端版本不一致时，请退出旧客户端再打开新版。服务正常仅表示本机接口可用，不代表对端防火墙已放行。

@@ -37,10 +37,12 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSExceptionDomains:169.254.0.0/16:NSExceptionAllowsInsecureHTTPLoads' src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/Info.plist
       - name: Preserve app permissions in ZIP
         if: github.event_name == 'workflow_dispatch'
-        run: ditto -c -k --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app WenBox-macOS-universal.zip
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          ditto -c -k --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app WenBox-macOS-v${VERSION}-universal.zip
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'workflow_dispatch'
         with:
           name: WenBox-macOS-universal
-          path: WenBox-macOS-universal.zip
+          path: WenBox-macOS-v*-universal.zip
           retention-days: 7
