@@ -361,6 +361,18 @@ async function main() {
         await page.locator('#btnCloseChatImageModal').click();
         await imageCard.locator('.copy-btn').click();
         await page.waitForFunction(() => window.imageCalls.filter(c => c.cmd === 'copy_image').length === 2);
+        // Old inline-image messages must save their original bytes without a CSP-blocked fetch(data:).
+        messages.push({ id: String(++serial), senderName: '旧图片', content: '[image:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=]', timestamp: Date.now() + serial });
+        await page.evaluate(() => { delete window.__TAURI__; WenBox.scheduler.runNow(); });
+        await page.waitForFunction(() => document.querySelectorAll('.chat-img-thumb').length === 3);
+        await page.locator('.chat-img-thumb').last().click();
+        await page.evaluate(() => {
+            window.__TAURI__ = { dialog: { save: async () => '/tmp/inline.png' }, invoke: async (cmd, args) => { window.imageCalls.push({ cmd, args }); } };
+        });
+        await page.locator('#chatModalDownloadBtn').click();
+        await page.waitForFunction(() => window.imageCalls.some(c => c.cmd === 'save_file_to_directory'));
+        assert.ok((await page.evaluate(() => window.imageCalls.find(c => c.cmd === 'save_file_to_directory').args.bytesBase64)).startsWith('iVBOR'));
+        await page.locator('#btnCloseChatImageModal').click();
         await page.evaluate(() => { delete window.__TAURI__; });
         await page.locator('#btnLeaveRoom').click(); await page.locator('#appConfirmOkBtn').click();
         await page.waitForFunction(() => document.body.dataset.roomMode === 'client');

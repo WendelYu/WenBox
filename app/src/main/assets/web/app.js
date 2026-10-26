@@ -3169,7 +3169,15 @@
                     } else if (getTauriInvoke() && getTauriDialog()) {
                         const path = await getTauriDialog().save({ defaultPath: chatModalDownloadBtn.download, title: '保存原图' });
                         if (!path) return;
-                        const response = await fetch(src); const bytes = await blobToBase64(await response.blob());
+                        let bytes;
+                        if (src.startsWith('data:')) {
+                            const comma = src.indexOf(',');
+                            bytes = src.slice(0, comma).includes(';base64') ? src.slice(comma + 1) : await blobToBase64(new Blob([decodeURIComponent(src.slice(comma + 1))]));
+                        } else {
+                            const response = await fetchWithTimeout(original);
+                            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                            bytes = await blobToBase64(await response.blob());
+                        }
                         const split = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
                         await getTauriInvoke()('save_file_to_directory', { dirPath: path.slice(0, split), folderName: '', fileName: path.slice(split + 1), bytesBase64: bytes });
                         showToast('原图已保存');
