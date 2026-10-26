@@ -123,7 +123,12 @@
             }
             items.clear(); active = 0; if (count) count.textContent = '0';
         }
-        return { enqueue, cancel, retry, clear, getState: id => items.get(id)?.state };
+        function updateToken(revision, token) {
+            for (const item of items.values()) {
+                if (item.context.revision === revision && item.state !== 'done') item.context.token = token;
+            }
+        }
+        return { enqueue, cancel, retry, clear, updateToken, getState: id => items.get(id)?.state };
     }
     root.WenBox = root.WenBox || {}; root.WenBox.createUploadQueue = createUploadQueue;
 })(typeof window === 'undefined' ? globalThis : window);

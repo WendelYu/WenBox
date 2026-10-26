@@ -4,8 +4,8 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 test('health checks detect failure, recovery and stale service versions', async () => {
     const nodes = Object.fromEntries(['serviceHealth','serviceHealthText','retryServiceHealth','clientVersion'].map(id => [id, { dataset: {}, addEventListener() {} }]));
-    let next = { running: true, version: '1.4.3', port: 9527 }, poll, requested;
-    const context = { document: { getElementById: id => nodes[id], querySelector: () => ({ content: '1.4.3' }) }, location: { hostname: 'tauri.localhost' }, Date, setInterval: fn => { poll = fn; }, window: { addEventListener() {}, WenBox: { fetchWithTimeout: async url => { requested = url; if (next instanceof Error) throw next; return { ok: true, json: async () => next }; } } } };
+    let next = { running: true, version: require('../package.json').version, port: 9527 }, poll, requested;
+    const context = { document: { getElementById: id => nodes[id], querySelector: () => ({ content: require('../package.json').version }) }, location: { hostname: 'tauri.localhost' }, Date, setInterval: fn => { poll = fn; }, window: { addEventListener() {}, WenBox: { fetchWithTimeout: async url => { requested = url; if (next instanceof Error) throw next; return { ok: true, json: async () => next }; } } } };
     vm.runInNewContext(fs.readFileSync('app/src/main/assets/web/service-health.js', 'utf8'), context);
     await new Promise(setImmediate);
     assert.match(requested, /^http:\/\/127.0.0.1:9527\/api\/status/);
@@ -17,7 +17,7 @@ test('health checks detect failure, recovery and stale service versions', async 
     assert.equal(nodes.serviceHealth.dataset.state, 'warning');
     next = { running: false }; await poll();
     assert.equal(nodes.serviceHealth.dataset.state, 'error');
-    next = { running: true, version: '1.4.3' }; await poll();
+    next = { running: true, version: require('../package.json').version }; await poll();
     assert.equal(nodes.serviceHealth.dataset.state, 'ready');
     assert.equal(nodes.retryServiceHealth.hidden, true);
 });

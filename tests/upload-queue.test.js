@@ -96,3 +96,13 @@ test('native queue preserves captured credentials and cancels without publishing
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(queue.getState(id), 'done'); assert.equal(completed.length, 1);
 });
+
+test('reconnecting refreshes retry credentials only for the same room revision', () => {
+    const { queue, add, requests } = setup();
+    const current = add('current.txt'), previous = add('previous.txt', { revision: 2 });
+    requests[0].finish(401); requests[1].finish(401);
+    queue.updateToken(1, 'renewed-token');
+    queue.retry(current); queue.retry(previous);
+    assert.equal(requests[2].token, 'renewed-token');
+    assert.equal(requests[3].token, 'room-token');
+});

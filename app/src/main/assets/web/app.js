@@ -48,12 +48,28 @@
 
     function showToast(msg) {
         if (!toast) return;
-        toast.textContent = msg;
+        const message = String(msg);
+        const error = /失败|错误|无法|异常|未就绪|404|断开/.test(message);
+        toast.replaceChildren();
+        const content = document.createElement('span');
+        content.className = 'toast-message'; content.textContent = message;
+        toast.appendChild(content);
+        if (error) {
+            const copy = document.createElement('button'); copy.type = 'button';
+            copy.className = 'btn btn--secondary btn--sm'; copy.textContent = '复制错误详情';
+            copy.addEventListener('click', async () => {
+                try { await copyText(message); copy.textContent = '已复制'; }
+                catch (_) { copy.textContent = '请选择文字复制'; }
+            });
+            const close = document.createElement('button'); close.type = 'button';
+            close.className = 'btn btn--ghost btn--sm'; close.textContent = '关闭';
+            close.addEventListener('click', () => toast.classList.remove('show'));
+            toast.append(copy, close);
+        }
         toast.classList.add('show');
         clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
+        if (!error) toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
     }
-
 
     async function copyWithFeedback(text, message = '已复制到剪贴板') {
         try {
@@ -235,6 +251,33 @@
     let roomRevision = 0;
     let currentTargetBaseUrl = ''; // 默认为本端，joined 模式时为房主地址，如 "http://192.168.1.120:9527"
     let currentTargetDeviceName = '本端直连';
+    let joinedPin = '', joinedResumeAt = 0;
+    function updateRemoteConnection(state, message = '') {
+        const previous = document.body.dataset.remoteConnection;
+        document.body.dataset.remoteConnection = state;
+        const notice = document.getElementById('roomConnectionNotice');
+        notice.hidden = state === 'ready';
+        notice.textContent = message;
+        if (previous && previous !== 'ready' && state === 'ready') {
+            document.querySelectorAll('.chat-img-thumb-wrapper[data-state="error"]').forEach(item => item.retryImage?.());
+            if (roomState.mode === 'joined') loadFiles();
+        }
+    }
+    const resumeJoinedSession = singleFlight(async () => {
+        if (roomState.mode !== 'joined' || Date.now() < joinedResumeAt) return;
+        joinedResumeAt = Date.now() + 15000;
+        const revision = roomRevision;
+        const response = await fetch(currentTargetBaseUrl + '/api/room/join', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ resumeRoomId: roomState.roomInfo?.roomId, pin: joinedPin, name: getClientSenderName(), platform: detectClientPlatform() })
+        });
+        const result = await response.json();
+        if (revision !== roomRevision || !result.success || result.room?.roomId !== roomState.roomInfo?.roomId) return;
+        roomState.token = result.token || ''; roomState.memberId = result.memberId || '';
+        uploadQueue?.updateToken(revision, roomState.token);
+        localStorage.setItem('wenbox_room_token', roomState.token);
+        localStorage.setItem('wenbox_member_id', roomState.memberId);
+    });
 
     // UI 容器与元素绑定
     const discoveredRoomsContainer = document.getElementById('discoveredRoomsContainer');
@@ -1086,6 +1129,8 @@
     // ---------------- 房间系统核心：模式渲染与切换 ----------------
     function setRoomMode(mode, data) {
         if (roomState.mode === 'joined' && mode !== 'joined') notifyLeaveRoom();
+        updateRemoteConnection('ready');
+        if (mode !== 'joined') joinedPin = '';
         const changed = roomState.mode !== mode || roomState.roomInfo?.roomId !== data?.roomId;
         if (changed) { resetChatRoomHistory(); uploadQueue?.clear(); outbox.clear(); }
         if (mode === 'client') discoveryStartedAt = Date.now();
@@ -1538,6 +1583,7 @@
                 localStorage.setItem('wenbox_member_id', roomState.memberId);
                 window.closeJoinPinModal();
                 window.closeManualJoinModal();
+                joinedPin = pin; joinedResumeAt = 0;
                 setRoomMode('joined', {
                     hostUrl: effectiveHostUrl,
                     roomName: joinRes.room ? joinRes.room.roomName : (roomName || '已加入房间'),
@@ -1808,8 +1854,7 @@
                         const r = hbData.room;
                         const currentRoomId = roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : '';
                         if (!r.isActive || (r.roomId && currentRoomId && r.roomId !== currentRoomId)) {
-                            showToast('房间已结束，已返回发现大厅');
-                            setRoomMode('client');
+                            updateRemoteConnection('ended', '原房间已结束，记录保留。可手动退出后加入新房间。');
                             return;
                         }
                         if (roomState.roomInfo && roomState.roomInfo.roomName !== r.roomName) {
@@ -1939,10 +1984,10 @@
     window.loadFiles = loadFiles;
 
     // 远程文件下载
-    window.downloadRemoteFile = async function(fileId, fileName) {
-        const token = getEffectiveRoomToken();
+    window.downloadRemoteFile = async function(fileId, fileName, context = captureAttachmentContext()) {
+        const token = context.roomId === roomState.roomInfo?.roomId ? getEffectiveRoomToken() : context.token;
         const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
-        const downloadBase = currentTargetBaseUrl || getApiOrigin() || window.location.origin;
+        const downloadBase = context.base;
         const tauriDialog = getTauriDialog();
         const invoke = getTauriInvoke();
         if (tauriDialog && invoke) {
@@ -2644,7 +2689,6 @@
 
     function updateChatGatingUi(mode, data) { updateChatStatusBar(mode, data); }
 
-    let joinedDisconnectCount = 0;
     let isPollingChat = false;
 
     // 轮询聊天消息
@@ -2657,62 +2701,39 @@
         const fetch = fetchWithTimeout;
         try {
             let messages = [];
-            const invoke = getTauriInvoke();
-            if (invoke) {
-                messages = await invoke('fetch_node_messages', {
-                    baseUrl: currentTargetBaseUrl,
-                    token: roomState.token || null,
-                    since: lastKnownMessageTimestamp > 0 ? lastKnownMessageTimestamp - 1 : null
-                });
-            } else {
-                const effectiveToken = roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
-                const tokenParam = effectiveToken ? `&token=${encodeURIComponent(effectiveToken)}` : '';
-                const sinceParam = lastKnownMessageTimestamp > 0 ? `&since=${lastKnownMessageTimestamp - 1}` : '';
-                const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/messages?t=' + Date.now() + tokenParam + sinceParam;
-                const headers = { 'Accept': 'application/json' };
-                if (effectiveToken) {
-                    headers['X-Room-Token'] = effectiveToken;
-                    headers['X-Host-Token'] = effectiveToken;
-                }
-                const res = await fetch(api, {
-                    headers,
-                    signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(2000) : undefined
-                });
-                if (revision !== roomRevision) return;
-                if (!res.ok) {
-                    if (res.status === 401 || res.status === 403 || (roomState.mode === 'joined' && (res.status === 404 || res.status === 502))) {
-                        joinedDisconnectCount++;
-                        if (joinedDisconnectCount >= 2) {
-                            joinedDisconnectCount = 0;
-                            sessionStorage.removeItem('wenbox_host_token');
-                            roomState.token = null;
-                    roomState.memberId = '';
-                    localStorage.removeItem('wenbox_member_id');
-                            showToast('房间已解散或权限已失效，已自动返回客户端大厅');
-                            setRoomMode('client');
-                            return;
-                        }
-                    }
-                    return;
-                }
-                const data = await res.json();
-                if (revision !== roomRevision) return;
-                // 房间一致性校验：若服务端活跃房间 ID 与当前界面所处的房间 ID 不一致，说明服务端已重置或新建房间！
-                const currentRoomId = roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : '';
-                if (data.roomId && currentRoomId && data.roomId !== currentRoomId) {
-                    sessionStorage.removeItem('wenbox_host_token');
-                    roomState.token = null;
-                    roomState.memberId = '';
-                    localStorage.removeItem('wenbox_member_id');
-                    showToast('原房间已结束，服务端已创建新房间，已自动返回发现大厅');
-                    setRoomMode('client');
-                    return;
-                }
-                messages = data.messages || [];
+            const effectiveToken = roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
+            const tokenParam = effectiveToken ? `&token=${encodeURIComponent(effectiveToken)}` : '';
+            const sinceParam = lastKnownMessageTimestamp > 0 ? `&since=${lastKnownMessageTimestamp - 1}` : '';
+            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/messages?t=' + Date.now() + tokenParam + sinceParam;
+            const headers = { 'Accept': 'application/json' };
+            if (effectiveToken) {
+                headers['X-Room-Token'] = effectiveToken;
+                headers['X-Host-Token'] = effectiveToken;
             }
+            const res = await fetch(api, {
+                headers,
+                signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(2000) : undefined
+            });
+            if (revision !== roomRevision) return;
+            if (!res.ok) {
+                if (roomState.mode === 'joined') {
+                    updateRemoteConnection('retrying', '对端暂时不可用，正在重连；消息与文件记录已保留。');
+                    if (res.status === 401 || res.status === 403) await resumeJoinedSession();
+                }
+                return;
+            }
+            const data = await res.json();
+            if (revision !== roomRevision) return;
+            // 房间一致性校验：若服务端活跃房间 ID 与当前界面所处的房间 ID 不一致，说明服务端已重置或新建房间！
+            const currentRoomId = roomState.roomInfo ? (roomState.roomInfo.roomId || roomState.roomInfo.roomName) : '';
+            if (roomState.mode === 'joined' && (data.isActive === false || (data.roomId && currentRoomId && data.roomId !== currentRoomId))) {
+                updateRemoteConnection('ended', '原房间已结束，记录保留。可手动退出后加入新房间。');
+                return;
+            }
+            messages = data.messages || [];
 
             if (revision !== roomRevision) return;
-            joinedDisconnectCount = 0;
+            updateRemoteConnection('ready');
             chatHasSynced = true;
 
             const nearBottom = !webChatMessages || webChatMessages.scrollHeight - webChatMessages.scrollTop - webChatMessages.clientHeight < 80;
@@ -2739,12 +2760,7 @@
             }
         } catch (e) {
             if (revision === roomRevision && roomState.mode === 'joined') {
-                joinedDisconnectCount++;
-                if (joinedDisconnectCount >= 3) {
-                    joinedDisconnectCount = 0;
-                    showToast('连接已断开，已返回发现大厅，可重新加入');
-                    setRoomMode('client');
-                }
+                updateRemoteConnection('retrying', '对端暂时不可用，正在重连；消息与文件记录已保留。');
             }
         } finally {
             isPollingChat = false;
@@ -2789,13 +2805,16 @@
         }
     }
 
-    function resolveChatUrl(value) {
+    function captureAttachmentContext() {
+        return { base: currentTargetBaseUrl || getApiOrigin() || window.location.origin, token: getEffectiveRoomToken(), roomId: roomState.roomInfo?.roomId };
+    }
+    function resolveChatUrl(value, context = captureAttachmentContext()) {
         if (!value) return '';
         if (value.startsWith('data:')) return value;
-        const base = (currentTargetBaseUrl || getApiOrigin() || window.location.origin).replace(/\/+$/, '');
+        const base = context.base.replace(/\/+$/, '');
         try {
             const url = new URL(value, base + '/');
-            const token = getEffectiveRoomToken();
+            const token = context.roomId === roomState.roomInfo?.roomId ? getEffectiveRoomToken() : context.token;
             if (token && url.origin === new URL(base).origin && url.pathname.startsWith('/api/download/')) {
                 url.searchParams.set('token', token);
             }
@@ -2878,11 +2897,13 @@
             || (isSafeChatImageUrl(content) && /^https?:\/\/[^\s]+\.(png|jpe?g|gif|webp|bmp|svg)(\?[^\s]*)?$/i.test(content));
 
         if (isImage) {
+            const attachmentContext = captureAttachmentContext();
             let imgSrc = content;
             if (content.startsWith('[image:') && content.endsWith(']')) {
                 imgSrc = content.slice(7, -1);
             }
-            imgSrc = resolveChatUrl(imgSrc);
+            const rawImageUrl = imgSrc;
+            imgSrc = resolveChatUrl(rawImageUrl, attachmentContext);
 
             const thumbWrap = document.createElement('div');
             thumbWrap.className = 'chat-img-thumb-wrapper';
@@ -2897,20 +2918,23 @@
             overlay.className = 'chat-img-overlay';
             overlay.textContent = '加载中…';
             let imageFailed = false;
-            const loadImage = async () => {
+            const loadImage = async (manual = false) => {
+                imgSrc = resolveChatUrl(rawImageUrl, attachmentContext);
+                thumbWrap.dataset.state = 'loading';
                 imageFailed = false; overlay.textContent = '加载中…';
                 try { img.src = await resolveRequestUrl(imgSrc); }
-                catch (error) { imageFailed = true; overlay.textContent = '加载失败，点击重试'; thumbWrap.title = String(error.message || error); }
+                catch (error) { imageFailed = true; thumbWrap.dataset.state = 'error'; overlay.textContent = '加载失败，点击重试'; thumbWrap.title = String(error.message || error); if (manual) showToast(`图片加载失败：${error.message || error}`); }
             };
-            img.addEventListener('load', () => { imageFailed = false; overlay.textContent = '查看原图'; thumbWrap.title = '点击查看大图'; });
-            img.addEventListener('error', () => { imageFailed = true; overlay.textContent = '加载失败，点击重试'; });
+            img.addEventListener('load', () => { thumbWrap.dataset.state = 'ready'; imageFailed = false; overlay.textContent = '查看原图'; thumbWrap.title = '点击查看大图'; });
+            img.addEventListener('error', () => { thumbWrap.dataset.state = 'error'; imageFailed = true; overlay.textContent = '加载失败，点击重试'; });
+            thumbWrap.retryImage = () => loadImage();
             loadImage();
 
             thumbWrap.appendChild(img);
             thumbWrap.appendChild(overlay);
             thumbWrap.addEventListener('click', (e) => {
                 e.stopPropagation();
-                if (imageFailed) loadImage();
+                if (imageFailed) loadImage(true);
                 else openChatImageModal(img.src, imgSrc);
             });
 
@@ -2921,7 +2945,7 @@
                 save.addEventListener('click', () => {
                     const type = /^data:image\/([a-z0-9.+-]+)/i.exec(img.src)?.[1];
                     const ext = type === 'jpeg' ? 'jpg' : (type || 'png');
-                    window.downloadRemoteFile(decodeURIComponent(new URL(imgSrc).pathname.slice('/api/download/'.length)), `wenbox_img_${Date.now()}.${ext}`);
+                    window.downloadRemoteFile(decodeURIComponent(new URL(imgSrc).pathname.slice('/api/download/'.length)), `wenbox_img_${Date.now()}.${ext}`, attachmentContext);
                 });
                 contentWrap.appendChild(save);
             }
@@ -2933,7 +2957,8 @@
             const fileName = parts[0] || '未知文件';
             const fileSize = parts[1] || '';
             const rawUrl = parts[2] || '';
-            const downloadUrl = isSafeChatImageUrl(rawUrl) && !/^data:/i.test(rawUrl) ? resolveChatUrl(rawUrl) : '';
+            const attachmentContext = captureAttachmentContext();
+            const downloadUrl = isSafeChatImageUrl(rawUrl) && !/^data:/i.test(rawUrl) ? resolveChatUrl(rawUrl, attachmentContext) : '';
 
             const fileCard = document.createElement('div');
             fileCard.className = 'chat-file-card';
@@ -2967,10 +2992,11 @@
             downloadLink.innerHTML = '⬇ 下载';
             downloadLink.addEventListener('click', (e) => {
                 e.stopPropagation();
+                downloadLink.href = resolveChatUrl(rawUrl, attachmentContext) || '#';
                 if (!downloadUrl) { e.preventDefault(); showToast('文件地址无效或不属于当前房间'); return; }
                 if (getTauriInvoke() && isSafeChatImageUrl(rawUrl) && new URL(downloadUrl).pathname.startsWith('/api/download/')) {
                     e.preventDefault();
-                    window.downloadRemoteFile(decodeURIComponent(new URL(downloadUrl).pathname.slice('/api/download/'.length)), fileName);
+                    window.downloadRemoteFile(decodeURIComponent(new URL(downloadUrl).pathname.slice('/api/download/'.length)), fileName, attachmentContext);
                 }
             });
 

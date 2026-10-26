@@ -13,7 +13,7 @@ async function main() {
     const root = path.resolve(process.env.WEB_ASSET_ROOT || 'app/src/main/assets/web');
     const screenshots = path.resolve(process.env.UI_SCREEN_DIR || 'docs/ui-screens/phase-3');
     fs.mkdirSync(screenshots, { recursive: true });
-    let active = false, serial = 0, discoveries = 0;
+    let active = false, serial = 0, discoveries = 0, offline = false, messageFailures = 0, expired = false, resumed = 0;
     const sendAttempts = new Map();
     const room = { roomId: 'fixture-room', roomName: '现场协作', hostDevice: '测试电脑', hostIp: '192.168.1.8', hostPort: 9527, needPassword: true, pin: '6888' };
     const messages = [], received = [], attempts = new Map();
@@ -31,6 +31,8 @@ async function main() {
                 return res.end(fs.readFileSync(file));
             } catch (_) { failures.push(req.url); res.writeHead(404); return res.end(); }
         }
+        if (offline && ['/api/messages', '/api/room/heartbeat', '/api/room/members'].includes(url.pathname)) { if (url.pathname === '/api/messages') messageFailures++; return send({ error: 'fixture disconnected' }, 502); }
+        if (expired && url.pathname === '/api/messages') return send({ error: 'fixture expired session' }, 401);
         const chunks = []; for await (const chunk of req) chunks.push(chunk);
         const body = Buffer.concat(chunks);
         const json = () => { try { return JSON.parse(body.toString()); } catch (_) { return {}; } };
@@ -39,7 +41,7 @@ async function main() {
         if (url.pathname === '/api/discovered_rooms') { if (++discoveries === 1) await new Promise(resolve => setTimeout(resolve, 900)); return send({ rooms: [{ ...room, ip: '127.0.0.1', port: server.address().port, hostPlatform: 'macOS' }] }); }
         if (url.pathname === '/api/room/create') { active = true; Object.assign(room, json()); return send({ ...room, hostToken: 'host-token' }); }
         if (url.pathname === '/api/room/close') { active = false; return send({ success: true }); }
-        if (url.pathname === '/api/room/join') { if (json().pin === '0000') return send({ success: false, message: '尝试过于频繁', retryAfter: 3 }, 429); active = true; return send({ success: true, token: 'guest-token', memberId: 'guest-id', room: { ...room } }); }
+        if (url.pathname === '/api/room/join') { if (json().resumeRoomId) { assert.equal(json().resumeRoomId, room.roomId); assert.equal(json().pin, '6888'); expired = false; resumed++; } if (json().pin === '0000') return send({ success: false, message: '尝试过于频繁', retryAfter: 3 }, 429); active = true; return send({ success: true, token: 'guest-token', memberId: 'guest-id', room: { ...room } }); }
         if (url.pathname === '/api/room/heartbeat') return send({ success: true, room: { ...room, isActive: active } });
         if (url.pathname === '/api/room/members') return send({ count: 2, members: [{ id: 'host-id', name: '测试电脑 (房主)', ip: '192.168.1.8', platform: 'macOS' }, { id: 'guest-id', name: '现场工程师', ip: '192.168.1.20', accessIp: '192.168.1.8:9527', platform: 'Android' }] });
         if (url.pathname === '/api/room/leave' || url.pathname === '/api/room/set_ip') return send({ success: true });
@@ -293,6 +295,37 @@ async function main() {
         await page.locator('.chat-text').filter({ hasText: '加入后仍能发送消息' }).waitFor();
         for (const width of [1440, 1024, 768, 390]) await snapshot('joined', 'dark', width);
         await page.setViewportSize({ width: 1440, height: 900 });
+        const existingMessages = await page.locator('.chat-item').count();
+        const downloadBefore = await page.locator('.chat-file-download-btn').first().getAttribute('href');
+        offline = true;
+        await page.evaluate(() => WenBox.scheduler.runNow());
+        await page.waitForFunction(() => document.body.dataset.remoteConnection === 'retrying');
+        while (messageFailures < 4) { await page.evaluate(() => WenBox.scheduler.runNow()); await page.waitForTimeout(1100); }
+        assert.equal(await page.locator('body').getAttribute('data-room-mode'), 'joined', 'several failures must preserve the remote room');
+        assert.equal(await page.locator('.chat-item').count(), existingMessages, 'disconnect must preserve existing attachments');
+        assert.equal(await page.locator('.chat-file-download-btn').first().getAttribute('href'), downloadBefore, 'download owner must not change to localhost');
+        await page.screenshot({ path: path.join(screenshots, 'joined-disconnected.png') });
+        offline = false;
+        await page.evaluate(() => WenBox.scheduler.runNow());
+        await page.waitForFunction(() => document.body.dataset.remoteConnection === 'ready');
+        assert.equal(await page.locator('.chat-item').count(), existingMessages);
+        expired = true;
+        await page.evaluate(() => WenBox.scheduler.runNow());
+        await page.waitForFunction(() => document.body.dataset.remoteConnection === 'retrying');
+        while (!resumed) await page.waitForTimeout(100);
+        await page.evaluate(() => WenBox.scheduler.runNow());
+        await page.waitForFunction(() => document.body.dataset.remoteConnection === 'ready');
+        assert.equal(await page.locator('.chat-item').count(), existingMessages, 'credential refresh must keep attachment history');
+        // Error details remain selectable and copyable; no real save is performed.
+        await page.evaluate(async () => {
+            window.__TAURI__ = { dialog: { save: async () => '/tmp/fixture.pdf' }, clipboard: { writeText: async text => { window.copiedError = text; } }, invoke: async () => { throw Error('fixture file download: status code 404'); } };
+            await window.downloadRemoteFile('missing-id', 'fixture.pdf');
+        });
+        await page.locator('#toast button').filter({ hasText: '复制错误详情' }).click();
+        assert.match(await page.evaluate(() => window.copiedError), /fixture file download: status code 404/);
+        assert.equal(await page.locator('.toast-message').evaluate(el => getComputedStyle(el).getPropertyValue('user-select') || getComputedStyle(el).getPropertyValue('-webkit-user-select')), 'text');
+        await page.locator('#toast button').filter({ hasText: '关闭' }).click();
+        await page.evaluate(() => { delete window.__TAURI__; });
         await page.locator('#btnLeaveRoom').click(); await page.locator('#appConfirmOkBtn').click();
         await page.waitForFunction(() => document.body.dataset.roomMode === 'client');
         assert.deepEqual(browserErrors, []); assert.deepEqual(failures, []);

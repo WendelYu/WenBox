@@ -438,3 +438,11 @@ dialog.members-drawer { border-radius: 18px 0 0 18px; padding: 28px; width: min(
     .workspace-heading { flex: 0 0 100%; }
     .device-status { width: 100%; }
 }
+
+.toast.show { pointer-events: auto; }
+.toast { display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 10px; max-width: min(720px, calc(100vw - 32px)); }
+.toast-message { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+[id="roomConnectionNotice"] { color: var(--warning-fg, #a56315); white-space: normal; }
+.chat-img-thumb-wrapper[data-state="error"] { min-width: 220px; min-height: 100px; }
+.chat-img-thumb-wrapper[data-state="error"] .chat-img-thumb { opacity: 0; }
+.chat-img-thumb-wrapper[data-state="error"] .chat-img-overlay { opacity: 1; inset: 0; display: grid; place-items: center; padding: 14px; white-space: normal; text-align: center; color: var(--text-1); background: var(--surface-2); }

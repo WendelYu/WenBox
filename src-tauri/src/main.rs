@@ -4,6 +4,7 @@
 mod network;
 mod native_transport;
 mod clipboard_files;
+mod session_store;
 #[cfg(windows)]
 mod windows_network;
 
@@ -328,18 +329,23 @@ fn add_share_file_blocking(path_str: String, state: Arc<AppState>) -> Result<Sha
     };
 
     state.files.lock().unwrap().insert(id, shared.clone());
+    session_store::save(&state)?;
     Ok(shared)
 }
 
 #[tauri::command]
 fn remove_share_file(id: String, state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
     let mut files = state.files.lock().unwrap();
-    Ok(files.remove(&id).is_some())
+    let removed = files.remove(&id).is_some();
+    drop(files);
+    session_store::save(&state)?;
+    Ok(removed)
 }
 
 #[tauri::command]
 fn clear_share_files(state: tauri::State<Arc<AppState>>) {
     state.files.lock().unwrap().clear();
+    session_store::remember(&state);
 }
 
 #[tauri::command]
@@ -476,6 +482,7 @@ fn create_room_cmd(
     };
     state.members.lock().unwrap_or_else(|e| e.into_inner()).insert("host".into(), host_member);
 
+    session_store::save(&state)?;
     Ok(cfg)
 }
 
@@ -497,6 +504,7 @@ fn close_room_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
 
     // 与 HTTP 关房接口共用同一个逐网卡广播实现
     broadcast_room_closed(old_room_id);
+    session_store::save(&state)?;
 
     Ok(true)
 }
@@ -618,6 +626,7 @@ fn desktop_platform() -> &'static str {
 #[tauri::command]
 fn clear_chat_messages_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
     state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    session_store::save(&state)?;
     Ok(true)
 }
 
@@ -1382,6 +1391,7 @@ fn send_node_message_blocking(base_url: String, sender_name: String, content: St
             client_id,
         };
         push_message_bounded(&state.messages, msg);
+        session_store::save(&state)?;
         return Ok(true);
     }
 
@@ -1403,22 +1413,7 @@ fn send_node_message_blocking(base_url: String, sender_name: String, content: St
     }
     let resp = req.send_string(&body.to_string());
 
-    match resp {
-        Ok(_) => {
-            let msg = ChatMessage {
-                id: uuid::Uuid::new_v4().to_string(),
-                sender_name,
-                content,
-                timestamp: now_ms,
-                is_from_phone: false,
-                sender_ip: my_ip,
-                client_id,
-            };
-            push_message_bounded(&state.messages, msg);
-            Ok(true)
-        }
-        Err(e) => Err(format!("发送失败: {}", e)),
-    }
+    resp.map(|_| true).map_err(|e| format!("发送失败: {}", e))
 }
 
 #[tauri::command]
@@ -1885,6 +1880,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 };
                 state.members.lock().unwrap_or_else(|e| e.into_inner()).insert("host".into(), host_member);
 
+                session_store::remember(&state);
                 let mut cfg_val = serde_json::to_value(&cfg).unwrap_or_default();
                 if let Some(obj) = cfg_val.as_object_mut() {
                     obj.insert("hostToken".into(), serde_json::Value::String(host_token));
@@ -1936,6 +1932,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
 
                 // 逐网卡广播关房通知 (原来只从 0.0.0.0 发一次)
                 broadcast_room_closed(old_room_id);
+                session_store::remember(&state);
 
                 let mut resp = Response::from_string("{\"success\":true}");
                 resp = with_cors!(resp);
@@ -2009,6 +2006,8 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                                 msg = "房间尚未开启或已解散".into();
                             } else if val["expectedRoomId"].as_str().map(|id| id != room.room_id || !room.auto_connect).unwrap_or(false) {
                                 msg = "对端房间已变更，等待重新发现".into();
+                            } else if val["resumeRoomId"].as_str().map(|id| id != room.room_id).unwrap_or(false) {
+                                msg = "原房间已结束，请手动加入新房间".into();
                             } else if room.need_password && !pin_matches(&room.pin, &pin) {
                                 pin_gate_record_failure(&state, &client_ip);
                                 msg = "房间密码错误".into();
@@ -2051,12 +2050,14 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                                     "hostIp": host_ip_to_show,
                                     "hostPort": port,
                                     "autoConnect": room.auto_connect,
+                                    "needPassword": room.need_password,
                                 });
                             }
                         }
                     }
                 }
 
+                if success { session_store::remember(&state); }
                 let status = if locked_secs > 0 { 429 } else { 200 };
                 let json = serde_json::json!({
                     "success": success,
@@ -2183,6 +2184,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         state.auth_tokens.lock().unwrap_or_else(|e| e.into_inner()).remove(&t);
                     }
                 }
+                session_store::remember(&state);
                 let mut resp = Response::from_string("{\"success\":true}");
                 resp = with_cors!(resp);
                 let _ = req.respond(resp);
@@ -2206,6 +2208,8 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     for token in expired {
                         tokens.remove(&token);
                     }
+                    drop(tokens);
+                    session_store::remember(&state);
                 }
 
                 // 成员 id 已与 auth token 解耦，但密码房仍只向已加入的客户端返回详细列表，
@@ -2401,6 +2405,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     return;
                 }
                 state.files.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                session_store::remember(&state);
                 let mut resp = Response::from_string("{\"success\":true}");
                 resp = with_cors!(resp);
                 let _ = req.respond(resp);
@@ -2472,6 +2477,12 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         // 不再自动把刚收到的文件放进"共享给全房间"的列表：
                         // 否则访客发给房主的私密文件会对所有成员公开 (Rust 其它)。
                         state.received_files.lock().unwrap_or_else(|e| e.into_inner()).insert(0, file.clone());
+                        if let Err(error) = session_store::save(&state) {
+                            eprintln!("持久化接收文件失败: {}", error);
+                            let response = Response::from_string("{\"success\":false,\"message\":\"文件已写入下载目录，但索引保存失败，请检查磁盘空间\"}").with_status_code(500);
+                            let _ = req.respond(with_cors!(response));
+                            return;
+                        }
                         let json = serde_json::json!({
                             "success": true, "message": format!("文件已保存: {}", file.name),
                             "fileId": file.id, "name": file.name, "size": file.size
@@ -2554,6 +2565,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         };
                         // 只保留最近 MAX_MESSAGES 条，避免消息历史无界增长打爆内存 (S4)
                         push_message_bounded(&state.messages, msg);
+                        session_store::remember(&state);
 
                         if let Some(t) = header_val(&req, "X-Room-Token") {
                             let mut members = state.members.lock().unwrap_or_else(|e| e.into_inner());
@@ -2825,6 +2837,7 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                     state_bcast.auth_tokens.lock().unwrap_or_else(|e| e.into_inner()).clear();
                     state_bcast.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
                     broadcast_room_closed(closed_id);
+                    session_store::remember(&state_bcast);
                 }
             }
 
@@ -3006,6 +3019,10 @@ fn main() {
         pin_failures: Mutex::new(HashMap::new()),
     });
 
+    let restored = session_store::restore(&state);
+    if !restored { start_default_open_room(&state); }
+    session_store::remember(&state);
+
     // 启动 HTTP 服务端 (默认 9527)
     start_embedded_http_server(state.clone(), 9527);
 
@@ -3014,8 +3031,6 @@ fn main() {
 
     // 软件打开即自动创建一个免密房间并对外广播:
     // 局域网内其他设备通过 IP 访问后无需任何操作即可直接加入互传
-    start_default_open_room(&state);
-
     tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
@@ -3202,6 +3217,24 @@ mod tests {
     }
 
     #[test]
+    fn remote_attachment_messages_never_enter_the_local_host_history() {
+        let local = protected_state();
+        let before = local.messages.lock().unwrap().len();
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let worker = thread::spawn(move || {
+            let mut request = server.recv().unwrap();
+            let mut body = String::new(); request.as_reader().read_to_string(&mut body).unwrap();
+            assert!(body.contains("remote-file-id"));
+            request.respond(Response::from_string("{\"success\":true}")).unwrap();
+        });
+        // The shortened loopback spelling exercises the actual remote HTTP branch.
+        assert!(send_node_message_blocking(format!("http://127.1:{}", port), "Mac".into(), "[image:/api/download/remote-file-id]".into(), None, None, None, local.clone()).unwrap());
+        worker.join().unwrap();
+        assert_eq!(local.messages.lock().unwrap().len(), before);
+    }
+
+    #[test]
     fn test_push_message_bounded_trims_history() {
         let store: Mutex<Vec<ChatMessage>> = Mutex::new(Vec::new());
         for index in 0..(MAX_MESSAGES + 25) {
@@ -3254,7 +3287,7 @@ mod tests {
         buf
     }
 
-    fn spawn_test_server(state: Arc<AppState>) -> u16 {
+    pub(super) fn spawn_test_server(state: Arc<AppState>) -> u16 {
         let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
         let port = server.server_addr().to_ip().unwrap().port();
         let serving = server.clone();
@@ -3267,7 +3300,7 @@ mod tests {
         port
     }
 
-    fn protected_state() -> Arc<AppState> {
+    pub(super) fn protected_state() -> Arc<AppState> {
         let state = Arc::new(AppState {
             files: Mutex::new(HashMap::new()),
             received_files: Mutex::new(Vec::new()),
