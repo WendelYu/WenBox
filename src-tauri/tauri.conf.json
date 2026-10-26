@@ -14,7 +14,8 @@
     "allowlist": {
       "all": false,
       "clipboard": {
-        "writeText": true
+        "writeText": true,
+        "readText": true
       },
       "shell": {
         "all": false,

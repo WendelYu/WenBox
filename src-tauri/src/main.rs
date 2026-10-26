@@ -263,6 +263,20 @@ fn get_download_dir() -> PathBuf {
 // ---------------- Tauri 供前端调用的命令 ----------------
 
 #[tauri::command]
+fn clipboard_image() -> Result<Option<serde_json::Value>, String> {
+    use base64::Engine;
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    let image = match clipboard.get_image() {
+        Ok(image) => image,
+        Err(arboard::Error::ContentNotAvailable) => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if image.width.saturating_mul(image.height) > 32_000_000 { return Err("剪贴板图片过大，请通过文件发送".into()); }
+    Ok(Some(serde_json::json!({ "width": image.width, "height": image.height,
+        "rgbaBase64": base64::engine::general_purpose::STANDARD.encode(&image.bytes) })))
+}
+
+#[tauri::command]
 fn copy_image(width: usize, height: usize, rgba_base64: String) -> Result<(), String> {
     use base64::Engine;
     let count = width.checked_mul(height).filter(|n| *n > 0 && *n <= 32_000_000).ok_or("图片尺寸无效或过大")?;
@@ -3069,6 +3083,7 @@ fn main() {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             copy_image,
+            clipboard_image,
             clipboard_files::clipboard_files,
             clipboard_files::clipboard_file_chunk,
             native_transport::native_request,

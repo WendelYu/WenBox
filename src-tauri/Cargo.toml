@@ -9,7 +9,7 @@ edition = "2021"
 tauri-build = { version = "1.5", features = [] }
 
 [dependencies]
-tauri = { version = "1.5", features = ["shell-open", "dialog-all", "path-all", "clipboard-write-text", "fs-create-dir", "fs-exists", "fs-read-file", "fs-write-file"] }
+tauri = { version = "1.5", features = ["shell-open", "dialog-all", "path-all", "clipboard-write-text", "clipboard-read-text", "fs-create-dir", "fs-exists", "fs-read-file", "fs-write-file"] }
 arboard = "=3.6.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

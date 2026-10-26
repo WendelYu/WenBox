@@ -361,6 +361,10 @@ async function main() {
         await page.locator('#btnCloseChatImageModal').click();
         await imageCard.locator('.copy-btn').click();
         await page.waitForFunction(() => window.imageCalls.filter(c => c.cmd === 'copy_image').length === 2);
+        await imageCard.locator('.chat-img-thumb').click({ button: 'right' });
+        assert.deepEqual(await page.locator('#wenboxContextMenu button').allTextContents(), ['复制图片', '保存原图']);
+        await page.locator('#wenboxContextMenu button').filter({ hasText: '复制图片' }).click();
+        await page.waitForFunction(() => window.imageCalls.filter(c => c.cmd === 'copy_image').length === 3);
         // Old inline-image messages must save their original bytes without a CSP-blocked fetch(data:).
         messages.push({ id: String(++serial), senderName: '旧图片', content: '[image:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=]', timestamp: Date.now() + serial });
         await page.evaluate(() => { delete window.__TAURI__; WenBox.scheduler.runNow(); });
@@ -373,6 +377,16 @@ async function main() {
         await page.waitForFunction(() => window.imageCalls.some(c => c.cmd === 'save_file_to_directory'));
         assert.ok((await page.evaluate(() => window.imageCalls.find(c => c.cmd === 'save_file_to_directory').args.bytesBase64)).startsWith('iVBOR'));
         await page.locator('#btnCloseChatImageModal').click();
+        await page.evaluate(() => {
+            window.__TAURI__ = { clipboard: { readText: async () => '中文粘贴' }, invoke: async cmd => cmd === 'clipboard_files' ? [] : null };
+        });
+        await page.locator('#webChatMessageInput').fill('替换这段');
+        await page.locator('#webChatMessageInput').evaluate(input => input.select());
+        await page.locator('#webChatMessageInput').click({ button: 'right' });
+        assert.deepEqual(await page.locator('#wenboxContextMenu button').allTextContents(), ['复制', '剪切', '粘贴', '全选']);
+        await page.screenshot({ path: path.join(screenshots, 'chinese-context-menu.png') });
+        await page.locator('#wenboxContextMenu button').filter({ hasText: '粘贴' }).click();
+        await page.waitForFunction(() => document.getElementById('webChatMessageInput').value.includes('中文粘贴'));
         await page.evaluate(() => { delete window.__TAURI__; });
         await page.locator('#btnLeaveRoom').click(); await page.locator('#appConfirmOkBtn').click();
         await page.waitForFunction(() => document.body.dataset.roomMode === 'client');

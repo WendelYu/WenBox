@@ -191,3 +191,9 @@ body[data-discovery-open="true"] .room-mobile-tabs { display: none; }
 .archive-file-choice small { flex-shrink: 0; opacity: .65; }
 .archive-date-option { display: flex; align-items: center; gap: 8px; }
 #reimburseStatus { overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+
+.wenbox-context-menu { position: fixed; z-index: 10000; width: 182px; padding: 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); box-shadow: 0 8px 32px #0003; }
+.wenbox-context-menu[hidden] { display: none; }
+.wenbox-context-menu button { display: block; width: 100%; text-align: left; padding: 9px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--text-1); font: inherit; cursor: pointer; }
+.wenbox-context-menu button:hover, .wenbox-context-menu button:focus-visible { background: var(--surface-2); outline: none; }
+.wenbox-context-menu button:disabled { opacity: .4; cursor: default; }

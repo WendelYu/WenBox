@@ -2859,6 +2859,10 @@
             img.className = 'chat-img-thumb';
             img.alt = '聊天图片';
             img.loading = 'lazy';
+            img.saveOriginal = () => {
+                openChatImageModal(img.src, resolveChatUrl(rawImageUrl, attachmentContext), attachmentContext);
+                chatModalDownloadBtn.click();
+            };
 
             const overlay = document.createElement('span');
             overlay.className = 'chat-img-overlay';
@@ -3234,6 +3238,90 @@
         } catch (error) { showToast(`复制图片失败：${error.message || error}`); }
     }
     if (chatModalCopyBtn) chatModalCopyBtn.addEventListener('click', () => copyImage(chatModalImage.src));
+
+    // Localized context actions use the same image and file paths as the visible toolbar.
+    const contextMenu = document.createElement('div');
+    contextMenu.id = 'wenboxContextMenu'; contextMenu.className = 'wenbox-context-menu';
+    contextMenu.setAttribute('role', 'menu'); contextMenu.hidden = true;
+    document.body.appendChild(contextMenu);
+    let contextTrigger;
+    function closeContextMenu(restore = false) {
+        contextMenu.hidden = true;
+        if (restore) contextTrigger?.focus?.();
+    }
+    document.addEventListener('contextmenu', event => {
+        event.preventDefault();
+        const target = event.target;
+        contextTrigger = target;
+        const input = target.closest('textarea, input');
+        const editable = input && typeof input.selectionStart === 'number';
+        const start = editable ? input.selectionStart : 0, end = editable ? input.selectionEnd : 0;
+        const selected = editable ? input.value.slice(start, end) : String(window.getSelection());
+        const image = target.closest('.chat-img-thumb, #chatModalImage');
+        contextMenu.replaceChildren();
+        function action(label, run, enabled = true) {
+            const button = document.createElement('button'); button.type = 'button'; button.role = 'menuitem';
+            button.textContent = label; button.disabled = !enabled;
+            button.addEventListener('click', async () => {
+                closeContextMenu();
+                try { await run(); } catch (error) { showToast(`操作失败：${error.message || error}`); }
+            });
+            contextMenu.appendChild(button);
+        }
+        if (image) {
+            action('复制图片', () => copyImage(image.src));
+            action('保存原图', () => {
+                if (image.id === 'chatModalImage') chatModalDownloadBtn.click();
+                else image.saveOriginal?.();
+            });
+        } else {
+            action('复制', () => copyWithFeedback(selected), !!selected);
+            if (editable && !input.readOnly && !input.disabled) {
+                action('剪切', async () => { await copyText(selected); input.focus(); input.setRangeText('', start, end, 'end'); input.dispatchEvent(new Event('input', { bubbles: true })); }, !!selected);
+                action('粘贴', async () => {
+                    input.focus();
+                    if (input === webChatMessageInput && getTauriInvoke()) {
+                        const files = await window.WenBox.clipboardFiles();
+                        if (files.length) { uploadFiles(files); return; }
+                        const image = await getTauriInvoke()('clipboard_image');
+                        if (image) {
+                            const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+                            const rgba = Uint8ClampedArray.from(atob(image.rgbaBase64), c => c.charCodeAt(0));
+                            canvas.getContext('2d').putImageData(new ImageData(rgba, image.width, image.height), 0, 0);
+                            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                            if (!blob) throw new Error('读取剪贴板图片失败');
+                            uploadFiles([new File([blob], '粘贴图片.png', { type: 'image/png' })], true); return;
+                        }
+                    }
+                    const native = window.__TAURI__?.clipboard;
+                    const text = native?.readText ? await native.readText() : await navigator.clipboard.readText();
+                    input.setRangeText(text || '', start, end, 'end'); input.dispatchEvent(new Event('input', { bubbles: true }));
+                });
+            }
+            action('全选', () => {
+                if (editable) { input.focus(); input.select(); }
+                else { const range = document.createRange(); range.selectNodeContents(target.closest('.chat-item, .toast-message, pre') || target); const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range); }
+            });
+        }
+        (target.closest('dialog[open]') || document.body).appendChild(contextMenu);
+        contextMenu.hidden = false;
+        contextMenu.style.left = Math.max(8, Math.min(event.clientX, innerWidth - 190)) + 'px';
+        contextMenu.style.top = Math.max(8, Math.min(event.clientY, innerHeight - contextMenu.offsetHeight - 8)) + 'px';
+        contextMenu.querySelector('button:not(:disabled)')?.focus();
+    });
+    document.addEventListener('pointerdown', event => { if (!contextMenu.contains(event.target)) closeContextMenu(); }, true);
+    document.addEventListener('scroll', () => closeContextMenu(), true);
+    window.addEventListener('blur', () => closeContextMenu());
+    document.addEventListener('keydown', event => {
+        if (contextMenu.hidden) return;
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeContextMenu(true); }
+        else if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
+            event.preventDefault(); event.stopPropagation();
+            const items = [...contextMenu.querySelectorAll('button:not(:disabled)')];
+            const next = (items.indexOf(document.activeElement) + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+            items[next]?.focus();
+        } else if (event.key === 'Tab') closeContextMenu();
+    }, true);
 
     // 快捷工具栏按钮绑定
     if (chatBtnSendImage && chatImageFileInput) {
