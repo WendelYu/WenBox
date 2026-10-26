@@ -51,14 +51,15 @@ jobs:
 
       - name: Rename APK for Release
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk WenBox-Android.apk
+          VERSION=$(node -p "require('./package.json').version")
+          cp app/build/outputs/apk/debug/app-debug.apk "WenBox-Android-v${VERSION}.apk"
 
       - name: Upload Android Artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
           retention-days: 1
-          path: WenBox-Android.apk
+          path: WenBox-Android-v*.apk
 
   build-windows:
     name: Build Windows EXE (Rust/Tauri)
@@ -94,13 +95,14 @@ jobs:
       - name: Prepare Windows Files for Release
         shell: bash
         run: |
+          VERSION=$(node -p "require('./package.json').version")
           mkdir -p release-win
-          cp src-tauri/target/release/wenbox.exe release-win/WenBox-Windows-x64.exe
+          cp src-tauri/target/release/wenbox.exe "release-win/WenBox-Windows-v${VERSION}-x64.exe"
           if ls src-tauri/target/release/bundle/nsis/*.exe 1> /dev/null 2>&1; then
-            cp src-tauri/target/release/bundle/nsis/*.exe release-win/WenBox-Windows-Installer.exe
+            cp src-tauri/target/release/bundle/nsis/*.exe "release-win/WenBox-Windows-v${VERSION}-Installer.exe"
           fi
           if ls src-tauri/target/release/bundle/msi/*.msi 1> /dev/null 2>&1; then
-            cp src-tauri/target/release/bundle/msi/*.msi release-win/WenBox-Windows-Installer.msi
+            cp src-tauri/target/release/bundle/msi/*.msi "release-win/WenBox-Windows-v${VERSION}-Installer.msi"
           fi
 
       - name: Upload Windows Artifact
@@ -152,7 +154,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          name: Release ${{ inputs.tag || github.ref_name }}
+          name: WenBox ${{ inputs.tag || github.ref_name }}
           draft: false
           prerelease: false
           body_path: release_notes.md

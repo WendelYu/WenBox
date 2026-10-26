@@ -69,7 +69,7 @@ async function main() {
         if (url.pathname === '/api/download/preview') {
             if (url.searchParams.get('token') !== 'guest-token') { res.writeHead(401); return res.end(); }
             res.writeHead(200, { 'Content-Type': 'image/png' });
-            return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64'));
+            return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGPgL8v7TwlmGDVg1IBRA4aLAQBrPvIQoRTfDQAAAABJRU5ErkJggg==', 'base64'));
         }
         if (url.pathname.startsWith('/api/download/')) { res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Disposition': 'attachment; filename="fixture.txt"' }); return res.end('WenBox fixture download'); }
         failures.push(req.url); return send({ error: 'unknown fixture route' }, 404);
@@ -356,6 +356,7 @@ async function main() {
         await page.waitForFunction(() => window.imageCalls.some(c => c.cmd === 'copy_image'));
         const copied = await page.evaluate(() => window.imageCalls.find(c => c.cmd === 'copy_image').args);
         assert.equal(Buffer.from(copied.rgbaBase64, 'base64').length, copied.width * copied.height * 4);
+        assert.deepEqual([...Buffer.from(copied.rgbaBase64, 'base64').subarray(0, 4)], [15, 118, 110, 255], 'copy must preserve decoded image pixels');
         await page.locator('#chatModalDownloadBtn').click();
         await page.waitForFunction(() => window.imageCalls.some(c => c.cmd === 'save_remote_file_to_directory'));
         await page.locator('#btnCloseChatImageModal').click();
@@ -366,7 +367,7 @@ async function main() {
         await page.locator('#wenboxContextMenu button').filter({ hasText: '复制图片' }).click();
         await page.waitForFunction(() => window.imageCalls.filter(c => c.cmd === 'copy_image').length === 3);
         // Old inline-image messages must save their original bytes without a CSP-blocked fetch(data:).
-        messages.push({ id: String(++serial), senderName: '旧图片', content: '[image:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=]', timestamp: Date.now() + serial });
+        messages.push({ id: String(++serial), senderName: '旧图片', content: '[image:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGPgL8v7TwlmGDVg1IBRA4aLAQBrPvIQoRTfDQAAAABJRU5ErkJggg==]', timestamp: Date.now() + serial });
         await page.evaluate(() => { delete window.__TAURI__; WenBox.scheduler.runNow(); });
         await page.waitForFunction(() => document.querySelectorAll('.chat-img-thumb').length === 3);
         await page.locator('.chat-img-thumb').last().click();
