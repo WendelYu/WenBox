@@ -263,6 +263,17 @@ fn get_download_dir() -> PathBuf {
 // ---------------- Tauri 供前端调用的命令 ----------------
 
 #[tauri::command]
+fn copy_image(width: usize, height: usize, rgba_base64: String) -> Result<(), String> {
+    use base64::Engine;
+    let count = width.checked_mul(height).filter(|n| *n > 0 && *n <= 32_000_000).ok_or("图片尺寸无效或过大")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(rgba_base64).map_err(|e| e.to_string())?;
+    if bytes.len() != count * 4 { return Err("图片数据长度无效".into()); }
+    arboard::Clipboard::new().map_err(|e| e.to_string())?
+        .set_image(arboard::ImageData { width, height, bytes: std::borrow::Cow::Owned(bytes) })
+        .map_err(|e| format!("写入图片剪贴板失败：{}", e))
+}
+
+#[tauri::command]
 async fn get_local_ip(state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || get_local_ip_blocking(state))
@@ -377,6 +388,27 @@ fn open_download_folder() -> Result<String, String> {
     Ok(p_str)
 }
 
+fn validate_archive_folder(name: &str) -> Result<(), String> {
+    if name.is_empty() { return Ok(()); }
+    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let reserved = ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str())
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && matches!(stem.as_bytes()[3], b'1'..=b'9'));
+    if name.trim().is_empty() || name.ends_with('.') || name.ends_with(' ') || reserved
+        || name.chars().any(|c| c.is_control() || "<>:\"/\\|?*".contains(c)) {
+        return Err("分类文件夹名称无效".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod archive_folder_tests {
+    #[test]
+    fn folder_names_are_portable_and_cannot_escape_destination() {
+        for name in ["", "项目资料", "2026-10-26_照片", "版本 1.0"] { assert!(super::validate_archive_folder(name).is_ok()); }
+        for name in ["..", "../outside", "a/b", "a\\b", "C:\\temp", "CON", "nul.txt", "COM1", "a.", "a "] { assert!(super::validate_archive_folder(name).is_err(), "{}", name); }
+    }
+}
+
 #[tauri::command]
 async fn save_file_to_directory(dir_path: String, folder_name: String, file_name: String, bytes_base64: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || save_file_to_directory_blocking(dir_path, folder_name, file_name, bytes_base64))
@@ -385,6 +417,7 @@ async fn save_file_to_directory(dir_path: String, folder_name: String, file_name
 }
 
 fn save_file_to_directory_blocking(dir_path: String, folder_name: String, file_name: String, bytes_base64: String) -> Result<String, String> {
+    validate_archive_folder(&folder_name)?;
     let base_dir = PathBuf::from(&dir_path);
     let target_dir = base_dir.join(&folder_name);
     if !target_dir.exists() {
@@ -1258,6 +1291,7 @@ async fn save_remote_file_to_directory(download_url: String, dir_path: String, f
 }
 
 fn save_remote_file_to_directory_blocking(download_url: String, dir_path: String, folder_name: String, file_name: String, token: Option<String>) -> Result<String, String> {
+    validate_archive_folder(&folder_name)?;
     let base_dir = PathBuf::from(&dir_path);
     let target_dir = if folder_name.trim().is_empty() {
         base_dir
@@ -3034,6 +3068,7 @@ fn main() {
     tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
+            copy_image,
             clipboard_files::clipboard_files,
             clipboard_files::clipboard_file_chunk,
             native_transport::native_request,

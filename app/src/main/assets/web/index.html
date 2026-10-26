@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
-    <meta name="wenbox-version" content="1.4.4">
+    <meta name="wenbox-version" content="1.4.5">
     <title>WenBox · 文件与消息直传</title>
     <script src="theme.js"></script>
     <link rel="icon" type="image/png" href="logo.png">
@@ -269,7 +269,15 @@
                         <p class="fs-md">还没有接收记录</p>
                         <span>收到的文件会自动保存到下载目录。</span>
                     </div>
-                </section><section class="section-upload">
+                </section><details id="roomArchive" class="room-archive"><summary>选择文件并分类归档</summary>
+<p class="text-2">从当前房间的分享与接收记录中选择文件，保存副本到你的分类文件夹。</p>
+<div class="row gap-2"><button id="refreshArchiveFiles" class="btn btn--secondary btn--sm" type="button">刷新文件</button><button id="selectAllArchive" class="btn btn--ghost btn--sm" type="button">全选 / 取消</button><span id="archiveSelectionCount" role="status">已选 0 个</span></div>
+<div id="archiveFileChoices" class="archive-file-choices"></div>
+<label for="customFolderSuffix">分类文件夹名称</label><input id="customFolderSuffix" class="input" value="项目资料" maxlength="60" placeholder="例如：现场照片、程序包、发票">
+<label class="archive-date-option"><input type="checkbox" id="archiveUseDate">添加日期前缀</label>
+<div class="archive-preview"><span>保存到所选位置下的</span><strong id="previewFolderName"></strong></div>
+<button id="btnSelectReimburseDir" class="btn btn--primary" type="button">选择位置并归档</button>
+<p class="text-3">可选择已有分类的上级目录合并归档；同名文件自动编号，不覆盖原文件。</p><div id="reimburseStatus" role="status" aria-live="polite" hidden></div></details><section class="section-upload">
 
 
                 <div id="dropZone" class="drop-zone">
@@ -287,7 +295,7 @@
 
 
 
-            </section></aside></div></main><main id="view-tools" class="primary-view" aria-label="工具" hidden><div class="segmented tools-tabs" aria-label="工具选择"><button type="button" data-tool="tab-json" class="active" aria-pressed="true">JSON</button><button type="button" data-tool="tab-converter" aria-pressed="false">进制</button><button type="button" data-tool="tab-cron" aria-pressed="false">Cron</button><button type="button" data-tool="tab-archive" aria-pressed="false">日期归档</button></div><section id="tab-json" class="tool-pane">
+            </section></aside></div></main><main id="view-tools" class="primary-view" aria-label="工具" hidden><div class="segmented tools-tabs" aria-label="工具选择"><button type="button" data-tool="tab-json" class="active" aria-pressed="true">JSON</button><button type="button" data-tool="tab-converter" aria-pressed="false">进制</button><button type="button" data-tool="tab-cron" aria-pressed="false">Cron</button></div><section id="tab-json" class="tool-pane">
             <section class="card">
                 <div class="section-header">
                     <div class="section-title">
@@ -442,27 +450,7 @@
                     </div>
                 </div>
             </section>
-        </section><section id="tab-archive" class="tool-pane" hidden>
-    <div class="archive-layout">
-        <section class="card archive-intro">
-            <span class="eyebrow">ORGANIZE / 日期归档</span>
-            <div class="archive-art" aria-hidden="true"><svg class="icon"><use href="#i-folder"></use></svg><span>01</span></div>
-            <h2>文件落位，井井有条。</h2>
-            <p>将当前设备分享的文件，直接保存到按日期命名的文件夹。发票、照片、现场资料，一次整理。</p>
-            <div class="archive-steps"><span><b>1</b> 连接设备</span><span><b>2</b> 命名主题</span><span><b>3</b> 选择保存位置</span></div>
-        </section>
-        <section class="card archive-settings">
-            <div class="section-title"><h3>设置本次归档</h3><span class="text-2">按今天的日期自动分类</span></div>
-            <label for="customFolderSuffix">归档主题 <span class="text-3"> / 可选</span></label>
-            <input type="text" id="customFolderSuffix" class="converter-input input" value="报销" placeholder="例如：发票、现场照片" maxlength="60">
-            <div class="archive-presets" aria-label="常用归档主题"><button type="button" data-archive-topic="报销">报销</button><button type="button" data-archive-topic="现场照片">现场照片</button><button type="button" data-archive-topic="项目资料">项目资料</button></div>
-            <div class="archive-preview"><span class="text-2">保存后的文件夹</span><div><svg class="icon"><use href="#i-folder"></use></svg><strong id="previewFolderName"></strong></div><span class="text-3">所选位置 / 日期_主题 / 文件</span></div>
-            <button id="btnSelectReimburseDir" class="btn btn--primary" type="button"><svg class="icon"><use href="#i-folder"></use></svg>选择位置并归档</button>
-            <p class="archive-hint">保存当前设备分享的全部文件，原文件仍保留。</p>
-            <div id="reimburseStatus" class="reimburse-status" role="status" aria-live="polite" hidden></div>
-        </section>
-    </div>
-</section></main></div>
+        </section></main></div>
 
 
     <dialog id="createRoomModal" class="modal" aria-labelledby="createRoomModalTitle">

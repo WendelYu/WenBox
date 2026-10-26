@@ -177,3 +177,17 @@ body { padding: var(--sp-4) var(--sp-6); align-items: flex-start; }
 body:not([data-room-mode="client"]):not([data-discovery-open="true"]) #roomLobby { display: none; }
 body[data-discovery-open="true"] .room-workspace,
 body[data-discovery-open="true"] .room-mobile-tabs { display: none; }
+
+.room-archive { padding: 14px; border: 1px solid var(--border-color, #dce6e3); border-radius: 14px; min-width: 0; }
+.room-archive summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.room-archive[open] > * + * { margin-top: 12px; }
+.room-archive .row { flex-wrap: wrap; }
+.room-archive .input { width: 100%; min-width: 0; }
+.room-archive .archive-preview { display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.archive-file-choices { max-height: 230px; overflow-y: auto; }
+.archive-file-choice { display: flex; align-items: center; gap: 8px; padding: 10px 0; cursor: pointer; }
+.archive-file-choice input, .archive-date-option input { width: 16px; height: 16px; flex: 0 0 16px; accent-color: #0f766e; }
+.archive-file-choice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.archive-file-choice small { flex-shrink: 0; opacity: .65; }
+.archive-date-option { display: flex; align-items: center; gap: 8px; }
+#reimburseStatus { overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }

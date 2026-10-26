@@ -820,10 +820,14 @@
     const previewFolderName = document.getElementById('previewFolderName');
     const customFolderSuffix = document.getElementById('customFolderSuffix');
 
+    function archiveFolderName() {
+        const name = customFolderSuffix.value.trim();
+        return document.getElementById('archiveUseDate').checked ? `${getTodayDateStr()}${name ? '_' + name : ''}` : name;
+    }
+    document.getElementById('archiveUseDate').addEventListener('change', updatePreviewFolderName);
     function updatePreviewFolderName() {
         if (!previewFolderName) return;
-        const suffix = (customFolderSuffix && customFolderSuffix.value.trim()) ? `_${customFolderSuffix.value.trim()}` : '';
-        previewFolderName.textContent = `${getTodayDateStr()}${suffix}`;
+        previewFolderName.textContent = archiveFolderName();
     }
 
     if (customFolderSuffix) {
@@ -2344,156 +2348,98 @@
         });
     }
 
-    // 日期归档直存：双模驱动 (支持 Tauri 原生桌面端与浏览器端)
-    if (btnSelectReimburseDir) {
-        btnSelectReimburseDir.addEventListener('click', async () => {
-            const archiveFiles = [...(currentFiles || [])];
-            if (!archiveFiles || archiveFiles.length === 0) {
-                window.showAlertDialog('暂无待传文件', '当前选定设备还没有待传文件，请先在对方设备上添加待传发票或文件！');
-                return;
+    let archiveCandidates = [];
+    let archiveRevision = -1;
+    const archiveSelection = new Set();
+    const archiveChoices = document.getElementById('archiveFileChoices');
+    function updateArchiveCount() { document.getElementById('archiveSelectionCount').textContent = `已选 ${archiveSelection.size} 个`; }
+    async function refreshArchiveFiles() {
+        const context = captureAttachmentContext();
+        const revision = roomRevision;
+        archiveChoices.textContent = '正在读取文件…';
+        archiveCandidates = []; btnSelectReimburseDir.disabled = true;
+        if (archiveRevision !== revision) archiveSelection.clear();
+        archiveRevision = revision;
+        try {
+            const lists = await Promise.all(['/api/files', '/api/received_files'].map(async path => {
+                const response = await fetchWithTimeout(context.base + path, { headers: authHeaders() });
+                if (!response.ok) throw new Error(`读取文件失败：HTTP ${response.status}`);
+                return (await response.json()).files || [];
+            }));
+            if (revision !== roomRevision) { archiveChoices.textContent = '房间已切换，请刷新'; return; }
+            archiveCandidates = [...new Map(lists.flat().map(file => [file.id, { ...file, context }])).values()];
+            const ids = new Set(archiveCandidates.map(f => f.id));
+            for (const id of archiveSelection) if (!ids.has(id)) archiveSelection.delete(id);
+            archiveChoices.replaceChildren();
+            for (const file of archiveCandidates) {
+                const label = document.createElement('label'); label.className = 'archive-file-choice';
+                const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = archiveSelection.has(file.id);
+                checkbox.addEventListener('change', () => { checkbox.checked ? archiveSelection.add(file.id) : archiveSelection.delete(file.id); updateArchiveCount(); });
+                const name = document.createElement('span'); name.textContent = file.name; name.title = file.name;
+                const size = document.createElement('small'); size.textContent = formatBytes(file.size);
+                label.append(checkbox, name, size); archiveChoices.append(label);
             }
-
-            const topic = customFolderSuffix.value.trim();
-            if (/[<>:"/\\|?*\x00-\x1f]/.test(topic) || /[. ]$/.test(topic)) {
-                showToast('主题不能包含路径符号或以句点结尾'); customFolderSuffix.focus(); return;
-            }
-            btnSelectReimburseDir.disabled = true;
-            btnSelectReimburseDir.setAttribute('aria-busy', 'true');
-            try {
-            const suffix = (customFolderSuffix && customFolderSuffix.value.trim()) ? `_${customFolderSuffix.value.trim()}` : '';
-            const dateFolderName = `${getTodayDateStr()}${suffix}`;
-
-            // 模式 A：如果是 Windows / Mac 客户端原生运行 (Tauri 环境) -> 原生文件夹选择 + Rust 极速流式存盘
-            const tauriDialog = getTauriDialog();
-            const invoke = getTauriInvoke();
-            if (tauriDialog && invoke) {
-                try {
-                    const selectedPath = await tauriDialog.open({
-                        directory: true,
-                        multiple: false,
-                        title: '请选择电脑上的归档根目录'
-                    });
-
-                    if (!selectedPath) return; // 用户取消
-
-                    reimburseStatus.hidden = false;
-                    reimburseStatus.textContent = ` 正在创建目录「${dateFolderName}」并直存文件...`;
-
-                    let successCount = 0;
-                    const tauriToken = roomState.token || null;
-                    for (let i = 0; i < archiveFiles.length; i++) {
-                        const f = archiveFiles[i];
-                        reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${archiveFiles.length}]: ${f.name}...`;
-
-                        try {
-                            const downloadUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : (getApiOrigin() || `http://127.0.0.1:9527`)) + `/api/download/${f.id}`;
-                            await invoke('save_remote_file_to_directory', {
-                                downloadUrl: downloadUrl,
-                                dirPath: selectedPath,
-                                folderName: dateFolderName,
-                                fileName: f.name,
-                                token: tauriToken
-                            });
-                            successCount++;
-                        } catch (saveErr) {
-                            console.error('Tauri save error:', saveErr);
-                        }
-                    }
-
-                    const sep = detectClientPlatform() === 'Windows' ? '\\' : '/';
-                    reimburseStatus.innerHTML = ` <b>${successCount === archiveFiles.length ? "归档完成" : "部分文件保存失败"}</b> · 已保存 ${successCount} / ${archiveFiles.length} 个文件到 <b>${escapeHtml(selectedPath + sep + dateFolderName)}</b> 目录下！`;
-                    showToast(`已保存 ${successCount} / ${archiveFiles.length} 个文件`);
-                } catch (tErr) {
-                    reimburseStatus.hidden = false;
-                    reimburseStatus.textContent = `直存异常: ${tErr.message || tErr}`;
-                }
-                return;
-            }
-
-            // 模式 B：如果在支持原生本地目录的 Secure Context 浏览器环境下 (如 localhost 或 https)
-            if (window.showDirectoryPicker) {
-                try {
-                    const rootDirHandle = await window.showDirectoryPicker({
-                        id: 'wenbox_archive_dir',
-                        mode: 'readwrite'
-                    });
-
-                    reimburseStatus.hidden = false;
-                    reimburseStatus.textContent = ` 正在「${rootDirHandle.name}」中创建文件夹「${dateFolderName}」...`;
-
-                    const targetDirHandle = await rootDirHandle.getDirectoryHandle(dateFolderName, { create: true });
-
-                    let successCount = 0;
-                    const dirPickerToken = getEffectiveRoomToken();
-                    for (let i = 0; i < archiveFiles.length; i++) {
-                        const f = archiveFiles[i];
-                        reimburseStatus.textContent = `⏳ 正在直存 [${i + 1}/${archiveFiles.length}]: ${f.name}...`;
-
-                        try {
-                            const fetchUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}` + (dirPickerToken ? `?token=${encodeURIComponent(dirPickerToken)}` : '');
-                            const fileResp = await fetch(fetchUrl);
-                            if (!fileResp.ok) throw new Error(`下载失败 (HTTP ${fileResp.status})`);
-                            const blob = await fileResp.blob();
-
-                            const fileHandle = await targetDirHandle.getFileHandle(f.name, { create: true });
-                            const writable = await fileHandle.createWritable();
-                            await writable.write(blob);
-                            await writable.close();
-                            successCount++;
-                        } catch (saveErr) {
-                            console.error('Save error:', saveErr);
-                        }
-                    }
-
-                    reimburseStatus.innerHTML = ` <b>${successCount === archiveFiles.length ? "归档完成" : "部分文件保存失败"}</b> · 已保存 ${successCount} / ${archiveFiles.length} 个文件到 <b>${escapeHtml(rootDirHandle.name + "/" + dateFolderName)}</b> 目录下，无需解压！`;
-                    showToast(`已保存 ${successCount} / ${archiveFiles.length} 个文件`);
-                } catch (err) {
-                    if (err.name !== 'AbortError') {
-                        reimburseStatus.hidden = false;
-                        reimburseStatus.textContent = `直存遇到异常: ${err.message || err}`;
-                    }
-                }
-                return;
-            }
-
-            // 模式 C：普通浏览器通过局域网 HTTP 访问 (因浏览器安全规范限制，无法直接调取操作系统底层文件夹选择器)
-            // 自动降级为【一键批量下载全部文件到浏览器的“下载”目录】
-            reimburseStatus.hidden = false;
-            reimburseStatus.innerHTML = `
-                <div class="archive-notice">
-                     <b>提示：</b>当前使用纯网页访问（浏览器安全规范限制非 HTTPS 网站直接读写本地磁盘目录）。<br>
-                    已为您自动开启<b>【批量下载全部文件】</b>至本机的“下载”目录！<br>
-                    <span class="text-primary"> 如需选择电脑任意磁盘位置（如 D:\\发票归档）按日期自动建文件夹直存，推荐直接运行电脑桌面端的 <b>WenBox.exe</b>。</span>
-                </div>
-            `;
-
-            let downloadedCount = 0;
-            const batchToken = getEffectiveRoomToken();
-            for (let i = 0; i < archiveFiles.length; i++) {
-                const f = archiveFiles[i];
-                reimburseStatus.innerHTML += `<div class="archive-progress">⏳ 正在下载 [${i + 1}/${archiveFiles.length}]: ${escapeHtml(f.name)}...</div>`;
-                const dlUrl = (currentTargetBaseUrl ? currentTargetBaseUrl : '') + `/api/download/${f.id}` + (batchToken ? `?token=${encodeURIComponent(batchToken)}` : '');
-
-                const a = document.createElement('a');
-                a.href = dlUrl;
-                a.download = f.name;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                downloadedCount++;
-
-                // 稍微延时 350ms 避免浏览器触发并发弹窗拦截
-                await new Promise(r => setTimeout(r, 350));
-            }
-
-            reimburseStatus.innerHTML += `<div class="archive-complete"> 已触发全部 ${downloadedCount} 个文件的自动批量下载，请前往电脑浏览器的“下载”目录查看！</div>`;
-            showToast(`已批量下载 ${downloadedCount} 个文件`);
-            } finally {
-                btnSelectReimburseDir.disabled = false;
-                btnSelectReimburseDir.removeAttribute('aria-busy');
-            }
-        });
+            if (!archiveCandidates.length) archiveChoices.textContent = '当前房间还没有文件';
+            updateArchiveCount();
+        } catch (error) { archiveChoices.textContent = '读取失败，请刷新重试'; showToast(error.message || String(error)); }
+        finally { btnSelectReimburseDir.disabled = false; }
     }
+    document.getElementById('roomArchive').addEventListener('toggle', event => { if (event.target.open) refreshArchiveFiles(); });
+    document.getElementById('refreshArchiveFiles').addEventListener('click', refreshArchiveFiles);
+    document.getElementById('selectAllArchive').addEventListener('click', () => {
+        const select = archiveSelection.size !== archiveCandidates.length;
+        archiveSelection.clear(); if (select) archiveCandidates.forEach(f => archiveSelection.add(f.id));
+        archiveChoices.querySelectorAll('input').forEach(input => { input.checked = select; }); updateArchiveCount();
+    });
+    btnSelectReimburseDir.addEventListener('click', async () => {
+        if (archiveRevision !== roomRevision) { await refreshArchiveFiles(); showToast('房间已切换，请重新选择文件'); return; }
+        const files = archiveCandidates.filter(f => archiveSelection.has(f.id));
+        const folder = archiveFolderName();
+        if (!files.length) { showToast('请先勾选需要归档的文件'); return; }
+        if (!folder || /[<>:"/\\|?*\x00-\x1f]/.test(folder) || /[. ]$/.test(folder) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(folder)) {
+            showToast('文件夹名称无效，请使用普通分类名称'); return;
+        }
+        btnSelectReimburseDir.disabled = true;
+        const failures = []; let saved = 0;
+        try {
+            const invoke = getTauriInvoke();
+            const dialog = getTauriDialog();
+            let directory, handle;
+            if (invoke && dialog) {
+                directory = await dialog.open({ directory: true, multiple: false, title: '选择分类文件夹的上级目录' });
+                if (!directory) return;
+            } else if (window.showDirectoryPicker) {
+                const root = await window.showDirectoryPicker({ mode: 'readwrite' });
+                handle = await root.getDirectoryHandle(folder, { create: true });
+            } else { showToast('当前浏览器无法选择归档目录，请使用 WenBox 桌面客户端'); return; }
+            reimburseStatus.hidden = false;
+            for (const file of files) {
+                reimburseStatus.textContent = `正在归档 ${saved + failures.length + 1}/${files.length}：${file.name}`;
+                try {
+                    const url = resolveChatUrl('/api/download/' + encodeURIComponent(file.id), file.context);
+                    if (directory) {
+                        await invoke('save_remote_file_to_directory', { downloadUrl: url, dirPath: directory, folderName: folder, fileName: file.name, token: new URL(url).searchParams.get('token') });
+                    } else {
+                        const response = await fetchWithTimeout(url);
+                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        const safe = file.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+                        let name = safe, index = 0;
+                        while (true) { try { await handle.getFileHandle(name); name = `${++index}_${safe}`; } catch (e) { if (e.name === 'NotFoundError') break; throw e; } }
+                        const target = await handle.getFileHandle(name, { create: true });
+                        const writer = await target.createWritable();
+                        try { await writer.write(await response.blob()); await writer.close(); } catch (e) { await writer.abort(); throw e; }
+                    }
+                    saved++; archiveSelection.delete(file.id);
+                } catch (error) { failures.push(`${file.name}：${error.message || error}`); }
+            }
+            reimburseStatus.textContent = `已归档 ${saved}/${files.length} 个文件到 ${directory ? directory + '/' : ''}${folder}`;
+            if (failures.length) showToast('归档失败（失败项保留勾选，可重试）：\n' + failures.join('\n'));
+            else showToast(`已归档 ${saved} 个文件`);
+            updateArchiveCount();
+            archiveChoices.querySelectorAll('input').forEach((input, index) => { input.checked = archiveSelection.has(archiveCandidates[index]?.id); });
+        } catch (error) { if (error.name !== 'AbortError') showToast(`归档失败：${error.message || error}`); }
+        finally { btnSelectReimburseDir.disabled = false; }
+    });
 
     // File objects from picker, drop and chat all enter the same cancellable XHR queue.
     function uploadFiles(fileList, image = false) {
@@ -2935,7 +2881,7 @@
             thumbWrap.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (imageFailed) loadImage(true);
-                else openChatImageModal(img.src, imgSrc);
+                else openChatImageModal(img.src, imgSrc, attachmentContext);
             });
 
             contentWrap.appendChild(thumbWrap);
@@ -3058,7 +3004,8 @@
         `;
         copyBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            window.copyChatMessage(content, copyBtn);
+            if (isImage) { copyImage(contentWrap.querySelector('img').src, copyBtn); }
+            else window.copyChatMessage(content, copyBtn);
         });
         contentWrap.appendChild(copyBtn);
 
@@ -3078,9 +3025,10 @@
             const fileName = parts[0] || '';
             const rawUrl = parts[2] || '';
             copyText = `${fileName} - ${resolveChatUrl(rawUrl)}`;
-        } else if (text.startsWith('[image:') && text.endsWith(']')) {
-            const rawUrl = text.slice(7, -1);
-            copyText = resolveChatUrl(rawUrl);
+        } else if ((text.startsWith('[image:') && text.endsWith(']')) || text.startsWith('data:image/')) {
+            try { await copyImage(await resolveRequestUrl(resolveChatUrl(text.startsWith('[image:') ? text.slice(7, -1) : text)), btn); }
+            catch (error) { showToast(`复制图片失败：${error.message || error}`); }
+            return;
         }
 
         if (await copyWithFeedback(copyText, '消息已复制')) {
@@ -3207,16 +3155,26 @@
     async function sendChatDocFile(file) { if (file) uploadFiles([file]); }
 
     // 图片全屏预览 Modal
-    function openChatImageModal(src, original = src) {
+    function openChatImageModal(src, original = src, context = captureAttachmentContext()) {
         if (!chatImageModal || !chatModalImage) return;
         chatModalImage.src = src;
         if (chatModalDownloadBtn) {
             chatModalDownloadBtn.href = src;
-            chatModalDownloadBtn.onclick = event => {
-                if (getTauriInvoke() && /^https?:/.test(original) && new URL(original).pathname.startsWith('/api/download/')) {
-                    event.preventDefault();
-                    window.downloadRemoteFile(decodeURIComponent(new URL(original).pathname.slice('/api/download/'.length)), chatModalDownloadBtn.download);
-                }
+            chatModalDownloadBtn.onclick = async event => {
+                event.preventDefault();
+                try {
+                    const url = new URL(original, context.base + '/');
+                    if (url.pathname.startsWith('/api/download/')) {
+                        await window.downloadRemoteFile(decodeURIComponent(url.pathname.slice('/api/download/'.length)), chatModalDownloadBtn.download, context);
+                    } else if (getTauriInvoke() && getTauriDialog()) {
+                        const path = await getTauriDialog().save({ defaultPath: chatModalDownloadBtn.download, title: '保存原图' });
+                        if (!path) return;
+                        const response = await fetch(src); const bytes = await blobToBase64(await response.blob());
+                        const split = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+                        await getTauriInvoke()('save_file_to_directory', { dirPath: path.slice(0, split), folderName: '', fileName: path.slice(split + 1), bytesBase64: bytes });
+                        showToast('原图已保存');
+                    } else { const link = document.createElement('a'); link.href = src; link.download = chatModalDownloadBtn.download; link.click(); }
+                } catch (error) { showToast(`保存原图失败：${error.message || error}`); }
             };
             let ext = 'png';
             const mimeMatch = /data:image\/([a-z0-9.+-]+)[;,]/i.exec(src || '');
@@ -3245,29 +3203,29 @@
             if (e.target === chatImageModal) closeChatImageModal();
         });
     }
-    if (chatModalCopyBtn) {
-        chatModalCopyBtn.addEventListener('click', async () => {
-            try {
-                if (chatModalImage && chatModalImage.src) {
-                    let blob;
-                    if (chatModalImage.src.startsWith('data:')) {
-                        const [header, payload] = chatModalImage.src.split(',');
-                        const type = header.slice(5).split(';')[0];
-                        blob = new Blob([Uint8Array.from(atob(payload), c => c.charCodeAt(0))], { type });
-                    } else {
-                        const response = await fetch(chatModalImage.src);
-                        blob = await response.blob();
-                    }
-                    await navigator.clipboard.write([
-                        new ClipboardItem({ [blob.type]: blob })
-                    ]);
-                    showToast('图片已复制到系统剪贴板');
+    async function copyImage(src, button) {
+        if (!src) { showToast('图片尚未加载，请重试'); return; }
+        try {
+            const png = (async () => {
+                const image = new Image(); image.crossOrigin = 'anonymous'; image.src = src;
+                await image.decode();
+                if (image.naturalWidth * image.naturalHeight > 32000000) throw new Error('图片过大，请保存原图');
+                const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+                const ctx = canvas.getContext('2d'); ctx.drawImage(image, 0, 0);
+                if (getTauriInvoke()) {
+                    const rgba = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                    const base64 = await blobToBase64(new Blob([rgba]));
+                    await getTauriInvoke()('copy_image', { width: canvas.width, height: canvas.height, rgbaBase64: base64 });
+                    return null;
                 }
-            } catch (e) {
-                showToast('当前环境不支持直接复制图片，请使用下载保存');
-            }
-        });
+                return await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('图片转换失败')), 'image/png'));
+            })();
+            if (getTauriInvoke()) await png;
+            else await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+            showToast('图片已复制到系统剪贴板'); if (button) markCopied(button, '已复制');
+        } catch (error) { showToast(`复制图片失败：${error.message || error}`); }
     }
+    if (chatModalCopyBtn) chatModalCopyBtn.addEventListener('click', () => copyImage(chatModalImage.src));
 
     // 快捷工具栏按钮绑定
     if (chatBtnSendImage && chatImageFileInput) {

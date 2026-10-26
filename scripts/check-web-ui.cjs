@@ -235,7 +235,7 @@ async function main() {
         const navBounds = await page.locator('.nav-tabs').boundingBox();
         assert.ok(inputBounds.y + inputBounds.height <= navBounds.y, 'mobile composer stays above bottom navigation');
         await page.locator('[data-view="view-tools"]').click();
-        for (const tool of ['tab-json', 'tab-converter', 'tab-cron', 'tab-archive']) {
+        for (const tool of ['tab-json', 'tab-converter', 'tab-cron']) {
             await page.locator(`[data-tool="${tool}"]`).click();
             assert.equal(await page.locator(`#${tool}`).isVisible(), true);
             assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, tool);
@@ -243,7 +243,7 @@ async function main() {
         await page.setViewportSize({ width: 1100, height: 780 });
         for (const theme of ['light', 'dark']) {
             await page.evaluate(theme => window.WenBoxTheme.set(theme), theme);
-            for (const tool of ['tab-json', 'tab-converter', 'tab-cron', 'tab-archive']) {
+            for (const tool of ['tab-json', 'tab-converter', 'tab-cron']) {
                 await page.locator(`[data-tool="${tool}"]`).click();
                 await page.waitForTimeout(320);
                 await page.screenshot({ path: path.join(screenshots, `${tool}-${theme}-1100.png`) });
@@ -325,6 +325,42 @@ async function main() {
         assert.match(await page.evaluate(() => window.copiedError), /fixture file download: status code 404/);
         assert.equal(await page.locator('.toast-message').evaluate(el => getComputedStyle(el).getPropertyValue('user-select') || getComputedStyle(el).getPropertyValue('-webkit-user-select')), 'text');
         await page.locator('#toast button').filter({ hasText: '关闭' }).click();
+        await page.evaluate(() => { delete window.__TAURI__; });
+        // Archive selected room files into a custom folder through the native streaming API.
+        await page.locator('#roomArchive summary').click();
+        await page.locator('.archive-file-choice input').first().waitFor();
+        await page.locator('.archive-file-choice input').first().check();
+        await page.locator('#customFolderSuffix').fill('现场资料');
+        assert.equal(await page.locator('#previewFolderName').textContent(), '现场资料');
+        await page.screenshot({ path: path.join(screenshots, 'room-archive.png') });
+        await page.evaluate(() => {
+            window.savedArchive = [];
+            window.__TAURI__ = { dialog: { open: async () => '/tmp/archive-fixture' }, invoke: async (cmd, args) => { if (cmd !== 'save_remote_file_to_directory') throw Error(cmd); window.savedArchive.push(args); } };
+        });
+        await page.locator('#btnSelectReimburseDir').click();
+        await page.waitForFunction(() => window.savedArchive.length === 1);
+        const archive = await page.evaluate(() => window.savedArchive[0]);
+        assert.equal(archive.folderName, '现场资料');
+        assert.equal(archive.dirPath, '/tmp/archive-fixture');
+        assert.ok(archive.downloadUrl.includes('/api/download/'));
+        await page.evaluate(() => { delete window.__TAURI__; });
+        await page.locator('#roomArchive summary').click();
+        // Both image copy controls must write pixels, never protocol markup or a URL.
+        const imageCard = page.locator('.chat-item').filter({ has: page.locator('.chat-img-thumb') }).first();
+        await imageCard.locator('.chat-img-thumb').click();
+        await page.evaluate(() => {
+            window.imageCalls = [];
+            window.__TAURI__ = { dialog: { save: async () => '/tmp/original.png' }, invoke: async (cmd, args) => { window.imageCalls.push({ cmd, args }); } };
+        });
+        await page.locator('#chatModalCopyBtn').click();
+        await page.waitForFunction(() => window.imageCalls.some(c => c.cmd === 'copy_image'));
+        const copied = await page.evaluate(() => window.imageCalls.find(c => c.cmd === 'copy_image').args);
+        assert.equal(Buffer.from(copied.rgbaBase64, 'base64').length, copied.width * copied.height * 4);
+        await page.locator('#chatModalDownloadBtn').click();
+        await page.waitForFunction(() => window.imageCalls.some(c => c.cmd === 'save_remote_file_to_directory'));
+        await page.locator('#btnCloseChatImageModal').click();
+        await imageCard.locator('.copy-btn').click();
+        await page.waitForFunction(() => window.imageCalls.filter(c => c.cmd === 'copy_image').length === 2);
         await page.evaluate(() => { delete window.__TAURI__; });
         await page.locator('#btnLeaveRoom').click(); await page.locator('#appConfirmOkBtn').click();
         await page.waitForFunction(() => document.body.dataset.roomMode === 'client');
