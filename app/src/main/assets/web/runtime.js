@@ -108,6 +108,18 @@
         for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
         return btoa(binary);
     }
+    async function clipboardFiles() {
+        const entries = await nativeInvoke('clipboard_files', {});
+        return entries.map(entry => ({
+            name: entry.name, size: entry.size, type: entry.mime,
+            slice(start, end) {
+                return { async arrayBuffer() {
+                    const encoded = await nativeInvoke('clipboard_file_chunk', { id: entry.id, offset: start, length: Math.min(end, entry.size) - start });
+                    return Uint8Array.from(atob(encoded), c => c.charCodeAt(0)).buffer;
+                } };
+            }
+        }));
+    }
     async function nativeUpload(file, context, onProgress, signal) {
         let id, timer;
         const check = () => { if (signal.aborted) throw new DOMException('已取消', 'AbortError'); };
@@ -261,6 +273,7 @@
         resolveRequestUrl,
         needsNativeTransport,
         nativeUpload,
+        clipboardFiles,
         singleFlight,
         fetchWithTimeout,
         fetchOnce,

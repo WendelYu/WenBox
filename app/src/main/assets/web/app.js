@@ -3277,22 +3277,32 @@
             }
         });
 
-        // 剪贴板截图直接 Ctrl+V 粘贴发送
-        webChatMessageInput.addEventListener('paste', async (e) => {
-            const clipboardData = e.clipboardData || window.clipboardData;
-            if (!clipboardData || !clipboardData.items) return;
-
-            for (let i = 0; i < clipboardData.items.length; i++) {
-                const item = clipboardData.items[i];
-                if (item.type.indexOf('image') !== -1) {
-                    e.preventDefault();
-                    const file = item.getAsFile();
-                    if (file) {
-                        await sendChatImageFile(file);
-                        return;
-                    }
+        // Prefer real browser files; Finder/Explorer file lists need native clipboard access.
+        webChatMessageInput.addEventListener('paste', async (event) => {
+            const clipboard = event.clipboardData;
+            if (!clipboard) return;
+            const files = Array.from(clipboard.files || []);
+            if (!files.length) {
+                for (const item of Array.from(clipboard.items || [])) {
+                    if (item.kind === 'file') { const file = item.getAsFile(); if (file) files.push(file); }
                 }
             }
+            if (files.length) { event.preventDefault(); uploadFiles(files); return; }
+            if (!window.WenBox.needsNativeTransport()) return;
+            // Stop the default filename insertion before awaiting native clipboard results.
+            event.preventDefault();
+            const text = clipboard.getData('text/plain');
+            const value = webChatMessageInput.value;
+            const start = webChatMessageInput.selectionStart, end = webChatMessageInput.selectionEnd;
+            try {
+                const nativeFiles = await window.WenBox.clipboardFiles();
+                if (nativeFiles.length) { uploadFiles(nativeFiles); return; }
+                if (text) {
+                    const unchanged = webChatMessageInput.value === value;
+                    webChatMessageInput.setRangeText(text, unchanged ? start : webChatMessageInput.selectionStart, unchanged ? end : webChatMessageInput.selectionEnd, 'end');
+                    webChatMessageInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            } catch (error) { showToast(`粘贴失败：${error.message || error}；可改用选择文件`); }
         });
     }
 

@@ -278,3 +278,19 @@ test('native image history limits concurrent loads and releases failed slots', a
     await Promise.all(Array.from({ length: 9 }, (_, i) => api.resolveRequestUrl(`http://169.254.1.2/api/download/${i}`)));
     assert.equal(peak, 3); assert.equal(active, 0);
 });
+
+test('native clipboard files are read lazily in bounded slices without treating paths as text', async () => {
+    const api = setup();
+    const calls = [];
+    api.window.__TAURI__ = { invoke: async (command, args) => {
+        calls.push([command, args]);
+        if (command === 'clipboard_files') return [{ id: 'opaque-id', name: '文件.zip', size: 6, mime: 'application/zip' }];
+        return btoa('abcdef'.slice(args.offset, args.offset + args.length));
+    } };
+    const [file] = await api.clipboardFiles();
+    assert.equal(file.name, '文件.zip');
+    assert.equal(calls.length, 1);
+    assert.equal(Buffer.from(await file.slice(2, 100).arrayBuffer()).toString(), 'cdef');
+    assert.equal(calls[1][1].length, 4);
+    assert.equal(calls[1][1].id, 'opaque-id');
+});

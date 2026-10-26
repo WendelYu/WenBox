@@ -3,6 +3,7 @@
 
 mod network;
 mod native_transport;
+mod clipboard_files;
 #[cfg(windows)]
 mod windows_network;
 
@@ -3018,6 +3019,8 @@ fn main() {
     tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
+            clipboard_files::clipboard_files,
+            clipboard_files::clipboard_file_chunk,
             native_transport::native_request,
             native_transport::native_upload_begin,
             native_transport::native_upload_chunk,
