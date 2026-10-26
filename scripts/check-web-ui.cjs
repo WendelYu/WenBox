@@ -181,7 +181,10 @@ async function main() {
             const data = new DataTransfer();
             data.items.add(new File(['paste file'], '粘贴文件.txt', { type: 'text/plain' }));
             data.setData('text/plain', '粘贴文件.txt');
-            document.getElementById('webChatMessageInput').dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
+            // Firefox discards constructor clipboardData for synthetic ClipboardEvents.
+            const event = new Event('paste', { bubbles: true, cancelable: true });
+            Object.defineProperty(event, 'clipboardData', { value: data });
+            document.getElementById('webChatMessageInput').dispatchEvent(event);
         });
         await page.waitForFunction(() => [...document.querySelectorAll('#uploadQueue .upload-row')].some(row => row.textContent.includes('粘贴文件.txt') && row.dataset.state === 'done'));
         await page.evaluate(async () => {
@@ -192,12 +195,12 @@ async function main() {
                 WenBox.clipboardFiles = async () => [new File(['native paste'], '系统剪贴板.txt', { type: 'text/plain' })];
                 const data = new DataTransfer(); data.setData('text/plain', '系统剪贴板.txt');
                 input.value = '';
-                input.dispatchEvent(new ClipboardEvent('paste', { cancelable: true, clipboardData: data }));
+                { const event = new Event('paste', { cancelable: true }); Object.defineProperty(event, 'clipboardData', { value: data }); input.dispatchEvent(event); }
                 await new Promise(resolve => setTimeout(resolve, 0));
                 if (input.value !== '') throw Error('File paste must not insert filenames');
                 WenBox.clipboardFiles = async () => [];
                 data.setData('text/plain', '普通文字');
-                input.dispatchEvent(new ClipboardEvent('paste', { cancelable: true, clipboardData: data }));
+                { const event = new Event('paste', { cancelable: true }); Object.defineProperty(event, 'clipboardData', { value: data }); input.dispatchEvent(event); }
                 await new Promise(resolve => setTimeout(resolve, 0));
                 if (input.value !== '普通文字') throw Error('Text paste was lost');
                 input.value = '';
