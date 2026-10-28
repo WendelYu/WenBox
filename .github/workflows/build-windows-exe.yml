@@ -38,6 +38,12 @@ jobs:
         run: |
           $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
           & ./scripts/check-kvm-installation.ps1 -Installer $installer.FullName
+      - name: Collect installer diagnostics
+        if: always()
+        shell: powershell
+        run: |
+          $log = Join-Path $env:TEMP 'WenBox-Kvm-Install.log'
+          if (Test-Path -LiteralPath $log) { Copy-Item -LiteralPath $log -Destination . }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -46,6 +52,7 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/installer/install-service.ps1
             scripts/kvm-backend-lock.json
+            WenBox-Kvm-Install.log
             windows-build.log
           if-no-files-found: error
           retention-days: 14

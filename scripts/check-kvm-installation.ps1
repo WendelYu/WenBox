@@ -20,6 +20,8 @@ try {
  foreach($rule in $acl.Access){$sid=$rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value;if($sid -notin @('S-1-5-18','S-1-5-32-544')){throw ('Unexpected input-state ACL principal '+$sid)}}
  $registered=Get-CimInstance Win32_Service -Filter "Name='WenBoxKvm'"
  if($registered.StartName -ne 'LocalSystem'){throw 'Service must use the system account'}
+ $expectedPath='"'+(Join-Path $root 'resources\kvm\wenbox-kvm-service.exe')+'"'
+ if($registered.PathName -ine $expectedPath){throw 'Service executable path must be fixed and quoted'}
  # Even administrators using another executable must not receive an accepted service reply.
  $pipe=New-Object IO.Pipes.NamedPipeClientStream('.', 'WenBox.Kvm.v1', [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::Asynchronous)
  $connected=$false

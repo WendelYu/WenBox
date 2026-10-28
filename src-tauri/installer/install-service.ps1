@@ -7,6 +7,15 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+trap {
+    $failure = $_.ToString() + "`r`n" + $_.ScriptStackTrace
+    try {
+        $log = Join-Path ([IO.Path]::GetTempPath()) 'WenBox-Kvm-Install.log'
+        [IO.File]::AppendAllText($log, ((Get-Date -Format o) + ' Action=' + $Action + "`r`n" + $failure + "`r`n"))
+    } catch { }
+    [Console]::Error.WriteLine($failure)
+    exit 1
+}
 if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell for service installation.' }
 $expected = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WenBox'
 if ([IO.Path]::GetFullPath($InstallRoot).TrimEnd('\') -ine $expected.TrimEnd('\')) { throw 'The privileged input component requires the standard Program Files\WenBox installation directory.' }
@@ -62,8 +71,15 @@ foreach ($folder in @($InstallRoot,$stateRoot)) {
     if (@(Get-ChildItem -LiteralPath $folder -Force).Count -gt 0) { Native $icacls @((Join-Path $folder '*'),'/reset','/T','/C') }
 }
 $quotedBinary = '"' + $binary + '"'
-if ($null -eq $svc) { Native $sc @('create',$serviceName,'binPath=',$quotedBinary,'start=','auto','obj=','LocalSystem','DisplayName=','WenBox Input Service') }
-else { Native $sc @('config',$serviceName,'binPath=',$quotedBinary,'start=','auto','obj=','LocalSystem') }
+# Use structured service APIs so Windows PowerShell 5.1 native argument quoting
+# cannot strip the required quotes around a Program Files executable path.
+if ($null -eq $svc) {
+    New-Service -Name $serviceName -BinaryPathName $quotedBinary -StartupType Automatic -DisplayName 'WenBox Input Service' | Out-Null
+} else {
+    $existing = Get-CimInstance Win32_Service -Filter "Name='WenBoxKvm'"
+    $changed = Invoke-CimMethod -InputObject $existing -MethodName Change -Arguments @{PathName=$quotedBinary; StartMode='Automatic'; StartName='LocalSystem'}
+    if ($changed.ReturnValue -ne 0) { throw ('Service configuration failed: ' + $changed.ReturnValue) }
+}
 Native $sc @('description',$serviceName,'WenBox keyboard and mouse input for paired devices. No network listener in this service.')
 Native $sc @('failure',$serviceName,'reset=','86400','actions=','restart/3000/restart/10000/restart/30000')
 $netsh = Join-Path $env:WINDIR 'System32\netsh.exe'
