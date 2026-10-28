@@ -46,6 +46,53 @@ pub fn read_line<T: std::io::Read>(file: &mut T) -> Result<Vec<u8>, String> {
         }
     }
 }
+// PIPE_NOWAIT can return a successful zero-byte read while still connected.
+// Peek first to distinguish an idle pipe from a disconnected peer; otherwise
+// std::io::Read interprets an idle pipe as EOF and aborts the RPC.
+#[cfg(windows)]
+pub struct PipeIo(pub std::fs::File);
+#[cfg(windows)]
+impl std::os::windows::io::AsRawHandle for PipeIo {
+    fn as_raw_handle(&self) -> std::os::windows::io::RawHandle {
+        std::os::windows::io::AsRawHandle::as_raw_handle(&self.0)
+    }
+}
+#[cfg(windows)]
+impl std::io::Read for PipeIo {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use std::os::windows::io::AsRawHandle;
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let mut available = 0;
+        if unsafe {
+            windows_sys::Win32::System::Pipes::PeekNamedPipe(
+                self.as_raw_handle() as _,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut available,
+                std::ptr::null_mut(),
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        if available == 0 {
+            return Err(std::io::ErrorKind::WouldBlock.into());
+        }
+        std::io::Read::read(&mut self.0, buf)
+    }
+}
+#[cfg(windows)]
+impl std::io::Write for PipeIo {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        std::io::Write::write(&mut self.0, buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.0)
+    }
+}
 // A byte-mode named pipe discards unread output on DisconnectNamedPipe.
 // Wait for the client to consume a complete reply before disconnecting; both
 // endpoints use nonblocking IO and the same bounded read deadline.
@@ -105,7 +152,7 @@ mod tests {
             )
         };
         assert_ne!(raw, INVALID_HANDLE_VALUE);
-        let mut server = unsafe { std::fs::File::from_raw_handle(raw as _) };
+        let mut server = PipeIo(unsafe { std::fs::File::from_raw_handle(raw as _) });
         let worker = std::thread::spawn(move || {
             unsafe {
                 let connected = ConnectNamedPipe(server.as_raw_handle() as _, std::ptr::null_mut());
@@ -135,11 +182,13 @@ mod tests {
                 DisconnectNamedPipe(server.as_raw_handle() as _);
             }
         });
-        let mut client = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(name)
-            .unwrap();
+        let mut client = PipeIo(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(name)
+                .unwrap(),
+        );
         unsafe {
             let mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
             assert_ne!(

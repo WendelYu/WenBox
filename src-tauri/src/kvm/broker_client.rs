@@ -40,7 +40,7 @@ fn request(request: &Request) -> Result<Reply, String> {
                 .custom_flags(SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION)
                 .open(PIPE)
             {
-                Ok(file) => break file,
+                Ok(file) => break PipeIo(file),
                 Err(e)
                     if matches!(e.raw_os_error(), Some(2 | 231))
                         && std::time::Instant::now() < until =>

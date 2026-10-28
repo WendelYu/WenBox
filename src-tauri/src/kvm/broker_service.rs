@@ -455,7 +455,7 @@ unsafe extern "system" fn service_main(argc: u32, argv: *mut *mut u16) {
                 );
                 LocalFree(descriptor as _);
                 if pipe != INVALID_HANDLE_VALUE {
-                    let mut file = std::fs::File::from_raw_handle(pipe as _);
+                    let mut file = PipeIo(std::fs::File::from_raw_handle(pipe as _));
                     report(handle, SERVICE_RUNNING);
                     if argc == 2 && !argv.is_null() {
                         let arg = *argv.add(1);
