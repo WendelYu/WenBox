@@ -11,6 +11,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           workspaces: './src-tauri -> target'
       - uses: actions/setup-node@v4
         with:

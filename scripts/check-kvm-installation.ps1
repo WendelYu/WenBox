@@ -40,7 +40,8 @@ try {
  if(-not $rejected){throw 'Unauthorized caller was not rejected'}
  Stop-TestApp
  Run-Installer $Installer
- (Get-Service -Name WenBoxKvm).WaitForStatus('Running',[TimeSpan]::FromSeconds(15))
+ $upgraded=Get-Service -Name WenBoxKvm
+ try {$upgraded.WaitForStatus('Running',[TimeSpan]::FromSeconds(15))} finally {$upgraded.Dispose()}
  Write-Output 'PASS: clean install, protected service data, wrong-image pipe rejection, in-place upgrade'
 } finally {
  Stop-TestApp
