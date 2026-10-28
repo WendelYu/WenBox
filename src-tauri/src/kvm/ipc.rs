@@ -117,6 +117,20 @@ pub fn request(endpoint: Endpoint, action: Action) -> Result<(), String> {
     Err("输入后端未运行，或本地通信不可用".into())
 }
 
+#[cfg(unix)]
+pub fn request_at(root: &std::path::Path, action: Action) -> Result<(), String> {
+    use std::os::unix::net::UnixStream;
+    let mut stream = UnixStream::connect(root.join(Endpoint::Core.name()))
+        .map_err(|e| format!("输入核心本地通信不可用：{e}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(TIMEOUT))
+        .map_err(|e| e.to_string())?;
+    exchange(&mut stream, action)
+}
+
 #[cfg(windows)]
 pub fn request(endpoint: Endpoint, action: Action) -> Result<(), String> {
     use std::fs::OpenOptions;

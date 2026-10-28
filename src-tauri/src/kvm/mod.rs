@@ -121,7 +121,7 @@ fn status() -> Result<Status, String> {
         engine_diagnostics: m.engine_diagnostics(),
         service_ready: service,
         service_error,
-        kvm_revision: "m2.2",
+        kvm_revision: "m2.3",
         profile_ready: view.peer.is_some(),
         role: Some(view.local.role),
         tls_configured: true,

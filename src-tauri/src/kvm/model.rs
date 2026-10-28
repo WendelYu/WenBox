@@ -189,9 +189,9 @@ pub fn render_profile(root: &Path, p: &EngineProfile) -> Result<std::path::PathB
             format!("v2:sha256:{}\n", p.peer.fingerprint.to_lowercase()).as_bytes(),
         )?;
     }
-    let layout=format!("section: screens\n  {own}:\n  {peer}:\nend\nsection: links\n  {own}:\n    {} = {peer}\n  {peer}:\n    {} = {own}\nend\nsection: options\n  keystroke(Control+Alt+Escape) = switchToScreen({own})\nend\n",p.side.name(),p.side.opposite().name());
+    let layout=format!("section: links\n  {own}:\n    {} = {peer}\n  {peer}:\n    {} = {own}\nend\nsection: options\n  keystroke(Control+Alt+Escape) = switchToScreen({own})\nend\n",p.side.name(),p.side.opposite().name());
     atomic(&root.join("screens.conf"), layout.as_bytes())?;
-    let config=format!("[core]\ncoreMode={}\ncomputerName={own}\ninterface={}\nport={INPUT_PORT}\nprocessMode=1\nenableEnterCommand=false\nenableExitCommand=false\n[security]\ntlsEnabled=true\ncheckPeerFingerprints=true\ncertificate={}\n[client]\nremoteHost={}\n[server]\nexternalConfig=true\nexternalConfigFile={}\nenableClipboard=false\nenableHeartbeat=true\nheartbeat=500\n[daemon]\nelevate=true\n[gui]\nstartCoreWithGui=false\nenableUpdateCheck=false\n[log]\nlevel=INFO\n",if p.role==Role::Source{2}else{1},p.peer.local_ip,ini_path(&tls.join("device.pem")),p.peer.ip,ini_path(&root.join("screens.conf")));
+    let config=format!("[computer_{own}]\nname={own}\n[computer_{peer}]\nname={peer}\n[core]\ncoreMode={}\ncomputerName={own}\ninterface={}\nport={INPUT_PORT}\nprocessMode=1\nenableEnterCommand=false\nenableExitCommand=false\n[security]\ntlsEnabled=true\ncheckPeerFingerprints=true\ncertificate={}\n[client]\nremoteHost={}\n[server]\nexternalConfig=true\nexternalConfigFile={}\nenableClipboard=false\nenableHeartbeat=true\nheartbeat=500\n[daemon]\nelevate=true\n[gui]\nstartCoreWithGui=false\nenableUpdateCheck=false\n[log]\nlevel=INFO\n",if p.role==Role::Source{2}else{1},p.peer.local_ip,ini_path(&tls.join("device.pem")),p.peer.ip,ini_path(&root.join("screens.conf")));
     let path = root.join("input.ini");
     atomic(&path, config.as_bytes())?;
     Ok(path)
@@ -224,10 +224,21 @@ mod tests {
             .unwrap();
             let s = std::fs::read_to_string(path).unwrap();
             assert!(s.contains("enableClipboard=false"));
+            assert!(s.contains(&format!(
+                "[computer_{}]\nname={}\n",
+                id.screen().unwrap(),
+                id.screen().unwrap()
+            )));
+            assert!(s.contains(&format!(
+                "[computer_{}]\nname={}\n",
+                screen(&peer.id).unwrap(),
+                screen(&peer.id).unwrap()
+            )));
             let l = std::fs::read_to_string(d.path().join("screens.conf")).unwrap();
             assert!(l.contains(&format!("{} =", side.name())));
             assert!(l.contains(&format!("{} =", side.opposite().name())));
             assert!(!l.contains("injected"));
+            assert!(!l.contains("section: screens"));
         }
     }
     #[test]
