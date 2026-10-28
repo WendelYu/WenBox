@@ -46,6 +46,26 @@ pub fn read_line<T: std::io::Read>(file: &mut T) -> Result<Vec<u8>, String> {
         }
     }
 }
+// A byte-mode named pipe discards unread output on DisconnectNamedPipe.
+// Wait for the client to consume a complete reply before disconnecting; both
+// endpoints use nonblocking IO and the same bounded read deadline.
+pub fn send_reply<T: std::io::Read + std::io::Write>(
+    file: &mut T,
+    reply: &Reply,
+) -> Result<(), String> {
+    let mut bytes = serde_json::to_vec(reply).map_err(|_| "输入服务响应编码失败")?;
+    bytes.push(b'\n');
+    file.write_all(&bytes).map_err(|_| "输入服务响应发送失败")?;
+    if !read_line(file)?.is_empty() {
+        return Err("输入服务响应确认无效".into());
+    }
+    Ok(())
+}
+pub fn receive_reply<T: std::io::Read + std::io::Write>(file: &mut T) -> Result<Reply, String> {
+    let bytes = read_line(file)?;
+    file.write_all(b"\n").map_err(|_| "输入服务响应确认失败")?;
+    serde_json::from_slice(&bytes).map_err(|_| "输入服务响应格式错误".into())
+}
 #[cfg(windows)]
 pub fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
@@ -54,6 +74,90 @@ pub fn wide(text: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn delayed_windows_pipe_reader_receives_reply_before_disconnect() {
+        use std::{
+            fs::OpenOptions,
+            io::Write,
+            os::windows::{
+                fs::OpenOptionsExt,
+                io::{AsRawHandle, FromRawHandle},
+            },
+            time::Duration,
+        };
+        use windows_sys::Win32::{
+            Foundation::{GetLastError, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE},
+            Storage::FileSystem::PIPE_ACCESS_DUPLEX,
+            System::Pipes::*,
+        };
+        let name = format!(r"\\.\pipe\WenBox.Kvm.Test.{}", uuid::Uuid::new_v4());
+        let raw = unsafe {
+            CreateNamedPipeW(
+                wide(&name).as_ptr(),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1,
+                65536,
+                65536,
+                0,
+                std::ptr::null(),
+            )
+        };
+        assert_ne!(raw, INVALID_HANDLE_VALUE);
+        let mut server = unsafe { std::fs::File::from_raw_handle(raw as _) };
+        let worker = std::thread::spawn(move || {
+            unsafe {
+                let connected = ConnectNamedPipe(server.as_raw_handle() as _, std::ptr::null_mut());
+                assert!(connected != 0 || GetLastError() == ERROR_PIPE_CONNECTED);
+                let mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+                assert_ne!(
+                    SetNamedPipeHandleState(
+                        server.as_raw_handle() as _,
+                        &mode,
+                        std::ptr::null(),
+                        std::ptr::null()
+                    ),
+                    0
+                );
+            }
+            let _: Request = serde_json::from_slice(&read_line(&mut server).unwrap()).unwrap();
+            send_reply(
+                &mut server,
+                &Reply {
+                    ok: true,
+                    running: false,
+                    error: None,
+                },
+            )
+            .unwrap();
+            unsafe {
+                DisconnectNamedPipe(server.as_raw_handle() as _);
+            }
+        });
+        let mut client = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(name)
+            .unwrap();
+        unsafe {
+            let mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+            assert_ne!(
+                SetNamedPipeHandleState(
+                    client.as_raw_handle() as _,
+                    &mode,
+                    std::ptr::null(),
+                    std::ptr::null()
+                ),
+                0
+            );
+        }
+        client.write_all(b"{\"action\":\"status\"}\n").unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let reply = receive_reply(&mut client).unwrap();
+        assert!(reply.ok && !reply.running);
+        worker.join().unwrap();
+    }
     #[test]
     fn arbitrary_commands_and_paths_are_not_service_operations() {
         for bad in [

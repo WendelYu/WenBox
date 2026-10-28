@@ -936,6 +936,35 @@ mod tests {
         Ok((client?, server?))
     }
     #[test]
+    fn pairing_offer_roundtrips_with_nonblocking_accepted_socket() {
+        let da = tempfile::tempdir().unwrap();
+        let db = tempfile::tempdir().unwrap();
+        let a = fixture(da.path(), Role::Source);
+        let b = fixture(db.path(), Role::Target);
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket.set_nonblocking(true).unwrap();
+            let id = lock(&b.state).saved.identity.clone();
+            let mut ch = Channel::accept(&id, socket, vec![], true).unwrap();
+            let req: Request = ch.receive().expect("server reads offer");
+            let response = b.handle(&mut ch, req);
+            ch.send(&response).expect("server sends reply");
+        });
+        let id = lock(&a.state).saved.identity.clone();
+        let mut ch = Channel::connect(&id, addr, None).unwrap();
+        ch.send(&Request::Offer {
+            session: uuid::Uuid::new_v4().to_string(),
+            info: a.info(),
+            side: Side::Right,
+        })
+        .unwrap();
+        let response: Reply = ch.receive().expect("client reads reply");
+        assert!(response.ok, "{:?}", response.error);
+        server.join().unwrap();
+    }
+    #[test]
     fn exporter_codes_match_but_trust_requires_both_confirmations() {
         let da = tempfile::tempdir().unwrap();
         let db = tempfile::tempdir().unwrap();

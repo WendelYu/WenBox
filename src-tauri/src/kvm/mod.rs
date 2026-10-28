@@ -80,6 +80,8 @@ pub struct Status {
     installed: bool,
     backend_running: bool,
     service_ready: bool,
+    service_error: Option<String>,
+    kvm_revision: &'static str,
     profile_ready: bool,
     role: Option<Role>,
     tls_configured: bool,
@@ -92,18 +94,12 @@ fn status() -> Result<Status, String> {
     let m = manager()?;
     let view = m.view();
     let (installed, running, message) = m.engine_view();
-    let service = if cfg!(windows) {
-        #[cfg(windows)]
-        {
-            broker_client::running().is_ok()
-        }
-        #[cfg(not(windows))]
-        {
-            false
-        }
-    } else {
-        false
-    };
+    #[cfg(windows)]
+    let service_result = broker_client::running();
+    #[cfg(not(windows))]
+    let service_result: Result<bool, String> = Ok(false);
+    let service = cfg!(windows) && service_result.is_ok();
+    let service_error = service_result.err();
     let note = if !installed {
         "当前安装包缺少流转组件，请使用完整安装包".into()
     } else if !view.enabled {
@@ -122,6 +118,8 @@ fn status() -> Result<Status, String> {
         installed,
         backend_running: running,
         service_ready: service,
+        service_error,
+        kvm_revision: "m2.1",
         profile_ready: view.peer.is_some(),
         role: Some(view.local.role),
         tls_configured: true,

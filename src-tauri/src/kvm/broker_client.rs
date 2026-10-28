@@ -32,12 +32,24 @@ fn request(request: &Request) -> Result<Reply, String> {
         if valid == 0 || status.dwCurrentState != SERVICE_RUNNING {
             return Err("输入后台服务未运行，请检查完整安装包和服务状态".into());
         }
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION)
-            .open(PIPE)
-            .map_err(|_| "无法连接本机输入服务".to_string())?;
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut file = loop {
+            match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION)
+                .open(PIPE)
+            {
+                Ok(file) => break file,
+                Err(e)
+                    if matches!(e.raw_os_error(), Some(2 | 231))
+                        && std::time::Instant::now() < until =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(e) => return Err(format!("无法连接本机输入服务：{e}")),
+            }
+        };
         let mut server = 0;
         if GetNamedPipeServerProcessId(file.as_raw_handle() as _, &mut server) == 0
             || server != status.dwProcessId
@@ -61,8 +73,7 @@ fn request(request: &Request) -> Result<Reply, String> {
         bytes.push(b'\n');
         file.write_all(&bytes)
             .map_err(|_| "输入服务请求失败".to_string())?;
-        let response: Reply = serde_json::from_slice(&read_line(&mut file)?)
-            .map_err(|_| "输入服务响应格式错误".to_string())?;
+        let response = receive_reply(&mut file)?;
         if !response.ok {
             return Err(response.error.unwrap_or("输入服务未接受操作".into()));
         }

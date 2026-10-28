@@ -37,7 +37,7 @@
         text('kvmPlatform', state.platform);
         text('kvmRole', { source: '使用本机键鼠', target: '接收对端输入' }[state.role] || '尚未配置');
         text('kvmTls', state.tlsConfigured ? '设备证书与加密连接' : '尚未确认');
-        text('kvmSystem', state.platform === 'Windows' ? (state.systemInput && state.serviceReady ? '本机输入服务已就绪' : '输入服务尚未就绪') : '由 Windows 对端输入服务提供');
+        text('kvmSystem', state.platform === 'Windows' ? (state.systemInput && state.serviceReady ? '本机输入服务已就绪' : (state.serviceError || '输入服务尚未就绪')) : '由 Windows 对端输入服务提供');
         if (!m) { text('kvmMessage', '请更新桌面客户端，以使用设备配对和屏幕布局。'); controls(); return; }
         if (document.activeElement !== node('kvmRoleSelect')) node('kvmRoleSelect').value = m.local.role;
         text('kvmPairingHint', m.local.pairing ? '配对窗口已打开，请在另一台电脑也打开此窗口。' : '两端需要选择不同角色；首次配对需分别确认。');

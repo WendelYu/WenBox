@@ -105,6 +105,11 @@ pub struct Channel {
 }
 impl Channel {
     fn finish(mut connection: rustls::Connection, mut socket: TcpStream) -> Result<Self, String> {
+        // Windows accepted sockets inherit the listener's nonblocking mode.
+        // This channel drives blocking rustls IO with bounded socket timeouts.
+        socket
+            .set_nonblocking(false)
+            .map_err(|e| format!("无法配置设备连接：{e}"))?;
         socket
             .set_read_timeout(Some(Duration::from_secs(2)))
             .map_err(|e| e.to_string())?;
@@ -238,7 +243,7 @@ impl Channel {
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     self.connection
                         .complete_io(&mut self.socket)
-                        .map_err(|_| "设备消息读取失败")?;
+                        .map_err(|e| format!("设备消息读取失败：{e}"))?;
                 }
                 Err(_) => return Err("设备消息读取失败".into()),
             }

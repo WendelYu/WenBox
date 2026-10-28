@@ -488,10 +488,7 @@ unsafe extern "system" fn service_main(argc: u32, argv: *mut *mut u16) {
                                         error: Some(e),
                                     },
                                 };
-                                if let Ok(mut bytes) = serde_json::to_vec(&response) {
-                                    bytes.push(b'\n');
-                                    let _ = file.write_all(&bytes);
-                                }
+                                let _ = send_reply(&mut file, &response);
                             }
                             DisconnectNamedPipe(file.as_raw_handle() as _);
                         }
