@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="tokens.css">
     <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="workspace.css">
+    <link rel="stylesheet" href="kvm.css">
     <link rel="stylesheet" href="polish.css">
 </head>
 <body data-room-mode="client" data-room-page="chat" data-active-view="view-room"><svg hidden aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -86,6 +87,7 @@
             </div>
             <nav class="nav-tabs" aria-label="主导航">
                 <button type="button" class="nav-tab active" data-view="view-room" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="#i-message-square"></use></svg><span>快传</span></button>
+                <button type="button" class="nav-tab" data-view="view-kvm" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-link"></use></svg><span>流转</span></button>
                 <button type="button" class="nav-tab" data-view="view-tools" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-braces"></use></svg><span>工具</span></button>
             </nav>
             <div class="rail-footer"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-shield"></use></svg><span>离线可用</span></div>
@@ -295,7 +297,48 @@
 
 
 
-            </section></aside></div></main><main id="view-tools" class="primary-view" aria-label="工具" hidden><div class="segmented tools-tabs" aria-label="工具选择"><button type="button" data-tool="tab-json" class="active" aria-pressed="true">JSON</button><button type="button" data-tool="tab-converter" aria-pressed="false">进制</button><button type="button" data-tool="tab-cron" aria-pressed="false">Cron</button></div><section id="tab-json" class="tool-pane">
+            </section></aside></div></main><main id="view-kvm" class="primary-view kvm-view" aria-label="键鼠流转" hidden>
+                <section class="card">
+                    <div class="section-header">
+                        <div class="section-title"><h2>键鼠流转</h2><span class="subtitle">用一套键鼠操作 Mac 和 Windows</span></div>
+                        <button type="button" class="btn btn--secondary btn--sm" data-kvm="refresh">重新检测</button>
+                    </div>
+                    <p id="kvmMessage" role="status" aria-live="polite">打开此页后检测本机输入后端。</p>
+                    <p id="kvmError" class="kvm-error" role="alert" hidden></p>
+                    <dl class="kvm-facts">
+                        <div><dt>本机</dt><dd id="kvmPlatform">待检测</dd></div>
+                        <div><dt>输入角色</dt><dd id="kvmRole">待检测</dd></div>
+                        <div><dt>加密配置</dt><dd id="kvmTls">待检测</dd></div>
+                        <div><dt>管理员窗口与 UAC</dt><dd id="kvmSystem">待检测</dd></div>
+                    </dl>
+                    <div class="row row--wrap gap-2">
+                        <button type="button" class="btn btn--primary" data-kvm="start" disabled>启动流转</button>
+                        <button type="button" class="btn btn--secondary" data-kvm="stop" disabled>停止流转</button>
+                        <button type="button" class="btn btn--secondary" data-kvm="settings" disabled>系统权限</button>
+                        <button type="button" class="btn btn--secondary" data-kvm="diagnostics" disabled>复制诊断</button>
+                    </div>
+                    <p class="subtitle kvm-note">首次使用时，在两台电脑上打开配对窗口，并分别确认相同验证码。配对后记住设备，开启流转时自动连接；文本剪贴板同步后续提供。</p>
+                    <p class="subtitle">Windows 管理员窗口和 UAC 由随安装包提供的输入服务支持。连接后可按 Control + Alt + Escape 切回主控电脑。</p>
+                </section>
+                <section class="card" id="kvmPairingCard">
+                    <div class="section-title"><h2>配对电脑</h2><span class="subtitle">只允许你确认的设备共享键鼠</span></div>
+                    <div class="kvm-form-row"><label for="kvmRoleSelect">本机角色</label><select id="kvmRoleSelect"><option value="source">使用本机键鼠</option><option value="target">接收对端输入</option></select><button type="button" class="btn btn--secondary btn--sm" data-kvm="role" disabled>保存角色</button></div>
+                    <div class="row row--wrap gap-2"><button type="button" class="btn btn--primary" data-kvm="pairing" disabled>允许新设备配对（2 分钟）</button><button type="button" class="btn btn--secondary" data-kvm="discover" disabled>刷新设备</button></div>
+                    <p id="kvmPairingHint" class="subtitle">两端需要选择不同角色。</p>
+                    <ul id="kvmCandidates" class="kvm-candidates"></ul>
+                    <div class="kvm-form-row"><label for="kvmPeerIp">设备未出现？</label><input id="kvmPeerIp" type="text" inputmode="decimal" placeholder="对端局域网 IPv4 地址" autocomplete="off"><button type="button" class="btn btn--secondary btn--sm" data-kvm="pair" disabled>连接配对</button></div>
+                    <div id="kvmPending" class="kvm-confirm" hidden><p id="kvmPendingName"></p><p class="kvm-code" id="kvmPairCode"></p><p id="kvmPairExpiry" class="subtitle"></p><p>仅当两端验证码完全一致时确认。两端确认后，允许这台设备共享键鼠。</p><div class="row row--wrap gap-2"><button type="button" class="btn btn--primary" data-kvm="confirm" disabled>验证码一致，确认授权</button><button type="button" class="btn btn--secondary" data-kvm="reject" disabled>取消配对</button></div></div>
+                </section>
+                <section class="card" id="kvmLayoutCard" hidden>
+                    <div class="section-header"><div class="section-title"><h2>屏幕方位</h2><span id="kvmPeerLabel" class="subtitle"></span></div><button type="button" class="btn btn--secondary btn--sm" data-kvm="forget" disabled>解除配对</button></div>
+                    <div class="kvm-layout" aria-label="两台电脑的相对位置"><div id="kvmOwnScreen" class="kvm-screen kvm-own">本机</div><div id="kvmPeerScreen" class="kvm-screen kvm-peer"></div></div>
+                    <div class="kvm-form-row"><label for="kvmSide">对端位于本机</label><select id="kvmSide"><option value="left">左侧</option><option value="right">右侧</option><option value="top">上方</option><option value="bottom">下方</option></select><button type="button" class="btn btn--primary btn--sm" data-kvm="layout" disabled>应用方位</button></div><p class="subtitle">在主控端修改后同步到对端，应用时会短暂重连。关闭流转会立即停止输入共享，但保留配对。</p>
+                </section>
+                <section class="card kvm-events" id="kvmEventsSection" hidden>
+                    <div class="section-title"><h2>最近的控制操作</h2><span class="subtitle">仅记录启动与停止等状态，不记录键入内容</span></div>
+                    <ol id="kvmEvents"></ol>
+                </section>
+            </main><main id="view-tools" class="primary-view" aria-label="工具" hidden><div class="segmented tools-tabs" aria-label="工具选择"><button type="button" data-tool="tab-json" class="active" aria-pressed="true">JSON</button><button type="button" data-tool="tab-converter" aria-pressed="false">进制</button><button type="button" data-tool="tab-cron" aria-pressed="false">Cron</button></div><section id="tab-json" class="tool-pane">
             <section class="card">
                 <div class="section-header">
                     <div class="section-title">
@@ -672,5 +715,6 @@
     <script src="upload-queue.js"></script><script src="ui-state.js"></script>
     <script src="app.js"></script>
     <script src="service-health.js"></script>
+    <script src="kvm.js"></script>
 </body>
 </html>

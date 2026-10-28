@@ -1,0 +1,26 @@
+.kvm-view { overflow: auto; padding: var(--sp-4); }
+.kvm-view > .card { max-width: 960px; margin: 0 auto var(--sp-4); }
+.kvm-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); margin: var(--sp-5) 0; }
+.kvm-facts dt { color: var(--text-3); font-size: var(--fs-sm); }
+.kvm-facts dd { margin: var(--sp-1) 0 0; overflow-wrap: anywhere; }
+.kvm-note { margin-top: var(--sp-4); }
+.kvm-error { color: var(--danger-fg); overflow-wrap: anywhere; }
+.kvm-events ol { padding-left: var(--sp-5); }
+.kvm-events li { margin-block: var(--sp-2); overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+    .kvm-facts { grid-template-columns: 1fr; }
+    .kvm-view { padding: var(--sp-3); }
+}
+.kvm-form-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3); margin-block: var(--sp-4); }
+.kvm-form-row select, .kvm-form-row input { min-height: var(--control-h); max-width: 100%; padding: var(--sp-2); color: var(--text-1); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); }
+.kvm-candidates { padding: 0; list-style: none; }
+.kvm-candidates li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-2); margin-block: var(--sp-3); }
+.kvm-confirm { margin-top: var(--sp-4); padding: var(--sp-4); border: 1px solid var(--border-strong); border-radius: var(--r-md); }
+.kvm-code { font-family: var(--font-mono); font-size: var(--fs-2xl); letter-spacing: .15em; }
+.kvm-layout { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, auto); gap: var(--sp-2); margin-block: var(--sp-5); }
+.kvm-screen { padding: var(--sp-4) var(--sp-2); border: 1px solid var(--border); border-radius: var(--r-sm); text-align: center; overflow-wrap: anywhere; background: var(--surface-2); }
+.kvm-own { grid-area: 2 / 2; }
+.kvm-peer[data-side="left"] { grid-area: 2 / 1; }
+.kvm-peer[data-side="right"] { grid-area: 2 / 3; }
+.kvm-peer[data-side="top"] { grid-area: 1 / 2; }
+.kvm-peer[data-side="bottom"] { grid-area: 3 / 2; }

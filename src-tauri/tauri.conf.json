@@ -1,7 +1,7 @@
 {
   "build": {
-    "beforeDevCommand": "",
-    "beforeBuildCommand": "",
+    "beforeDevCommand": "node scripts/prepare-kvm-backend.cjs",
+    "beforeBuildCommand": "node scripts/prepare-kvm-backend.cjs",
     "devPath": "../app/src/main/assets/web",
     "distDir": "../app/src/main/assets/web",
     "withGlobalTauri": true
@@ -60,11 +60,18 @@
         "webviewInstallMode": {
           "type": "offlineInstaller",
           "silent": true
+        },
+        "nsis": {
+          "installMode": "perMachine",
+          "template": "resources/kvm/installer.nsi"
         }
       },
       "macOS": {
         "minimumSystemVersion": "12.3"
-      }
+      },
+      "resources": [
+        "resources/kvm/"
+      ]
     },
     "security": {
       "csp": "default-src 'self'; img-src 'self' data: blob: http: https:; connect-src 'self' http: https: ipc: https://ipc.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'"

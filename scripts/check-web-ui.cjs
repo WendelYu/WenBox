@@ -234,6 +234,12 @@ async function main() {
         const inputBounds = await page.locator('#webChatMessageInput').boundingBox();
         const navBounds = await page.locator('.nav-tabs').boundingBox();
         assert.ok(inputBounds.y + inputBounds.height <= navBounds.y, 'mobile composer stays above bottom navigation');
+        await page.locator('[data-view="view-kvm"]').click();
+        assert.equal(await page.locator('#view-kvm').isVisible(), true);
+        assert.match(await page.locator('#kvmMessage').innerText(), /仅支持/);
+        assert.equal(await page.locator('[data-kvm="start"]').isDisabled(), true);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'KVM mobile layout');
+        await page.screenshot({ path: path.join(screenshots, 'kvm-browser-mobile.png') });
         await page.locator('[data-view="view-tools"]').click();
         for (const tool of ['tab-json', 'tab-converter', 'tab-cron']) {
             await page.locator(`[data-tool="${tool}"]`).click();

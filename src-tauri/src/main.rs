@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod kvm;
 mod network;
 mod native_transport;
 mod clipboard_files;
@@ -2319,6 +2320,11 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
             }
 
             // 1. 获取本端信息 (供前端展示自身 IP 与服务状态)
+            if url == "/api/kvm/info" && method == Method::Get {
+                let body = kvm::public_info().map(|v| serde_json::to_string(&v).unwrap_or_default()).unwrap_or_else(|| "{}".into());
+                let _ = req.respond(with_cors!(Response::from_string(body).with_header(Header::from_bytes("Content-Type", "application/json").unwrap())));
+                return;
+            }
             if url == "/api/status" && method == Method::Get {
                 let primary_ip = state.selected_ip.lock().unwrap().clone().unwrap_or_else(get_primary_ip);
                 let all_ips = get_all_lan_ips();
@@ -3079,9 +3085,30 @@ fn main() {
 
     // 软件打开即自动创建一个免密房间并对外广播:
     // 局域网内其他设备通过 IP 访问后无需任何操作即可直接加入互传
+    let kvm_state = state.clone();
     tauri::Builder::default()
         .manage(state)
+        .setup(move |app| {
+            let result = (|| -> Result<(), String> {
+                let root = app.path_resolver().app_config_dir().ok_or("无法定位流转设置目录")?.join("kvm");
+                let resources = app.path_resolver().resource_dir().ok_or("无法定位应用资源")?;
+                kvm::initialize(root, resources, kvm_state.clone())
+            })();
+            if let Err(error) = result { kvm::initialization_failed(error); }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            kvm::kvm_status,
+            kvm::kvm_start,
+            kvm::kvm_stop,
+            kvm::kvm_open_settings,
+            kvm::kvm_pairing_window,
+            kvm::kvm_discover,
+            kvm::kvm_pair,
+            kvm::kvm_confirm,
+            kvm::kvm_forget,
+            kvm::kvm_layout,
+            kvm::kvm_role,
             copy_image,
             clipboard_image,
             clipboard_files::clipboard_files,
@@ -3117,8 +3144,13 @@ fn main() {
             send_room_probe_cmd,
             clear_chat_messages_cmd
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running wenbox application");
+        .build(tauri::generate_context!())
+        .expect("error while building wenbox application")
+        .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                kvm::shutdown();
+            }
+        });
 }
 
 #[cfg(test)]

@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-28",
+  "rust": {
+    "passed": 62,
+    "ignored": 1,
+    "failed": 0
+  },
+  "finalKvmTests": 18,
+  "serviceSharedTests": 5,
+  "nodeTests": 46,
+  "browserRegression": "passed",
+  "kvmNativeBridgeFixture": "passed",
+  "windowsServiceMsvcCheck": "passed",
+  "powershellParser": "passed; not Windows runtime",
+  "macUniversalBuild": "passed",
+  "architectures": [
+    "arm64",
+    "x86_64"
+  ],
+  "macBundledResourceHashes": 68,
+  "macSignature": "ad-hoc verified; no Developer ID or notarization",
+  "macCoreVersion": "1.27.0",
+  "macZipSha256": "452dd56ce04803b6e5e741d48e2c3516fdbc065b6fe5195458b2134662908c39",
+  "macZipBytes": 60064313,
+  "notVerified": [
+    "Windows NSIS runtime install/upgrade/uninstall",
+    "new WenBox Windows service UAC and unplugged keyboard/mouse",
+    "Mac real TCC and cross-machine pairing/input",
+    "M3 abnormal key release and recovery",
+    "text clipboard not implemented"
+  ]
+}

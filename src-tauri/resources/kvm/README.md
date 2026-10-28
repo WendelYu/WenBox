@@ -1,0 +1,1 @@
+Generated input-core resources live here. Run node scripts/prepare-kvm-backend.cjs before bundling. Binaries and corresponding upstream source/license notices are downloaded from pinned, hash-verified official releases; do not commit generated files.

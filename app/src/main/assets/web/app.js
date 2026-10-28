@@ -106,14 +106,15 @@
     function selectView(id) {
         currentActiveTab = id;
         document.body.dataset.activeView = id;
-        setText(document.getElementById('workspaceTitle'), id === 'view-tools' ? '随手工具' : '快传工作台');
-        setText(document.getElementById('workspaceSubtitle'), id === 'view-tools' ? '常用的小工具，离线也顺手' : '文件与消息，在设备间轻松流转');
+        setText(document.getElementById('workspaceTitle'), id === 'view-kvm' ? '键鼠流转' : id === 'view-tools' ? '随手工具' : '快传工作台');
+        setText(document.getElementById('workspaceSubtitle'), id === 'view-kvm' ? '键鼠跟随光标，在两台电脑间切换' : id === 'view-tools' ? '常用的小工具，离线也顺手' : '文件与消息，在设备间轻松流转');
         document.querySelectorAll('.primary-view').forEach(view => { view.hidden = view.id !== id; });
         document.querySelectorAll('[data-view]').forEach(button => {
             const selected = button.dataset.view === id;
             button.classList.toggle('active', selected); button.setAttribute('aria-pressed', String(selected));
         });
         animateArrival(document.getElementById(id));
+        document.dispatchEvent(new CustomEvent('wenbox:viewchange', { detail: id }));
         scheduler.runNow();
     }
     function selectSegment(button, attribute, selector) {

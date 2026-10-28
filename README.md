@@ -13,6 +13,10 @@
   <a href="https://github.com/WendelYu/WenBox/releases"><img src="https://img.shields.io/github/v/release/WendelYu/WenBox?label=Release" alt="GitHub release"></a>
 </p>
 
+## 键鼠流转 M2（开发测试）
+
+Mac + Windows 双机配对、记住设备自动连接、四方向布局及 Tauri 统一安装已接入。Mac 流转组件要求 macOS 14+；Windows 新后台服务与 UAC 集成仍待真机验收，文本剪贴板后续实现。安装、构建及验证步骤见 [M2 集成交接](docs/KVM_M2_INTEGRATION.md)。
+
 ## 为什么做 WenBox
 
 最初是为了解决我自己的两个需求：**内网互传文件**，以及**现场实施时反复更新程序**。
