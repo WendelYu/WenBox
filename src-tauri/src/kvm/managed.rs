@@ -60,6 +60,7 @@ enum Request {
         accept: bool,
     },
     Status,
+    InputStatus,
     Layout {
         side: Side,
     },
@@ -112,6 +113,7 @@ pub struct View {
 pub struct Managed {
     state: Mutex<State>,
     engine: Mutex<Engine>,
+    remote_input: Mutex<Option<(Instant, bool)>>,
     file: PathBuf,
     candidates: Arc<dyn Fn() -> Vec<Ipv4Addr> + Send + Sync>,
     active: AtomicUsize,
@@ -157,6 +159,7 @@ impl Managed {
         saved.identity.key_der()?;
         if let Some(peer) = saved.peer.clone() {
             EngineProfile {
+                scroll_speed: 100,
                 identity: saved.identity.clone(),
                 peer,
                 role: saved.role,
@@ -175,6 +178,7 @@ impl Managed {
                 error: None,
             }),
             engine: Mutex::new(Engine::new(root.join("engine"), resources)),
+            remote_input: Mutex::new(None),
             file,
             candidates,
             active: AtomicUsize::new(0),
@@ -235,12 +239,48 @@ impl Managed {
     pub fn engine_diagnostics(&self) -> String {
         lock(&self.engine).diagnostics()
     }
+    pub fn scroll_speed(&self) -> u16 {
+        lock(&self.engine).scroll_speed()
+    }
+    pub fn set_scroll_speed(&self, percent: u16) -> Result<(), String> {
+        if lock(&self.state).saved.role != Role::Target {
+            return Err("请在被控电脑调整滚轮速度".into());
+        }
+        lock(&self.engine).set_scroll_speed(percent)?;
+        self.reconfigure()
+    }
+    pub fn pointer_speed(&self) -> Option<u16> {
+        lock(&self.engine).pointer_speed()
+    }
+    pub fn set_pointer_speed(&self, percent: u16) -> Result<(), String> {
+        if lock(&self.state).saved.role != Role::Source {
+            return Err("请在主控电脑调整被控端速度".into());
+        }
+        lock(&self.engine).set_pointer_speed(percent)?;
+        self.reconfigure()
+    }
+    pub fn input_connected(&self) -> Option<bool> {
+        let s = lock(&self.state);
+        if !s.saved.enabled || s.saved.peer.is_none() {
+            return None;
+        }
+        let target = s.saved.role == Role::Target;
+        drop(s);
+        if target {
+            lock(&self.remote_input)
+                .filter(|(at, _)| at.elapsed() < Duration::from_secs(10))
+                .map(|(_, connected)| connected)
+        } else {
+            lock(&self.engine).connected()
+        }
+    }
     pub fn engine_view(&self) -> (bool, bool, String) {
         lock(&self.engine).view()
     }
     pub fn enable(&self, enabled: bool) -> Result<(), String> {
         let mut s = lock(&self.state);
         if !enabled {
+            *lock(&self.remote_input) = None;
             lock(&self.engine).stop()?;
         }
         let old = s.saved.enabled;
@@ -514,7 +554,9 @@ impl Managed {
     }
     fn reconfigure(&self) -> Result<(), String> {
         lock(&self.engine).stop()?;
-        self.apply()
+        let result = self.apply();
+        lock(&self.state).error = result.as_ref().err().cloned();
+        result
     }
     fn apply(&self) -> Result<(), String> {
         let s = lock(&self.state);
@@ -525,6 +567,7 @@ impl Managed {
             return Ok(());
         };
         let profile = EngineProfile {
+            scroll_speed: 100,
             identity: s.saved.identity.clone(),
             peer,
             role: s.saved.role,
@@ -615,6 +658,18 @@ impl Managed {
                         self.authorize(&mut s)?;
                     }
                     Ok(local)
+                }
+                // The accepted bit is the boolean result of this authenticated query.
+                // Older peers reject this optional request; ordinary pairing remains unchanged.
+                Request::InputStatus if trusted => {
+                    let s = lock(&self.state);
+                    if !s.saved.enabled || s.saved.role != Role::Source {
+                        return Ok(false);
+                    }
+                    drop(s);
+                    let mut engine = lock(&self.engine);
+                    engine.view();
+                    Ok(engine.connected().unwrap_or(false))
                 }
                 Request::Status if trusted => {
                     let mut s = lock(&self.state);
@@ -713,7 +768,7 @@ impl Managed {
         workers
             .into_iter()
             .filter_map(|w| w.join().ok().flatten())
-            .filter(|v| v.info.id != own)
+            .filter(|v| v.info.id != own && v.info.enabled)
             .collect()
     }
     fn tick_peer(&self) {
@@ -750,7 +805,25 @@ impl Managed {
                                     }
                                     let _ = self.persist(&s);
                                 }
+                                let target = s.saved.role == Role::Target;
                                 drop(s);
+                                if target {
+                                    let input = (|| -> Result<bool, String> {
+                                        let mut probe = Channel::connect(
+                                            &id,
+                                            SocketAddr::from((ip, CONTROL_PORT)),
+                                            Some(&peer.fingerprint),
+                                        )?;
+                                        probe.send(&Request::InputStatus)?;
+                                        let result = probe.receive::<Reply>()?;
+                                        if !result.ok || result.info.id != peer.id {
+                                            return Err("输入状态不可用".into());
+                                        }
+                                        Ok(result.accepted)
+                                    })();
+                                    *lock(&self.remote_input) =
+                                        input.ok().map(|v| (Instant::now(), v));
+                                }
                                 match self.apply() {
                                     Ok(()) => lock(&self.state).error = None,
                                     Err(e) => lock(&self.state).error = Some(e),
@@ -906,6 +979,7 @@ mod tests {
         saved.enabled = true;
         saved.role = role;
         Arc::new(Managed {
+            remote_input: Mutex::new(None),
             state: Mutex::new(State {
                 saved,
                 pending: None,

@@ -131,6 +131,96 @@ pub fn request_at(root: &std::path::Path, action: Action) -> Result<(), String> 
     exchange(&mut stream, action)
 }
 
+// Keep a dedicated connection: upstream replays queued state only to the first
+// subscriber, then publishes changes. A short-lived status probe loses updates.
+#[cfg(target_os = "macos")]
+pub fn monitor(
+    root: std::path::PathBuf,
+    peer: String,
+    state: std::sync::Arc<std::sync::Mutex<Option<bool>>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut stream = loop {
+            if stop.load(Ordering::SeqCst) {
+                return;
+            }
+            match std::os::unix::net::UnixStream::connect(root.join(Endpoint::Core.name())) {
+                Ok(s) => break s,
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50))
+                }
+                Err(_) => return,
+            }
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+        let _ = stream.set_write_timeout(Some(TIMEOUT));
+        if stream.write_all(b"hello=wenbox-m1\n").is_err() {
+            return;
+        }
+        let mut buffer = Vec::new();
+        let mut verified = false;
+        while !stop.load(Ordering::SeqCst) {
+            let mut byte = [0];
+            match stream.read(&mut byte) {
+                Ok(0) => break,
+                Ok(_) if byte[0] == b'\n' => {
+                    let message = String::from_utf8_lossy(&buffer);
+                    if !verified {
+                        let version = message
+                            .strip_prefix("hello=")
+                            .or_else(|| message.strip_prefix("versionMismatch="));
+                        if !matches!(
+                            version.and_then(|s| s.split('+').next()),
+                            Some("1.27.0" | "1.27.0.0")
+                        ) {
+                            break;
+                        }
+                        if let Some(version) = message.strip_prefix("versionMismatch=") {
+                            if stream
+                                .write_all(format!("hello={version}\n").as_bytes())
+                                .is_err()
+                            {
+                                break;
+                            }
+                        } else {
+                            verified = true;
+                            *state.lock().unwrap_or_else(|e| e.into_inner()) = Some(false);
+                        }
+                    } else if message == "connectedClients"
+                        || message.starts_with("connectedClients=")
+                    {
+                        let connected = message
+                            .strip_prefix("connectedClients=")
+                            .unwrap_or("")
+                            .split(',')
+                            .any(|s| s == peer);
+                        *state.lock().unwrap_or_else(|e| e.into_inner()) = Some(connected);
+                    }
+                    buffer.clear();
+                }
+                Ok(_) => {
+                    buffer.push(byte[0]);
+                    if buffer.len() > LIMIT {
+                        break;
+                    }
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => break,
+            }
+        }
+        *state.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    });
+}
+
 #[cfg(windows)]
 pub fn request(endpoint: Endpoint, action: Action) -> Result<(), String> {
     use std::fs::OpenOptions;
@@ -195,6 +285,59 @@ mod tests {
             output: Vec::new(),
         }
     }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn monitor_negotiates_exact_version_and_tracks_disconnect() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(root.path().join("deskflow-core")).unwrap();
+        let state = Arc::new(Mutex::new(None));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            assert_eq!(
+                line(&mut s, Instant::now() + TIMEOUT).unwrap(),
+                "hello=wenbox-m1"
+            );
+            s.write_all(b"versionMismatch=1.27.0.0+081f6478\n").unwrap();
+            assert_eq!(
+                line(&mut s, Instant::now() + TIMEOUT).unwrap(),
+                "hello=1.27.0.0+081f6478"
+            );
+            s.write_all(b"hello=1.27.0.0+081f6478\nconnectedClients=peer\n")
+                .unwrap();
+            receive.recv_timeout(Duration::from_secs(2)).unwrap();
+            s.write_all(b"connectedClients\n").unwrap();
+            receive.recv_timeout(Duration::from_secs(2)).unwrap();
+        });
+        monitor(
+            root.path().into(),
+            "peer".into(),
+            state.clone(),
+            stop.clone(),
+        );
+        let await_state = |expected| {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while *state.lock().unwrap() != expected && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(*state.lock().unwrap(), expected);
+        };
+        await_state(Some(true));
+        send.send(()).unwrap();
+        await_state(Some(false));
+        send.send(()).unwrap();
+        worker.join().unwrap();
+        await_state(None);
+        stop.store(true, Ordering::SeqCst);
+    }
+
     #[test]
     fn ack_requires_verified_version_and_skips_notifications() {
         let mut w = wire("versionMismatch=1.27.0.0+081f6478\nconnected=peer\nok\n");

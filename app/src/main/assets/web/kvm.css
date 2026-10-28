@@ -24,3 +24,35 @@
 .kvm-peer[data-side="right"] { grid-area: 2 / 3; }
 .kvm-peer[data-side="top"] { grid-area: 1 / 2; }
 .kvm-peer[data-side="bottom"] { grid-area: 3 / 2; }
+
+.kvm-view [hidden] { display: none !important; }
+.kvm-view { background: var(--surface-2); }
+.kvm-view > .card { max-width: 1000px; border-radius: 22px; padding: 28px; }
+.kvm-hero { background: linear-gradient(120deg, var(--surface-1), var(--surface-2)); }
+.kvm-eyebrow { font-size: 12px; color: var(--text-3); letter-spacing: .12em; }
+.kvm-hero h2 { font-size: clamp(24px, 3vw, 34px); margin-block: 8px; }
+.kvm-status-badge { display: inline-flex; padding: 5px 12px; border-radius: 30px; font-size: 13px; font-weight: 600; background: var(--surface-2); border: 1px solid var(--border); margin-top: 20px; }
+.kvm-status-badge[data-state="connected"] { background: #d9efe7; color: #175d48; border-color: #b2dace; }
+.kvm-settings { border-top: 1px solid var(--border); margin-top: 22px; padding-top: 18px; }
+.kvm-view summary { cursor: pointer; color: var(--text-2); font-weight: 600; }
+.kvm-layout { min-height: 290px; grid-template-columns: 1fr 1.25fr 1fr; grid-template-rows: 64px 120px 64px; align-items: stretch; padding: 20px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface-2); }
+.kvm-screen { display: flex; align-items: center; justify-content: center; font-weight: 600; border: 2px solid var(--border-strong); background: var(--surface-1); box-shadow: 0 5px 0 var(--border); margin: 5px; }
+.kvm-peer { z-index: 1; pointer-events: none; font-size: 13px; margin: 0 4px 25px; }
+.kvm-direction { border: 1px dashed var(--border-strong); border-radius: 12px; background: transparent; color: var(--text-2); cursor: pointer; display: flex; align-items: end; justify-content: center; padding: 5px; }
+.kvm-direction:hover:not(:disabled), .kvm-direction[aria-pressed="true"] { background: #d9efe7; color: #175d48; border-color: #639b8a; }
+.kvm-direction:focus-visible { outline: 3px solid #639b8a; outline-offset: 3px; }
+.kvm-direction:disabled { cursor: default; opacity: .6; }
+.kvm-top { grid-area: 1 / 2; }.kvm-left { grid-area: 2 / 1; }.kvm-right { grid-area: 2 / 3; }.kvm-bottom { grid-area: 3 / 2; }
+.kvm-layout-advanced { margin-top: 16px; }.kvm-events summary { margin-bottom: 12px; }
+@media(max-width:600px) { .kvm-view > .card { padding: 18px; border-radius: 16px; }.kvm-layout { padding: 10px; gap: 5px; }.kvm-screen { padding: 8px; font-size: 12px; } }
+
+.kvm-pointer { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
+.kvm-speed-presets { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.kvm-speed-presets button { padding: 8px 16px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-1); cursor: pointer; }
+.kvm-pointer input[type=range] { flex: 1; min-width: 100px; accent-color: #438d79; }
+
+.kvm-hero.card { padding-block: 22px; }
+.kvm-hero h2 { font-size: clamp(24px, 2.8vw, 30px); }
+.kvm-hero #kvmMessage { margin: 8px 0 12px; }
+.kvm-hero .kvm-settings { margin-top: 16px; padding-top: 12px; }
+.kvm-hero #kvmEscape { margin-top: 14px; }

@@ -119,6 +119,11 @@ async function main() {
         await page.locator('#modalBtnConfirmCreateRoom').click();
         await page.waitForFunction(() => document.body.dataset.roomMode === 'host');
         await page.waitForFunction(() => !document.getElementById('createRoomModal').open);
+        await page.locator('[data-view="view-kvm"]').click();
+        await page.locator('#btnBrowseRooms').click();
+        assert.equal(await page.locator('#view-room').isVisible(), true);
+        assert.equal(await page.evaluate(()=>document.body.dataset.discoveryOpen), 'true');
+        await page.locator('#btnBrowseRooms').click();
         await page.locator('#btnChangeNicknameChat').click();
         await page.locator('#modalInputEditNickname').fill('现场 MacBook');
         assert.equal(await page.locator('#nicknamePreview').textContent(), '现场 MacBook');

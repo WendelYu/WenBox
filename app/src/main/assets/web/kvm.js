@@ -7,7 +7,7 @@
     const errorBox = node('kvmError');
     const invoke = window.__TAURI__?.invoke || window.__TAURI__?.tauri?.invoke || window.__TAURI_INVOKE__;
     const desktop = typeof invoke === 'function';
-    let snapshot = null, busy = false, timer = null;
+    let snapshot = null, busy = false, timer = null, speedDirty = false, scrollDirty = false;
     const visible = () => !view.hidden && !document.hidden;
     function controls() {
         const m = snapshot?.managed, peer = m?.peer, pending = m?.pending;
@@ -22,18 +22,41 @@
                 || (a === 'reject' && !pending)
                 || (a === 'forget' && !peer)
                 || (a === 'layout' && (!peer || m?.local?.role !== 'source'))
+                || (a === 'scroll-speed' && (!m?.enabled || !peer || m.local.role !== 'target' || snapshot?.scrollSpeed == null))
+                || (a === 'speed' && (!m?.enabled || !peer || m.local.role !== 'source' || snapshot?.pointerSpeed == null))
                 || (a === 'diagnostics' && !snapshot);
-            if (a === 'settings') button.hidden = snapshot?.platform === 'Windows';
+            if (['settings', 'input-settings', 'reveal-app'].includes(a)) button.hidden = snapshot?.platform !== 'macOS';
         }
         for (const button of node('kvmCandidates').querySelectorAll('button')) button.disabled = busy || !!peer || button.dataset.pairing !== 'true';
         node('kvmRoleSelect').disabled = busy || !desktop || !!peer || !!pending;
         node('kvmSide').disabled = busy || !desktop || !peer || m?.local?.role !== 'source';
+        for (const button of view.querySelectorAll('[data-kvm-side]')) {
+            button.disabled = busy || !m?.enabled || !peer || m.local.role !== 'source';
+            button.setAttribute('aria-pressed', String(button.dataset.kvmSide === m?.side));
+        }
+        for (const b of view.querySelectorAll('[data-kvm-speed]')) b.disabled = busy;
+        node('kvmPointerSpeed').disabled = busy;
+        node('kvmScrollSpeed').disabled = busy;
         view.setAttribute('aria-busy', String(busy));
     }
     function render(state) {
         snapshot = state;
         const m = state.managed;
-        text('kvmMessage', state.message);
+        node('kvmPermissions').hidden = state.platform !== 'macOS';
+        const permissionLabel = value => value === true ? '已授权' : value === false ? '需要授权或重新授权' : '待检测';
+        text('kvmAccessibilityStatus', permissionLabel(state.permissions?.accessibility));
+        text('kvmInputStatus', permissionLabel(state.permissions?.inputMonitoring));
+        const enabled = !!m?.enabled;
+        node('kvmDetails').hidden = !enabled;
+        node('kvmEscape').hidden = !enabled || !m?.peer;
+        node('kvmIntro').hidden = enabled && !!m?.peer;
+        node('kvmPairingCard').hidden = !enabled || !!m?.peer;
+        node('kvmStatusBadge').dataset.state = !enabled ? 'off' : state.inputConnected === true ? 'connected' : 'waiting';
+        text('kvmStatusBadge', !enabled ? '未开启' : state.inputConnected === true ? '已连接' : m?.pending ? '等待确认' : state.backendRunning ? (state.inputConnected == null && state.role === 'target' ? '接收端就绪' : '等待连接') : '准备连接');
+        text('kvmMessage', !enabled ? '需要时开启，让键鼠在两台电脑之间流转。' : state.inputConnected === true ? `已连接 ${m.peer?.name || '对端'}，可以跨屏操作` : state.message);
+        view.querySelector('[data-kvm="start"]').hidden = enabled;
+        view.querySelector('[data-kvm="stop"]').hidden = !enabled;
+        view.querySelector('[data-kvm="diagnostics"]').hidden = !enabled;
         text('kvmPlatform', state.platform);
         text('kvmRole', { source: '使用本机键鼠', target: '接收对端输入' }[state.role] || '尚未配置');
         text('kvmTls', state.tlsConfigured ? '设备证书与加密连接' : '尚未确认');
@@ -48,7 +71,12 @@
             text('kvmPairCode', `${code.slice(0, 4)} ${code.slice(4)}`);
             text('kvmPairExpiry', `${m.pending.localConfirmed ? '本机已确认，等待对端' : '等待本机确认'} · 约 ${m.pending.expiresIn} 秒后过期`);
         }
-        node('kvmLayoutCard').hidden = !m.peer;
+        node('kvmScrollSettings').hidden = !m.enabled || !m.peer || m.local.role !== 'target' || state.scrollSpeed == null;
+        node('kvmScrollHint').hidden = !m.enabled || !m.peer || m.local.role !== 'source';
+        if (!scrollDirty && state.scrollSpeed != null) { node('kvmScrollSpeed').value = state.scrollSpeed; text('kvmScrollValue', (state.scrollSpeed/100).toFixed(2)+'×'); }
+        node('kvmPointerSettings').hidden = !m.enabled || !m.peer || m.local.role !== 'source' || state.pointerSpeed == null;
+        if (!speedDirty && state.pointerSpeed != null) { node('kvmPointerSpeed').value = state.pointerSpeed; text('kvmPointerValue', (state.pointerSpeed / 100).toFixed(2) + '×'); }
+        node('kvmLayoutCard').hidden = !m.enabled || !m.peer;
         if (m.peer) {
             text('kvmPeerLabel', `${m.peer.name} · ${m.peer.ip}`);
             text('kvmOwnScreen', m.local.name);
@@ -60,7 +88,7 @@
         for (const event of (state.events || []).slice().reverse()) {
             const item = document.createElement('li'); item.textContent = `${new Date(event.time * 1000).toLocaleTimeString()} · ${event.message}`; list.append(item);
         }
-        node('kvmEventsSection').hidden = !list.childElementCount;
+        node('kvmEventsSection').hidden = !m.enabled || !list.childElementCount;
         controls();
     }
     function schedule() { clearTimeout(timer); if (desktop && visible()) timer = setTimeout(() => refresh(false), snapshot?.managed?.pending ? 1800 : 3500); }
@@ -73,7 +101,11 @@
     }
     function candidates(items) {
         const list = node('kvmCandidates'); list.replaceChildren();
-        for (const candidate of items) {
+        const eligible = items.filter(c => c.info.enabled && c.info.role !== snapshot?.managed?.local?.role);
+        const seen = new Set();
+        for (const candidate of eligible) {
+            if (seen.has(candidate.info.id)) continue;
+            seen.add(candidate.info.id);
             const item = document.createElement('li');
             const label = document.createElement('span'); label.textContent = `${candidate.info.name} · ${candidate.ip} · ${candidate.info.platform}`;
             const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn--secondary btn--sm'; button.textContent = candidate.info.pairing ? '配对' : '请在对端允许配对';
@@ -82,7 +114,7 @@
             button.addEventListener('click', () => { node('kvmPeerIp').value = candidate.ip; act('pair'); });
             item.append(label, button); list.append(item);
         }
-        if (!items.length) text('kvmPairingHint', '暂未发现设备。确认对端已打开 WenBox，也可填写它的局域网地址。');
+        if (!seen.size) text('kvmPairingHint', '暂无已开启流转的可用电脑。请在对端开启流转，选择不同角色并允许配对。');
     }
     async function act(action) {
         if (!desktop || busy) return;
@@ -96,15 +128,19 @@
             } else if (action === 'discover') { candidates(await invoke('kvm_discover', {})); }
             else {
                 const m = snapshot?.managed;
-                const commands = { start: ['kvm_start', {}], stop: ['kvm_stop', {}], settings: ['kvm_open_settings', {}], pairing: ['kvm_pairing_window', {}], pair: ['kvm_pair', { ip: node('kvmPeerIp').value.trim() }], confirm: ['kvm_confirm', { session: m?.pending?.session, accept: true }], reject: ['kvm_confirm', { session: m?.pending?.session, accept: false }], forget: ['kvm_forget', {}], layout: ['kvm_layout', { side: node('kvmSide').value }], role: ['kvm_role', { role: node('kvmRoleSelect').value }] };
+                const commands = { 'scroll-speed': ['kvm_scroll_speed', { percent: Number(node('kvmScrollSpeed').value) }], speed: ['kvm_pointer_speed', { percent: Number(node('kvmPointerSpeed').value) }], start: ['kvm_start', {}], stop: ['kvm_stop', {}], settings: ['kvm_open_settings', { pane: 'accessibility' }], 'input-settings': ['kvm_open_settings', { pane: 'input-monitoring' }], 'reveal-app': ['kvm_open_settings', { pane: 'reveal-app' }], pairing: ['kvm_pairing_window', {}], pair: ['kvm_pair', { ip: node('kvmPeerIp').value.trim() }], confirm: ['kvm_confirm', { session: m?.pending?.session, accept: true }], reject: ['kvm_confirm', { session: m?.pending?.session, accept: false }], forget: ['kvm_forget', {}], layout: ['kvm_layout', { side: node('kvmSide').value }], role: ['kvm_role', { role: node('kvmRoleSelect').value }] };
                 const entry = commands[action]; if (!entry) return;
                 await invoke(entry[0], entry[1]);
+                if (action === 'speed') speedDirty = false;
+                if (action === 'scroll-speed') scrollDirty = false;
                 if (action !== 'settings') render(await invoke('kvm_status', {}));
             }
         } catch (error) { errorBox.textContent = String(error?.message || error); errorBox.hidden = false; }
         finally { busy = false; controls(); schedule(); }
     }
-    view.addEventListener('click', event => { const button = event.target.closest('button[data-kvm]'); if (button && !button.disabled) act(button.dataset.kvm); });
+    node('kvmScrollSpeed').addEventListener('input', () => { scrollDirty = true; text('kvmScrollValue', (Number(node('kvmScrollSpeed').value)/100).toFixed(2)+'×'); });
+    node('kvmPointerSpeed').addEventListener('input', () => { speedDirty = true; text('kvmPointerValue', (Number(node('kvmPointerSpeed').value) / 100).toFixed(2) + '×'); });
+    view.addEventListener('click', event => { const preset = event.target.closest('[data-kvm-speed]'); if (preset && !preset.disabled) { node('kvmPointerSpeed').value = preset.dataset.kvmSpeed; speedDirty = true; text('kvmPointerValue', (Number(preset.dataset.kvmSpeed) / 100).toFixed(2) + '×'); act('speed'); return; } const direction = event.target.closest('[data-kvm-side]'); if (direction && !direction.disabled) { node('kvmSide').value = direction.dataset.kvmSide; act('layout'); return; } const button = event.target.closest('button[data-kvm]'); if (button && !button.disabled) act(button.dataset.kvm); });
     function onView() {
         clearTimeout(timer); if (!visible()) return;
         if (!desktop) {

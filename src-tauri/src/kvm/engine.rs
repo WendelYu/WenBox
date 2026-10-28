@@ -19,10 +19,26 @@ pub struct Engine {
     started: Option<Instant>,
     failed: Option<String>,
     source: bool,
+    pointer_speed: u16,
+    scroll_speed: u16,
+    connected: Arc<Mutex<Option<bool>>>,
+    monitor_stop: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Engine {
     pub fn new(root: PathBuf, resources: PathBuf) -> Self {
+        let pointer_speed = std::fs::read(root.join("pointer-speed.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<u16>(&b).ok())
+            .filter(|v| (50..=200).contains(v))
+            .unwrap_or(100);
+        let scroll_speed = std::fs::read(root.join("scroll-speed.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<u16>(&b).ok())
+            .filter(|v| (50..=200).contains(v))
+            .unwrap_or(100);
         Self {
+            scroll_speed,
+            pointer_speed,
             root,
             resources,
             child: None,
@@ -34,6 +50,8 @@ impl Engine {
             started: None,
             failed: None,
             source: false,
+            connected: Arc::new(Mutex::new(None)),
+            monitor_stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
     fn binary(&self) -> PathBuf {
@@ -128,6 +146,47 @@ impl Engine {
         }
         (self.binary().is_file(), self.running, self.message.clone())
     }
+    pub fn scroll_speed(&self) -> u16 {
+        self.scroll_speed
+    }
+    pub fn set_scroll_speed(&mut self, percent: u16) -> Result<(), String> {
+        if !(50..=200).contains(&percent) {
+            return Err("滚轮速度范围为 50% 至 200%".into());
+        }
+        atomic(
+            &self.root.join("scroll-speed.json"),
+            &serde_json::to_vec(&percent).map_err(|e| e.to_string())?,
+        )?;
+        self.scroll_speed = percent;
+        Ok(())
+    }
+    pub fn pointer_speed(&self) -> Option<u16> {
+        if cfg!(target_os = "macos") {
+            Some(self.pointer_speed)
+        } else {
+            None
+        }
+    }
+    pub fn set_pointer_speed(&mut self, percent: u16) -> Result<(), String> {
+        if !cfg!(target_os = "macos") {
+            return Err("当前主控平台尚不支持速度调节".into());
+        }
+        if !(50..=200).contains(&percent) {
+            return Err("速度范围为 50% 至 200%".into());
+        }
+        atomic(
+            &self.root.join("pointer-speed.json"),
+            &serde_json::to_vec(&percent).map_err(|e| e.to_string())?,
+        )?;
+        self.pointer_speed = percent;
+        Ok(())
+    }
+    pub fn connected(&self) -> Option<bool> {
+        if self.child.is_none() || !self.running {
+            return None;
+        }
+        *self.connected.lock().unwrap_or_else(|e| e.into_inner())
+    }
     pub fn diagnostics(&self) -> String {
         let bytes = self
             .output
@@ -159,6 +218,9 @@ impl Engine {
         })
     }
     pub fn apply(&mut self, profile: &EngineProfile) -> Result<(), String> {
+        let mut adjusted = profile.clone();
+        adjusted.scroll_speed = self.scroll_speed;
+        let profile = &adjusted;
         profile.validate()?;
         let stamp = fingerprint(&serde_json::to_vec(profile).map_err(|e| e.to_string())?);
         self.view();
@@ -212,6 +274,10 @@ impl Engine {
                     "client"
                 })
                 .env("TMPDIR", runtime.path())
+                .env(
+                    "DESKFLOW_MOUSE_ADJUSTMENT",
+                    format!("{:.2}", f64::from(self.pointer_speed) / 100.0),
+                )
                 .arg("--settings")
                 .arg(path)
                 .stdin(Stdio::null())
@@ -224,6 +290,16 @@ impl Engine {
             }
             if let Some(pipe) = child.stderr.take() {
                 Self::capture(pipe, self.output.clone());
+            }
+            self.connected = Arc::new(Mutex::new(None));
+            self.monitor_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            if profile.role == Role::Source {
+                super::ipc::monitor(
+                    runtime.path().into(),
+                    screen(&profile.peer.id)?,
+                    self.connected.clone(),
+                    self.monitor_stop.clone(),
+                );
             }
             self.child = Some(child);
             self.runtime = Some(runtime);
@@ -245,6 +321,9 @@ impl Engine {
         Ok(())
     }
     pub fn stop(&mut self) -> Result<(), String> {
+        self.monitor_stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        *self.connected.lock().unwrap_or_else(|e| e.into_inner()) = None;
         #[cfg(windows)]
         {
             if self.running {
@@ -298,6 +377,7 @@ mod output_tests {
         let dir = tempfile::tempdir().unwrap();
         let mut engine = Engine::new(dir.path().into(), dir.path().into());
         let profile = EngineProfile {
+            scroll_speed: 100,
             identity: Identity::new().unwrap(),
             peer: Peer {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -327,6 +407,24 @@ mod output_tests {
         assert!(engine.child.is_none());
         engine.stop().unwrap();
         assert!(engine.failed.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn speed_preferences_are_bounded_persistent_and_independent() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(root.path().into(), root.path().into());
+        assert_eq!(engine.pointer_speed(), Some(100));
+        assert_eq!(engine.scroll_speed(), 100);
+        engine.set_pointer_speed(150).unwrap();
+        engine.set_scroll_speed(75).unwrap();
+        for invalid in [0, 49, 201, u16::MAX] {
+            assert!(engine.set_pointer_speed(invalid).is_err());
+            assert!(engine.set_scroll_speed(invalid).is_err());
+        }
+        let restored = Engine::new(root.path().into(), root.path().into());
+        assert_eq!(restored.pointer_speed(), Some(150));
+        assert_eq!(restored.scroll_speed(), 75);
     }
 
     #[test]

@@ -3102,6 +3102,8 @@ fn main() {
             kvm::kvm_start,
             kvm::kvm_stop,
             kvm::kvm_open_settings,
+            kvm::kvm_pointer_speed,
+            kvm::kvm_scroll_speed,
             kvm::kvm_pairing_window,
             kvm::kvm_discover,
             kvm::kvm_pair,

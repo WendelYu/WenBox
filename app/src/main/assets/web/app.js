@@ -11,7 +11,9 @@
     let directRetryAt = 0;
     let discoveryOpen = false;
     document.getElementById('btnBrowseRooms').addEventListener('click', () => {
-        discoveryOpen = !discoveryOpen;
+        const fromOtherView = currentActiveTab !== 'view-room';
+        if (fromOtherView) selectView('view-room');
+        discoveryOpen = fromOtherView || !discoveryOpen;
         directAutoConnectEnabled = false;
         document.body.dataset.discoveryOpen = String(discoveryOpen);
         document.getElementById('btnBrowseRooms').textContent = discoveryOpen ? '返回会话' : '附近房间';

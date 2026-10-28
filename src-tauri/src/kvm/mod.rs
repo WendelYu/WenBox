@@ -75,7 +75,42 @@ pub fn shutdown() {
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct Permissions {
+    accessibility: bool,
+    input_monitoring: bool,
+}
+fn permissions() -> Option<Permissions> {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "ApplicationServices", kind = "framework")]
+        extern "C" {
+            fn AXIsProcessTrusted() -> bool;
+        }
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            fn CGPreflightListenEventAccess() -> bool;
+        }
+        // Read-only preflight: polling must never trigger permission dialogs.
+        Some(unsafe {
+            Permissions {
+                accessibility: AXIsProcessTrusted(),
+                input_monitoring: CGPreflightListenEventAccess(),
+            }
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Status {
+    scroll_speed: u16,
+    pointer_speed: Option<u16>,
+    input_connected: Option<bool>,
+    permissions: Option<Permissions>,
     platform: String,
     installed: bool,
     backend_running: bool,
@@ -115,13 +150,17 @@ fn status() -> Result<Status, String> {
         message
     };
     Ok(Status {
+        scroll_speed: m.scroll_speed(),
+        pointer_speed: m.pointer_speed(),
+        input_connected: m.input_connected(),
+        permissions: permissions(),
         platform: view.local.platform.clone(),
         installed,
         backend_running: running,
         engine_diagnostics: m.engine_diagnostics(),
         service_ready: service,
         service_error,
-        kvm_revision: "m2.3",
+        kvm_revision: "m2.4",
         profile_ready: view.peer.is_some(),
         role: Some(view.local.role),
         tls_configured: true,
@@ -222,14 +261,45 @@ pub async fn kvm_role(window: tauri::Window, role: Role) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub fn kvm_open_settings(window: tauri::Window) -> Result<(), String> {
+pub async fn kvm_scroll_speed(window: tauri::Window, percent: u16) -> Result<(), String> {
     local(&window)?;
+    tauri::async_runtime::spawn_blocking(move || manager()?.set_scroll_speed(percent))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn kvm_pointer_speed(window: tauri::Window, percent: u16) -> Result<(), String> {
+    local(&window)?;
+    tauri::async_runtime::spawn_blocking(move || manager()?.set_pointer_speed(percent))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn kvm_open_settings(window: tauri::Window, pane: Option<String>) -> Result<(), String> {
+    local(&window)?;
+    let pane = pane.as_deref().unwrap_or("accessibility");
+    if !matches!(pane, "accessibility" | "input-monitoring" | "reveal-app") {
+        return Err("未知的权限页面".into());
+    }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("/usr/bin/open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        let mut command = std::process::Command::new("/usr/bin/open");
+        if pane == "reveal-app" {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let app = exe
+                .ancestors()
+                .nth(3)
+                .filter(|p| p.extension().is_some_and(|e| e == "app"))
+                .ok_or("请先将 WenBox 安装到应用程序文件夹")?;
+            command.arg("-R").arg(app);
+        } else {
+            command.arg(if pane == "input-monitoring" {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+            } else {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            });
+        }
+        command.spawn().map_err(|e| e.to_string())?;
     }
     Ok(())
 }

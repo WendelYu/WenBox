@@ -110,10 +110,18 @@ pub struct Saved {
     pub side: Side,
     pub peer: Option<Peer>,
 }
+pub fn normal_speed() -> u16 {
+    100
+}
+fn is_normal_speed(v: &u16) -> bool {
+    *v == 100
+}
 // Used solely on the local service pipe. Never return or log this structure in UI/HTTP.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EngineProfile {
+    #[serde(default = "normal_speed", skip_serializing_if = "is_normal_speed")]
+    pub scroll_speed: u16,
     pub identity: Identity,
     pub peer: Peer,
     pub role: Role,
@@ -121,6 +129,9 @@ pub struct EngineProfile {
 }
 impl EngineProfile {
     pub fn validate(&self) -> Result<(), String> {
+        if !(50..=200).contains(&self.scroll_speed) {
+            return Err("滚轮速度范围为 50% 至 200%".into());
+        }
         self.identity.screen()?;
         screen(&self.peer.id)?;
         if self.identity.id == self.peer.id {
@@ -192,6 +203,14 @@ pub fn render_profile(root: &Path, p: &EngineProfile) -> Result<std::path::PathB
     let layout=format!("section: links\n  {own}:\n    {} = {peer}\n  {peer}:\n    {} = {own}\nend\nsection: options\n  keystroke(Control+Alt+Escape) = switchToScreen({own})\nend\n",p.side.name(),p.side.opposite().name());
     atomic(&root.join("screens.conf"), layout.as_bytes())?;
     let config=format!("[computer_{own}]\nname={own}\n[computer_{peer}]\nname={peer}\n[core]\ncoreMode={}\ncomputerName={own}\ninterface={}\nport={INPUT_PORT}\nprocessMode=1\nenableEnterCommand=false\nenableExitCommand=false\n[security]\ntlsEnabled=true\ncheckPeerFingerprints=true\ncertificate={}\n[client]\nremoteHost={}\n[server]\nexternalConfig=true\nexternalConfigFile={}\nenableClipboard=false\nenableHeartbeat=true\nheartbeat=500\n[daemon]\nelevate=true\n[gui]\nstartCoreWithGui=false\nenableUpdateCheck=false\n[log]\nlevel=INFO\n",if p.role==Role::Source{2}else{1},p.peer.local_ip,ini_path(&tls.join("device.pem")),p.peer.ip,ini_path(&root.join("screens.conf")));
+    let config = config.replace(
+        "[client]\n",
+        &format!(
+            "[client]\nxScrollScale={:.2}\nyScrollScale={:.2}\n",
+            f64::from(p.scroll_speed) / 100.0,
+            f64::from(p.scroll_speed) / 100.0
+        ),
+    );
     let path = root.join("input.ini");
     atomic(&path, config.as_bytes())?;
     Ok(path)
@@ -215,6 +234,7 @@ mod tests {
             let path = render_profile(
                 d.path(),
                 &EngineProfile {
+                    scroll_speed: 100,
                     identity: id.clone(),
                     peer: peer.clone(),
                     role: Role::Source,
@@ -241,6 +261,41 @@ mod tests {
             assert!(!l.contains("section: screens"));
         }
     }
+    #[test]
+    fn scroll_config_and_old_profile_defaults_remain_compatible() {
+        let mut profile = EngineProfile {
+            identity: Identity::new().unwrap(),
+            peer: Peer {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: "test".into(),
+                platform: "Windows".into(),
+                fingerprint: "ab".repeat(32),
+                ip: "192.168.1.2".parse().unwrap(),
+                local_ip: "192.168.1.1".parse().unwrap(),
+            },
+            role: Role::Target,
+            side: Side::Left,
+            scroll_speed: 100,
+        };
+        let old = serde_json::to_value(&profile).unwrap();
+        assert!(old.get("scrollSpeed").is_none());
+        assert_eq!(
+            serde_json::from_value::<EngineProfile>(old)
+                .unwrap()
+                .scroll_speed,
+            100
+        );
+        profile.scroll_speed = 175;
+        let root = tempfile::tempdir().unwrap();
+        let file = render_profile(root.path(), &profile).unwrap();
+        let ini = std::fs::read_to_string(file).unwrap();
+        assert!(ini.contains("xScrollScale=1.75\nyScrollScale=1.75"));
+        for invalid in [0, 49, 201, u16::MAX] {
+            profile.scroll_speed = invalid;
+            assert!(profile.validate().is_err());
+        }
+    }
+
     #[test]
     fn public_addresses_and_config_injection_are_rejected() {
         assert!(!lan("8.8.8.8".parse().unwrap()));
