@@ -232,6 +232,9 @@ impl Managed {
     pub fn events(&self) -> Vec<Event> {
         lock(&self.state).events.iter().cloned().collect()
     }
+    pub fn engine_diagnostics(&self) -> String {
+        lock(&self.engine).diagnostics()
+    }
     pub fn engine_view(&self) -> (bool, bool, String) {
         lock(&self.engine).view()
     }

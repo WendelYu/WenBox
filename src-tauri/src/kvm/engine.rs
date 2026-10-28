@@ -1,7 +1,10 @@
 use super::model::*;
 use std::{
+    collections::VecDeque,
+    io::Read,
     path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 pub struct Engine {
@@ -11,6 +14,7 @@ pub struct Engine {
     applied: Option<String>,
     running: bool,
     message: String,
+    output: Arc<Mutex<VecDeque<u8>>>,
 }
 impl Engine {
     pub fn new(root: PathBuf, resources: PathBuf) -> Self {
@@ -21,6 +25,7 @@ impl Engine {
             applied: None,
             running: false,
             message: "尚未启用流转".into(),
+            output: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
     fn binary(&self) -> PathBuf {
@@ -53,14 +58,61 @@ impl Engine {
             }
         }
         if let Some(c) = self.child.as_mut() {
-            if let Ok(Some(_)) = c.try_wait() {
+            if let Ok(Some(exit)) = c.try_wait() {
                 self.child = None;
                 self.running = false;
                 self.applied = None;
-                self.message = "输入核心已退出，请检查系统权限或诊断信息".into();
+                let detail = self.diagnostics();
+                self.message = if detail.contains("assistive devices does not trust")
+                    || detail.contains("process is not trusted")
+                {
+                    "macOS 辅助功能权限未授权，请在系统设置中允许 WenBox / WenBox Input，然后重启应用".into()
+                } else {
+                    format!(
+                        "输入核心已退出（{exit}）：{}",
+                        detail
+                            .chars()
+                            .rev()
+                            .take(1200)
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect::<String>()
+                    )
+                };
             }
         }
         (self.binary().is_file(), self.running, self.message.clone())
+    }
+    pub fn diagnostics(&self) -> String {
+        let bytes = self
+            .output
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+    fn capture(
+        mut pipe: impl Read + Send + 'static,
+        output: Arc<Mutex<VecDeque<u8>>>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let mut bytes = [0u8; 1024];
+            loop {
+                match pipe.read(&mut bytes) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        let mut tail = output.lock().unwrap_or_else(|e| e.into_inner());
+                        tail.extend(&bytes[..count]);
+                        while tail.len() > 8192 {
+                            tail.pop_front();
+                        }
+                    }
+                }
+            }
+        })
     }
     pub fn apply(&mut self, profile: &EngineProfile) -> Result<(), String> {
         profile.validate()?;
@@ -99,7 +151,8 @@ impl Engine {
                 return Err("独立 Deskflow 会话仍在运行，请先停止它，再从 WenBox 启动".into());
             }
             let path = render_profile(&self.root, profile)?;
-            let child = Command::new(self.binary())
+            self.output = Arc::new(Mutex::new(VecDeque::new()));
+            let mut child = Command::new(self.binary())
                 .arg(if profile.role == Role::Source {
                     "server"
                 } else {
@@ -108,10 +161,16 @@ impl Engine {
                 .arg("--settings")
                 .arg(path)
                 .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
                 .spawn()
                 .map_err(|_| "输入组件启动失败，请检查系统权限".to_string())?;
+            if let Some(pipe) = child.stdout.take() {
+                Self::capture(pipe, self.output.clone());
+            }
+            if let Some(pipe) = child.stderr.take() {
+                Self::capture(pipe, self.output.clone());
+            }
             self.child = Some(child);
         }
         #[cfg(not(any(windows, target_os = "macos")))]
@@ -159,5 +218,25 @@ impl Engine {
 impl Drop for Engine {
     fn drop(&mut self) {
         let _ = self.stop();
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    #[test]
+    fn startup_output_is_drained_and_retains_only_a_bounded_tail() {
+        let mut bytes = vec![b'x'; 100_000];
+        bytes.extend_from_slice(b"assistive devices does not trust this process\n");
+        let output = Arc::new(Mutex::new(VecDeque::new()));
+        Engine::capture(std::io::Cursor::new(bytes), output.clone())
+            .join()
+            .unwrap();
+        let tail = output.lock().unwrap();
+        assert_eq!(tail.len(), 8192);
+        assert!(
+            String::from_utf8_lossy(&tail.iter().copied().collect::<Vec<_>>())
+                .ends_with("assistive devices does not trust this process\n")
+        );
     }
 }
