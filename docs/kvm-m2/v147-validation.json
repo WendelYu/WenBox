@@ -1,0 +1,37 @@
+{
+  "version": "1.4.7-preview",
+  "revision": "m2.5",
+  "sourceCommit": "db0d436",
+  "branch": "codex/kvm-polish-v147",
+  "sourceWorkspace": "/tmp/wenbox-m2-windows-build",
+  "artifacts": [
+    {
+      "name": "WenBox-macOS-v1.4.7-preview-universal.zip",
+      "bytes": 60170873,
+      "sha256": "76883c13293a2c867162b8776e86dfbfa0d9fc9b1a448f3e89905d48f4fcb09b"
+    },
+    {
+      "name": "WenBox-Windows-v1.4.7-preview-Installer.exe",
+      "bytes": 17442668,
+      "sha256": "9af3172b62986cbc861cf9c9fe9b22414b3e10158e813fafff5bb0945f209c95"
+    }
+  ],
+  "windowsRun": "https://github.com/WendelYu/WenBox/actions/runs/40824516495",
+  "checks": {
+    "node": 46,
+    "macRustPassed": 69,
+    "macRustIgnored": 1,
+    "windowsRustPassed": 66,
+    "windowsRustIgnored": 1,
+    "kvmUi": "passed; slow polling remains interactive; unchanged event nodes retained",
+    "workspaceUi": "passed; standalone rooms and quick-transfer return",
+    "windowsSetup": "passed default and custom paths, install/upgrade/uninstall and unsafe-parent rejection",
+    "webview2": "not bundled or automatically downloaded; Chinese setup and native launch guidance",
+    "macUniversal": "built and ad-hoc signature verified"
+  },
+  "limitations": [
+    "No Developer ID certificate; permission grants may need renewal after updating",
+    "Custom install location must have protected ancestors on local NTFS/ReFS",
+    "Remote wheel control requires both endpoints upgraded; real-device feel remains to be confirmed"
+  ]
+}
