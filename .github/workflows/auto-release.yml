@@ -96,20 +96,14 @@ jobs:
           node scripts/check-native-transport.cjs
 
       - name: Build Tauri Windows EXE
-        run: npx @tauri-apps/cli@1.5 build
+        run: npx --yes @tauri-apps/cli@1.5 build --bundles nsis
 
       - name: Prepare Windows Files for Release
         shell: bash
         run: |
           VERSION=$(jq -r '.version' package.json)
           mkdir -p release-win
-          cp src-tauri/target/release/wenbox.exe release-win/WenBox-Windows-v${VERSION}-x64.exe
-          if ls src-tauri/target/release/bundle/nsis/*.exe 1> /dev/null 2>&1; then
-            cp src-tauri/target/release/bundle/nsis/*.exe release-win/WenBox-Windows-v${VERSION}-Installer.exe
-          fi
-          if ls src-tauri/target/release/bundle/msi/*.msi 1> /dev/null 2>&1; then
-            cp src-tauri/target/release/bundle/msi/*.msi release-win/WenBox-Windows-v${VERSION}-Installer.msi
-          fi
+          cp src-tauri/target/release/bundle/nsis/*.exe "release-win/WenBox-Windows-v${VERSION}-Installer.exe"
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
@@ -160,7 +154,19 @@ jobs:
       - name: Prepare Release Notes
         run: node scripts/release-notes.cjs
 
-      - name: Create or Update Release
+      - name: Check whether the version tag already exists
+        id: existing-tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish a new version only
+        if: steps.existing-tag.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
