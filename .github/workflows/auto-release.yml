@@ -159,10 +159,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${{ steps.version.outputs.tag }}" >/dev/null 2>tag-error.txt; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
+          elif grep -q 'HTTP 404' tag-error.txt; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            cat tag-error.txt >&2
+            exit 1
           fi
 
       - name: Publish a new version only
