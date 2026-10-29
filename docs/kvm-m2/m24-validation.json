@@ -1,0 +1,32 @@
+{
+  "revision": "m2.4",
+  "artifacts": [
+    {
+      "file": "WenBox-KVM-M2.4-macOS-universal.zip",
+      "bytes": 60151608,
+      "sha256": "f56e5beb99e1b81196556b7f81a24f0e419d54cdae4f3d4326e569694bf0f621"
+    },
+    {
+      "file": "WenBox-KVM-M2.4-Windows-x64-setup.exe",
+      "bytes": 235095683,
+      "sha256": "73c6c9a91acef32c8ec2a7c3ee1d93c818b4557ae05afae12116361f05c1745e"
+    }
+  ],
+  "macSourceCommit": "8daa5dd",
+  "windowsSourceCommit": "6aa24044223bc87ed0fc3d6be6f830fb3feaf6f3",
+  "windowsRun": "https://github.com/WendelYu/WenBox/actions/runs/40684039550",
+  "checks": {
+    "rustFull": "68 passed, 1 ignored",
+    "finalMacKvm": "24 passed",
+    "kvmUi": "passed; direction, enable filtering, live state, both speeds, permission routes",
+    "workspaceUi": "passed including nearby rooms from KVM",
+    "visual": "light/dark 1280px and light 390px; no overflow",
+    "windowsInstallUpgradeServiceUninstall": "passed",
+    "macUniversalBuild": "passed",
+    "macAdHocSignature": "verified",
+    "windowsRust": "65 passed, 1 ignored"
+  },
+  "liveProtocolCheck": "Read-only handshake against existing core confirmed exact version and connectedClients updates including empty disconnect state",
+  "remaining": "User to verify speed feel, reconnect and updated Windows live state on physical devices",
+  "installedAppChanged": false
+}
