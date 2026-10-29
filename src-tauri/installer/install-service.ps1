@@ -44,9 +44,9 @@ while ($null -ne $parent) {
         $acl = Get-Acl -LiteralPath $parent.FullName
         $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
         if ($owner -notin $trustedOwners) { throw '安装目录的父目录由普通用户管理。请选择 Program Files 内的文件夹，或磁盘根目录下新建的专用文件夹（例如 D:\WenBox）。' }
-        foreach ($rule in $acl.Access) {
+        foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
             if (($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
-            $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+            $sid = $rule.IdentityReference.Value
             if ($rule.AccessControlType -eq 'Allow' -and $sid -in $weakGroups -and ($rule.FileSystemRights -band $dangerous)) { throw '父目录允许普通用户替换安装文件夹，请选择受保护的安装位置。' }
         }
     } else { $missingParents.Add($parent.FullName) }
@@ -83,8 +83,8 @@ if ($Action -eq 'Prepare') {
         $acl = Get-Acl -LiteralPath $Path
         if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trustedOwners) { throw '安装目录被其他用户占用，请选择新的文件夹。' }
         $writeBits = [Security.AccessControl.FileSystemRights]::Write -bor $dangerous
-        foreach ($rule in $acl.Access) {
-            $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+        foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+            $sid = $rule.IdentityReference.Value
             if ($rule.AccessControlType -eq 'Allow' -and $sid -notin $trustedOwners -and ($rule.FileSystemRights -band $writeBits)) { throw '安装目录允许普通用户修改，请选择受保护的专用文件夹。' }
         }
     }

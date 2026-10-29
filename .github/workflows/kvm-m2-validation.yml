@@ -45,7 +45,7 @@ jobs:
         shell: powershell
         run: |
           $log = Join-Path $env:TEMP 'WenBox-Kvm-Install.log'
-          if (Test-Path -LiteralPath $log) { Copy-Item -LiteralPath $log -Destination . }
+          if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log; Copy-Item -LiteralPath $log -Destination . }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
