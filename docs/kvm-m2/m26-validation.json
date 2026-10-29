@@ -1,0 +1,54 @@
+{
+  "version": "1.4.7",
+  "revision": "m2.6",
+  "branch": "codex/keymap-demand-files",
+  "commit": "1623ec8df3c72c096e4a03b4fd5a28989a4f673f",
+  "checks": {
+    "macRust": {
+      "passed": 73,
+      "ignored": 1
+    },
+    "node": {
+      "passed": 47
+    },
+    "android": {
+      "passed": 33,
+      "command": ":app:testDebugUnitTest"
+    },
+    "browserWorkspace": "passed",
+    "browserKeymap": "passed",
+    "macUniversalBuild": "passed",
+    "macResourceIntegrity": "68 files verified",
+    "macAdHocSignature": "verified"
+  },
+  "windows": {
+    "run": "https://github.com/WendelYu/WenBox/actions/runs/40872179435",
+    "status": "success",
+    "rustPassed": 70,
+    "rustIgnored": 1,
+    "defaultAndCustomInstallUpgradeUninstall": "passed",
+    "serviceBoundary": "passed",
+    "unsafeParentRejected": true
+  },
+  "artifacts": [
+    {
+      "file": "WenBox-M2.6-macOS-universal.zip",
+      "bytes": 60312416,
+      "sha256": "051b5845ac5f7d1416e84098cdc4fab786833c419a2e96643518aab321e0fbd8"
+    },
+    {
+      "file": "WenBox-M2.6-Windows-x64-setup.exe",
+      "bytes": 17505380,
+      "sha256": "abc9a9212ac180b28301fbe95b534e300c4754c796939dc9d6fdf4bf21e1fe9a"
+    }
+  ],
+  "manualValidation": [
+    "Mac to Windows Command shortcuts and custom modifier maps",
+    "Two-machine on-demand download, sender offline and file checksum"
+  ],
+  "limitations": [
+    "Sender must retain current page/app session; restarting requires resharing",
+    "Only four modifier keys configurable, not arbitrary keys or macros",
+    "No new official release published"
+  ]
+}
