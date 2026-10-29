@@ -162,13 +162,29 @@ pub fn monitor(
         }
         let mut buffer = Vec::new();
         let mut verified = false;
+        let mut pending_connection = false;
+        let handshake_until = Instant::now() + TIMEOUT;
         while !stop.load(Ordering::SeqCst) {
+            if !verified && Instant::now() >= handshake_until {
+                break;
+            }
             let mut byte = [0];
             match stream.read(&mut byte) {
                 Ok(0) => break,
                 Ok(_) if byte[0] == b'\n' => {
                     let message = String::from_utf8_lossy(&buffer);
-                    if !verified {
+                    if !verified
+                        && (message == "connectedClients"
+                            || message.starts_with("connectedClients="))
+                    {
+                        // A core event can race the Qt hello response. Do not publish
+                        // it until the exact-version handshake has completed.
+                        pending_connection = message
+                            .strip_prefix("connectedClients=")
+                            .unwrap_or("")
+                            .split(',')
+                            .any(|s| s == peer);
+                    } else if !verified {
                         let version = message
                             .strip_prefix("hello=")
                             .or_else(|| message.strip_prefix("versionMismatch="));
@@ -187,7 +203,8 @@ pub fn monitor(
                             }
                         } else {
                             verified = true;
-                            *state.lock().unwrap_or_else(|e| e.into_inner()) = Some(false);
+                            *state.lock().unwrap_or_else(|e| e.into_inner()) =
+                                Some(pending_connection);
                         }
                     } else if message == "connectedClients"
                         || message.starts_with("connectedClients=")
@@ -305,7 +322,8 @@ mod tests {
                 line(&mut s, Instant::now() + TIMEOUT).unwrap(),
                 "hello=wenbox-m1"
             );
-            s.write_all(b"versionMismatch=1.27.0.0+081f6478\n").unwrap();
+            s.write_all(b"connectedClients=peer\nversionMismatch=1.27.0.0+081f6478\n")
+                .unwrap();
             assert_eq!(
                 line(&mut s, Instant::now() + TIMEOUT).unwrap(),
                 "hello=1.27.0.0+081f6478"

@@ -266,6 +266,10 @@ impl Engine {
                 .prefix("wb-kvm-")
                 .tempdir_in("/tmp")
                 .map_err(|e| format!("无法创建输入核心运行目录：{e}"))?;
+            // Qt exposes the socket broadly; its parent must remain user-only.
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(runtime.path(), std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| format!("无法保护输入核心运行目录：{e}"))?;
             self.output = Arc::new(Mutex::new(VecDeque::new()));
             let mut child = Command::new(self.binary())
                 .arg(if profile.role == Role::Source {
