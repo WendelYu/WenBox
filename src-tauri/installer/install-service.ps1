@@ -23,7 +23,6 @@ if ($InstallRoot -notmatch '^[A-Za-z]:\\[^\\]') { throw '请选择本地磁盘�
 $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($InstallRoot))
 if ($drive.DriveType -ne [IO.DriveType]::Fixed -or $drive.DriveFormat -notin @('NTFS','ReFS')) { throw '输入服务需要支持 Windows 权限的本地固定磁盘（NTFS / ReFS）。' }
 $trustedOwners = @('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
-$weakGroups = @('S-1-1-0','S-1-5-11','S-1-5-32-545')
 $dangerous = [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership -bor [Security.AccessControl.FileSystemRights]::Delete
 function New-ProtectedInstallAcl {
     $acl = New-Object Security.AccessControl.DirectorySecurity
@@ -47,7 +46,7 @@ while ($null -ne $parent) {
         foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
             if (($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
             $sid = $rule.IdentityReference.Value
-            if ($rule.AccessControlType -eq 'Allow' -and $sid -in $weakGroups -and ($rule.FileSystemRights -band $dangerous)) { throw '父目录允许普通用户替换安装文件夹，请选择受保护的安装位置。' }
+            if ($rule.AccessControlType -eq 'Allow' -and $sid -notin $trustedOwners -and ($rule.FileSystemRights -band $(if ($null -eq $parent.Parent) { $dangerous -band (-bnot [int][Security.AccessControl.FileSystemRights]::Delete) } else { $dangerous }))) { throw '父目录允许普通用户替换安装文件夹，请选择受保护的安装位置。' }
         }
     } else { $missingParents.Add($parent.FullName) }
     $parent = $parent.Parent

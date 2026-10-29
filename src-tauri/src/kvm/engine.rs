@@ -94,7 +94,7 @@ impl Engine {
                 self.message = if detail.contains("assistive devices does not trust")
                     || detail.contains("process is not trusted")
                 {
-                    "macOS 辅助功能权限未授权，请在系统设置中允许 WenBox / WenBox Input，然后重启应用".into()
+                    "macOS 尚未信任当前版本 WenBox。请检查辅助功能；若开关已开启，移除旧条目并重新添加当前应用，再重启 WenBox。".into()
                 } else {
                     format!(
                         "输入核心已退出（{exit}）：{}",

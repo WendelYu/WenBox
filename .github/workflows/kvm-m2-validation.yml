@@ -40,6 +40,20 @@ jobs:
           & ./scripts/check-kvm-installation.ps1 -Installer $installer.FullName
           $custom = Join-Path $env:ProgramFiles 'WenBox Custom Path'
           & ./scripts/check-kvm-installation.ps1 -Installer $installer.FullName -InstallDirectory $custom
+      - name: Reject a user-writable installation parent
+        shell: powershell
+        run: |
+          $parent = Join-Path $env:ProgramFiles 'WenBox Unsafe Parent'
+          $target = Join-Path $parent 'WenBox'
+          New-Item -ItemType Directory -Path $parent -Force | Out-Null
+          & icacls.exe $parent /grant '*S-1-1-0:(OI)(CI)M' | Out-Null
+          try {
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./src-tauri/installer/install-service.ps1 -Action Prepare -InstallRoot $target
+            if ($LASTEXITCODE -eq 0) { throw 'Unsafe installation parent accepted' }
+            if (Test-Path -LiteralPath $target) { throw 'Unsafe target was created' }
+            Write-Output 'PASS: unsafe custom installation parent rejected'
+            $global:LASTEXITCODE = 0
+          } finally { Remove-Item -LiteralPath $parent -Force -Recurse }
       - name: Collect installer diagnostics
         if: always()
         shell: powershell

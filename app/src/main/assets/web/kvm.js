@@ -40,6 +40,7 @@
         view.setAttribute('aria-busy', String(busy));
     }
     function render(state) {
+        if (snapshot?.managed?.peer?.id !== state.managed?.peer?.id || snapshot?.role !== state.role) { speedDirty = false; scrollDirty = false; }
         snapshot = state;
         const m = state.managed;
         node('kvmPermissions').hidden = state.platform !== 'macOS';
@@ -47,13 +48,16 @@
         text('kvmAccessibilityStatus', permissionLabel(state.permissions?.accessibility));
         text('kvmInputStatus', permissionLabel(state.permissions?.inputMonitoring));
         const enabled = !!m?.enabled;
+        const missingPermissions = state.platform === 'macOS' ? [state.permissions?.accessibility === false ? '辅助功能' : '', state.permissions?.inputMonitoring === false ? '输入监控' : ''].filter(Boolean) : [];
+        text('kvmSettingsSummary', missingPermissions.length ? `需要授权：${missingPermissions.join('、')}` : '权限与连接详情');
+        node('kvmDetails').dataset.permissionMissing = String(missingPermissions.length > 0);
         node('kvmDetails').hidden = !enabled;
         node('kvmEscape').hidden = !enabled || !m?.peer;
         node('kvmIntro').hidden = enabled && !!m?.peer;
         node('kvmPairingCard').hidden = !enabled || !!m?.peer;
         node('kvmStatusBadge').dataset.state = !enabled ? 'off' : state.inputConnected === true ? 'connected' : 'waiting';
-        text('kvmStatusBadge', !enabled ? '未开启' : state.inputConnected === true ? '已连接' : m?.pending ? '等待确认' : state.backendRunning ? (state.inputConnected == null && state.role === 'target' ? '接收端就绪' : '等待连接') : '准备连接');
-        text('kvmMessage', !enabled ? '需要时开启，让键鼠在两台电脑之间流转。' : state.inputConnected === true ? `已连接 ${m.peer?.name || '对端'}，可以跨屏操作` : state.message);
+        text('kvmStatusBadge', enabled && missingPermissions.length ? (state.inputConnected === true ? '已连接 · 权限未齐' : '需要授权') : !enabled ? '未开启' : state.inputConnected === true ? '已连接' : m?.pending ? '等待确认' : state.backendRunning ? (state.inputConnected == null && state.role === 'target' ? '接收端就绪' : '等待连接') : '准备连接');
+        text('kvmMessage', !enabled ? '需要时开启，让键鼠在两台电脑之间流转。' : state.inputConnected === true ? `已连接 ${m.peer?.name || '对端'}${missingPermissions.length ? `，请先授权${missingPermissions.join('、')}` : '，可以跨屏操作'}` : state.message);
         view.querySelector('[data-kvm="start"]').hidden = enabled;
         view.querySelector('[data-kvm="stop"]').hidden = !enabled;
         view.querySelector('[data-kvm="diagnostics"]').hidden = !enabled;

@@ -48,3 +48,5 @@
 .kvm-hero > #kvmDetails { border-top: 0; margin-top: 14px; padding-top: 0; }
 .kvm-hero > #kvmEscape { align-self: end; margin: 14px 0 0; text-align: right; font-size: 11px; }
 @media(max-width:600px) { .kvm-hero { grid-template-columns: 1fr; gap: 14px; }.kvm-hero > *, .kvm-hero > #kvmDetails[open] { grid-column: 1; }.kvm-main-actions { justify-content: start; }.kvm-hero > #kvmEscape { text-align: left; margin-top: 0; } }
+
+#kvmDetails[data-permission-missing=true] > summary { color: var(--danger-fg); font-weight: 600; }

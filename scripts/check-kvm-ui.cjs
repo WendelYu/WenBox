@@ -55,6 +55,10 @@ async function main() {
   assert.equal(await page.locator('[data-kvm-speed="150"]').isDisabled(),false);
   await page.locator('[data-kvm-speed="150"]').click();await page.waitForFunction(()=>window.state.pointerSpeed===150);
   await page.evaluate(()=>{window.statusDelay=0;});
+  await page.evaluate(()=>{window.state.events=[{time:1,message:'已开启流转'}]});await page.locator('[data-kvm="refresh"]').click();
+  await page.evaluate(()=>{window.savedEventNode=document.querySelector('#kvmEvents li');});
+  await page.locator('[data-kvm="refresh"]').click();
+  assert.equal(await page.evaluate(()=>window.savedEventNode===document.querySelector('#kvmEvents li')),true);
   await page.evaluate(()=>{window.state.inputConnected=true;});await page.locator('[data-kvm="refresh"]').click();
   assert.equal(await page.locator('#kvmStatusBadge').innerText(),'已连接');
   await page.evaluate(()=>{window.state.inputConnected=false;});await page.locator('[data-kvm="refresh"]').click();
@@ -75,6 +79,7 @@ async function main() {
   await page.locator('[data-kvm="refresh"]').click();await page.locator('#kvmDetails > summary').click();await page.locator('#kvmPermissions').waitFor({state:'visible'});
   assert.equal(await page.locator('#kvmAccessibilityStatus').innerText(),'已授权');
   assert.equal(await page.locator('#kvmInputStatus').innerText(),'需要授权或重新授权');
+  assert.match(await page.locator('#kvmSettingsSummary').innerText(),/输入监控/);
   for(const [action,pane] of [['settings','accessibility'],['input-settings','input-monitoring'],['reveal-app','reveal-app']]) {
    await page.locator(`[data-kvm="${action}"]`).click();
    await page.waitForFunction(pane=>window.calls.some(c=>c.command==='kvm_open_settings'&&c.args.pane===pane),pane);
