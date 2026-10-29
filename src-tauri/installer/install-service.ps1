@@ -25,6 +25,17 @@ if ($drive.DriveType -ne [IO.DriveType]::Fixed -or $drive.DriveFormat -notin @('
 $trustedOwners = @('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
 $weakGroups = @('S-1-1-0','S-1-5-11','S-1-5-32-545')
 $dangerous = [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership -bor [Security.AccessControl.FileSystemRights]::Delete
+function New-ProtectedInstallAcl {
+    $acl = New-Object Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true,$false)
+    $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+    foreach ($sid in @('S-1-5-18','S-1-5-32-544')) {
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    }
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')), 'ReadAndExecute', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    return $acl
+}
+$missingParents = New-Object 'Collections.Generic.List[string]'
 $parent = [IO.Directory]::GetParent($InstallRoot)
 while ($null -ne $parent) {
     if (Test-Path -LiteralPath $parent.FullName) {
@@ -38,7 +49,7 @@ while ($null -ne $parent) {
             $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
             if ($rule.AccessControlType -eq 'Allow' -and $sid -in $weakGroups -and ($rule.FileSystemRights -band $dangerous)) { throw '父目录允许普通用户替换安装文件夹，请选择受保护的安装位置。' }
         }
-    }
+    } else { $missingParents.Add($parent.FullName) }
     $parent = $parent.Parent
 }
 $serviceName = 'WenBoxKvm'
@@ -68,6 +79,24 @@ if ($Action -eq 'Prepare') {
         if ($owner -notin $trustedOwners) { throw '请选择一个新的专用安装目录；现有目录由普通用户管理。' }
         if (@(Get-ChildItem -LiteralPath $InstallRoot -Force).Count -gt 0 -and -not (Test-Path -LiteralPath (Join-Path $InstallRoot 'uninstall.exe'))) { throw '安装目录已有其他文件，请选择空文件夹。' }
     }
+    function Assert-ProtectedFolder([string]$Path) {
+        $acl = Get-Acl -LiteralPath $Path
+        if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trustedOwners) { throw '安装目录被其他用户占用，请选择新的文件夹。' }
+        $writeBits = [Security.AccessControl.FileSystemRights]::Write -bor $dangerous
+        foreach ($rule in $acl.Access) {
+            $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+            if ($rule.AccessControlType -eq 'Allow' -and $sid -notin $trustedOwners -and ($rule.FileSystemRights -band $writeBits)) { throw '安装目录允许普通用户修改，请选择受保护的专用文件夹。' }
+        }
+    }
+    $initialAcl = New-ProtectedInstallAcl
+    for ($i = $missingParents.Count - 1; $i -ge 0; $i--) {
+        [void][IO.Directory]::CreateDirectory($missingParents[$i], $initialAcl)
+        Assert-ProtectedFolder $missingParents[$i]
+    }
+    if (-not (Test-Path -LiteralPath $InstallRoot)) {
+        [void][IO.Directory]::CreateDirectory($InstallRoot, $initialAcl)
+    }
+    Assert-ProtectedFolder $InstallRoot
     exit 0
 }
 $sc = Join-Path $env:WINDIR 'System32\sc.exe'
