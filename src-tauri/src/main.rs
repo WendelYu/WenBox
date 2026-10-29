@@ -8,6 +8,8 @@ mod clipboard_files;
 mod session_store;
 #[cfg(windows)]
 mod windows_network;
+#[cfg(windows)]
+mod windows_runtime;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -3057,6 +3059,8 @@ fn start_default_open_room(state: &Arc<AppState>) {
 }
 
 fn main() {
+    #[cfg(windows)]
+    if !windows_runtime::ensure_available() { return; }
     let state = Arc::new(AppState {
         files: Mutex::new(HashMap::new()),
         received_files: Mutex::new(Vec::new()),

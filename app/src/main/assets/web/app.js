@@ -10,15 +10,7 @@
     let directAutoConnectEnabled = true;
     let directRetryAt = 0;
     let discoveryOpen = false;
-    document.getElementById('btnBrowseRooms').addEventListener('click', () => {
-        const fromOtherView = currentActiveTab !== 'view-room';
-        if (fromOtherView) selectView('view-room');
-        discoveryOpen = fromOtherView || !discoveryOpen;
-        directAutoConnectEnabled = false;
-        document.body.dataset.discoveryOpen = String(discoveryOpen);
-        document.getElementById('btnBrowseRooms').textContent = discoveryOpen ? '返回会话' : '附近房间';
-        if (discoveryOpen) { discoveryStartedAt = Date.now(); pollDiscoveredRooms(); }
-    });
+    document.getElementById('btnBrowseRooms').addEventListener('click', () => selectView('view-rooms'));
     const directConnectionStatus = document.getElementById('directConnectionStatus');
     const toast = document.getElementById('toast');
     let toastTimer;
@@ -99,17 +91,21 @@
     }
 
     // Primary navigation and independent tool/file segments share delegated controls.
-    let currentActiveTab = 'view-room';
+    let currentActiveTab = 'view-rooms';
     function animateArrival(element, drawer = false) {
         if (!element?.animate || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
         element.getAnimations().forEach(animation => animation.cancel());
         element.animate([{ transform: drawer ? 'translateX(28px)' : 'translateY(10px) scale(.985)' }, { transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.16, 1, .3, 1)' });
     }
     function selectView(id) {
+        if (id === currentActiveTab && !document.getElementById(id)?.hidden) return;
         currentActiveTab = id;
+        discoveryOpen = id === 'view-rooms';
+        document.body.dataset.discoveryOpen = String(discoveryOpen);
+        if (discoveryOpen) { discoveryStartedAt = Date.now(); pollDiscoveredRooms(); }
         document.body.dataset.activeView = id;
-        setText(document.getElementById('workspaceTitle'), id === 'view-kvm' ? '键鼠流转' : id === 'view-tools' ? '随手工具' : '快传工作台');
-        setText(document.getElementById('workspaceSubtitle'), id === 'view-kvm' ? '键鼠跟随光标，在两台电脑间切换' : id === 'view-tools' ? '常用的小工具，离线也顺手' : '文件与消息，在设备间轻松流转');
+        setText(document.getElementById('workspaceTitle'), id === 'view-rooms' ? '房间' : id === 'view-kvm' ? '键鼠流转' : id === 'view-tools' ? '随手工具' : '快传工作台');
+        setText(document.getElementById('workspaceSubtitle'), id === 'view-rooms' ? '发现、加入和管理局域网房间' : id === 'view-kvm' ? '键鼠跟随光标，在两台电脑间切换' : id === 'view-tools' ? '常用的小工具，离线也顺手' : '文件与消息，在设备间轻松流转');
         document.querySelectorAll('.primary-view').forEach(view => { view.hidden = view.id !== id; });
         document.querySelectorAll('[data-view]').forEach(button => {
             const selected = button.dataset.view === id;
@@ -1141,12 +1137,14 @@
         const changed = roomState.mode !== mode || roomState.roomInfo?.roomId !== data?.roomId;
         if (changed) { resetChatRoomHistory(); uploadQueue?.clear(); outbox.clear(); }
         if (mode === 'client') discoveryStartedAt = Date.now();
-        discoveryOpen = false;
-        document.body.dataset.discoveryOpen = 'false';
+        discoveryOpen = currentActiveTab === 'view-rooms';
+        document.body.dataset.discoveryOpen = String(discoveryOpen);
         document.getElementById('btnBrowseRooms').textContent = '附近房间';
         roomRevision++; scheduler.bump();
         latestRoomMembers = [];
         roomState.mode = mode;
+        if (changed && (mode === 'host' || mode === 'joined')) selectView('view-room');
+        else if (changed && mode === 'client' && currentActiveTab === 'view-room') selectView('view-rooms');
         if (!directAutoConnectEnabled) directConnectionStatus.hidden = true;
         roomState.roomInfo = mode === 'client' ? null : data;
         currentTargetBaseUrl = mode === 'joined' ? (data.hostUrl || window.location.origin).replace(/\/+$/, '') : '';
@@ -2569,7 +2567,7 @@
     scheduler.add('members', 2500, async () => {
         if (roomState.mode === 'host') await pollRoomMembers();
         else if (roomState.mode === 'joined') await pollJoinedMembers();
-        if (currentActiveTab === 'view-room' && (roomState.mode === 'client' || discoveryOpen)) await pollDiscoveredRooms();
+        if (currentActiveTab === 'view-rooms') await pollDiscoveredRooms();
     });
     scheduler.add('files', 2500, async () => {
         if (currentActiveTab !== 'view-room') return;

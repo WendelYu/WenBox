@@ -1,9 +1,10 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # Runs only from the elevated unified installer. No network or arbitrary service commands.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][ValidateSet('Prepare','Install','Uninstall')][string]$Action,
-    [Parameter(Mandatory=$true)][string]$InstallRoot
+    [Parameter(Mandatory=$true)][string]$InstallRoot,
+    [switch]$SkipLaunch
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -17,8 +18,29 @@ trap {
     exit 1
 }
 if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell for service installation.' }
-$expected = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WenBox'
-if ([IO.Path]::GetFullPath($InstallRoot).TrimEnd('\') -ine $expected.TrimEnd('\')) { throw 'The privileged input component requires the standard Program Files\WenBox installation directory.' }
+$InstallRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+if ($InstallRoot -notmatch '^[A-Za-z]:\\[^\\]') { throw '请选择本地磁盘上的专用安装文件夹。' }
+$drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($InstallRoot))
+if ($drive.DriveType -ne [IO.DriveType]::Fixed -or $drive.DriveFormat -notin @('NTFS','ReFS')) { throw '输入服务需要支持 Windows 权限的本地固定磁盘（NTFS / ReFS）。' }
+$trustedOwners = @('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$weakGroups = @('S-1-1-0','S-1-5-11','S-1-5-32-545')
+$dangerous = [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership -bor [Security.AccessControl.FileSystemRights]::Delete
+$parent = [IO.Directory]::GetParent($InstallRoot)
+while ($null -ne $parent) {
+    if (Test-Path -LiteralPath $parent.FullName) {
+        $item = Get-Item -LiteralPath $parent.FullName -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw '安装目录不能经过符号链接或目录联接。' }
+        $acl = Get-Acl -LiteralPath $parent.FullName
+        $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($owner -notin $trustedOwners) { throw '安装目录的父目录由普通用户管理。请选择 Program Files 内的文件夹，或磁盘根目录下新建的专用文件夹（例如 D:\WenBox）。' }
+        foreach ($rule in $acl.Access) {
+            if (($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+            $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+            if ($rule.AccessControlType -eq 'Allow' -and $sid -in $weakGroups -and ($rule.FileSystemRights -band $dangerous)) { throw '父目录允许普通用户替换安装文件夹，请选择受保护的安装位置。' }
+        }
+    }
+    $parent = $parent.Parent
+}
 $serviceName = 'WenBoxKvm'
 $stateRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'WenBoxKvm'
 $binary = Join-Path $InstallRoot 'resources\kvm\wenbox-kvm-service.exe'
@@ -40,7 +62,14 @@ if ($null -ne $svc -and $svc.Status -ne 'Stopped') {
     Stop-Service -Name $serviceName -Force
     $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(20))
 }
-if ($Action -eq 'Prepare') { exit 0 }
+if ($Action -eq 'Prepare') {
+    if (Test-Path -LiteralPath $InstallRoot) {
+        $owner = (Get-Acl -LiteralPath $InstallRoot).GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($owner -notin $trustedOwners) { throw '请选择一个新的专用安装目录；现有目录由普通用户管理。' }
+        if (@(Get-ChildItem -LiteralPath $InstallRoot -Force).Count -gt 0 -and -not (Test-Path -LiteralPath (Join-Path $InstallRoot 'uninstall.exe'))) { throw '安装目录已有其他文件，请选择空文件夹。' }
+    }
+    exit 0
+}
 $sc = Join-Path $env:WINDIR 'System32\sc.exe'
 function Native([string]$Exe,[string[]]$Arguments) { & $Exe @Arguments | Out-Null; if ($LASTEXITCODE -ne 0) { throw ('Native installation action failed: ' + $Exe + ' exit ' + $LASTEXITCODE) } }
 if ($Action -eq 'Uninstall') {
@@ -87,5 +116,5 @@ $netsh = Join-Path $env:WINDIR 'System32\netsh.exe'
 & $netsh advfirewall firewall delete rule name='WenBox KVM Input' | Out-Null
 Native $netsh @('advfirewall','firewall','add','rule','name=WenBox KVM Control','dir=in','action=allow','protocol=TCP','localport=9530','remoteip=LocalSubnet','profile=any',('program=' + (Join-Path $InstallRoot 'wenbox.exe')))
 Native $netsh @('advfirewall','firewall','add','rule','name=WenBox KVM Input','dir=in','action=allow','protocol=TCP','localport=9531','remoteip=LocalSubnet','profile=any',('program=' + (Join-Path $InstallRoot 'resources\kvm\input\deskflow-core.exe')))
-Native $sc @('start',$serviceName,'resume-user-app')
+if ($SkipLaunch) { Native $sc @('start',$serviceName) } else { Native $sc @('start',$serviceName,'resume-user-app') }
 (Get-Service -Name $serviceName).WaitForStatus('Running',[TimeSpan]::FromSeconds(15))

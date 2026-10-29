@@ -298,7 +298,9 @@ Function PageLeaveReinstall
 FunctionEnd
 
 ; 5. Choose install directoy page
-; M2 input service uses the fixed Program Files directory.
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择 WenBox 的专用安装文件夹。输入服务需要受保护的本地磁盘目录；建议使用默认位置或新建 D:\WenBox。不要选择桌面、下载目录或已有其他文件的文件夹。"
+!insertmacro MUI_PAGE_DIRECTORY
 
 ; 6. Start menu shortcut page
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
@@ -375,6 +377,7 @@ FunctionEnd
   ${EndIf}
 !macroend
 
+Var WebViewMissing
 Var PassiveMode
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
@@ -445,6 +448,14 @@ Section WebView2
 
   StrCmp $4 "" 0 webview2_done
   StrCmp $5 "" 0 webview2_done
+
+  !if "${INSTALLWEBVIEW2MODE}" == "skip"
+    StrCpy $WebViewMissing 1
+    IfSilent webview2_done
+    MessageBox MB_ICONINFORMATION|MB_YESNO "本机尚未安装 Microsoft Edge WebView2 运行库。WenBox 安装包不包含运行库，也不会自动下载。$\r$\n$\r$\n可先完成安装，随后从微软官方下载并安装 Evergreen x64 运行库，再打开 WenBox。$\r$\n$\r$\n现在打开微软官方下载页面？" IDNO webview2_done
+    ExecShell "open" "https://developer.microsoft.com/microsoft-edge/webview2/#download-section"
+    Goto webview2_done
+  !endif
 
   ; Webview2 install modes
   !if "${INSTALLWEBVIEW2MODE}" == "downloadBootstrapper"
@@ -542,9 +553,13 @@ Function RunKvmInstaller
   StrCpy $1 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
   IfFileExists "$1" +2 0
     StrCpy $1 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
-  ExecWait '"$1" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wenbox-install-service.ps1" -Action $0 -InstallRoot "$INSTDIR"' $2
+  StrCpy $3 ""
+  ${If} $WebViewMissing == 1
+    StrCpy $3 "-SkipLaunch"
+  ${EndIf}
+  ExecWait '"$1" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wenbox-install-service.ps1" -Action $0 -InstallRoot "$INSTDIR" $3' $2
   ${If} $2 != 0
-    MessageBox MB_ICONSTOP "WenBox input service installation action failed ($2). Installation cannot continue." /SD IDOK
+    MessageBox MB_ICONSTOP "输入服务安装失败（$2），安装已停止。请检查目录是否可由管理员安全管理。详细原因见 %TEMP%\WenBox-Kvm-Install.log。" /SD IDOK
     SetErrorLevel $2
     Abort
   ${EndIf}
@@ -560,7 +575,7 @@ Function un.RunKvmInstaller
     StrCpy $1 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
   ExecWait '"$1" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wenbox-install-service.ps1" -Action Uninstall -InstallRoot "$INSTDIR"' $2
   ${If} $2 != 0
-    MessageBox MB_ICONSTOP "WenBox input service could not be removed ($2). Uninstallation stopped." /SD IDOK
+    MessageBox MB_ICONSTOP "无法移除输入服务（$2），卸载已停止。详细原因见 %TEMP%\WenBox-Kvm-Install.log。" /SD IDOK
     Abort
   ${EndIf}
 FunctionEnd

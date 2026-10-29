@@ -17,7 +17,7 @@ async function main() {
    window.state={platform:'Windows',installed:true,backendRunning:false,serviceReady:true,profileReady:false,role:'source',tlsConfigured:true,systemInput:true,message:'流转已关闭',events:[],managed:{enabled:false,side:'right',peer:null,pending:null,error:null,local:{id:'local',name:'本机',platform:'Windows',enabled:false,pairing:false,role:'source',side:'right'}}};
    window.WenBox={async copyText(text){window.copied=text;}};
    window.__TAURI__={async invoke(command,args){window.calls.push({command,args});const s=window.state,m=s.managed;
-    if(command==='kvm_status'){if(window.failStatus)throw new Error('fixture failed');return structuredClone(s);}
+    if(command==='kvm_status'){if(window.failStatus)throw new Error('fixture failed');const value=structuredClone(s);if(window.statusDelay)await new Promise(r=>setTimeout(r,window.statusDelay));return value;}
     if(command==='kvm_start'){m.enabled=true;s.message='等待配对';}
     if(command==='kvm_stop'){m.enabled=false;s.backendRunning=false;s.message='流转已关闭';}
     if(command==='kvm_pairing_window'){m.enabled=true;m.local.pairing=true;}
@@ -50,7 +50,11 @@ async function main() {
   await page.locator('[data-kvm-side="top"]').click();await page.waitForFunction(()=>document.querySelector('#kvmPeerScreen').dataset.side==='top');
   assert.equal(await page.evaluate(()=>window.calls.some(c=>c.command==='kvm_layout'&&c.args.side==='top')),true);
   await page.evaluate(()=>{window.state.pointerSpeed=100;});await page.locator('[data-kvm="refresh"]').click();
+  await page.evaluate(()=>{window.statusDelay=150;});
+  await page.locator('[data-kvm="refresh"]').click();
+  assert.equal(await page.locator('[data-kvm-speed="150"]').isDisabled(),false);
   await page.locator('[data-kvm-speed="150"]').click();await page.waitForFunction(()=>window.state.pointerSpeed===150);
+  await page.evaluate(()=>{window.statusDelay=0;});
   await page.evaluate(()=>{window.state.inputConnected=true;});await page.locator('[data-kvm="refresh"]').click();
   assert.equal(await page.locator('#kvmStatusBadge').innerText(),'已连接');
   await page.evaluate(()=>{window.state.inputConnected=false;});await page.locator('[data-kvm="refresh"]').click();

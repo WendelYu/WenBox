@@ -3,11 +3,11 @@
     const view = document.getElementById('view-kvm');
     if (!view) return;
     const node = id => document.getElementById(id);
-    const text = (id, value) => { node(id).textContent = value; };
+    const text = (id, value) => { if (node(id).textContent !== String(value)) node(id).textContent = value; };
     const errorBox = node('kvmError');
     const invoke = window.__TAURI__?.invoke || window.__TAURI__?.tauri?.invoke || window.__TAURI_INVOKE__;
     const desktop = typeof invoke === 'function';
-    let snapshot = null, busy = false, timer = null, speedDirty = false, scrollDirty = false;
+    let snapshot = null, busy = false, polling = false, epoch = 0, timer = null, eventsKey = null, speedDirty = false, scrollDirty = false;
     const visible = () => !view.hidden && !document.hidden;
     function controls() {
         const m = snapshot?.managed, peer = m?.peer, pending = m?.pending;
@@ -22,7 +22,7 @@
                 || (a === 'reject' && !pending)
                 || (a === 'forget' && !peer)
                 || (a === 'layout' && (!peer || m?.local?.role !== 'source'))
-                || (a === 'scroll-speed' && (!m?.enabled || !peer || m.local.role !== 'target' || snapshot?.scrollSpeed == null))
+                || (a === 'scroll-speed' && (!m?.enabled || !peer || snapshot?.scrollSpeed == null))
                 || (a === 'speed' && (!m?.enabled || !peer || m.local.role !== 'source' || snapshot?.pointerSpeed == null))
                 || (a === 'diagnostics' && !snapshot);
             if (['settings', 'input-settings', 'reveal-app'].includes(a)) button.hidden = snapshot?.platform !== 'macOS';
@@ -36,7 +36,7 @@
         }
         for (const b of view.querySelectorAll('[data-kvm-speed]')) b.disabled = busy;
         node('kvmPointerSpeed').disabled = busy;
-        node('kvmScrollSpeed').disabled = busy;
+        node('kvmScrollSpeed').disabled = busy || snapshot?.scrollSpeed == null;
         view.setAttribute('aria-busy', String(busy));
     }
     function render(state) {
@@ -71,8 +71,8 @@
             text('kvmPairCode', `${code.slice(0, 4)} ${code.slice(4)}`);
             text('kvmPairExpiry', `${m.pending.localConfirmed ? '本机已确认，等待对端' : '等待本机确认'} · 约 ${m.pending.expiresIn} 秒后过期`);
         }
-        node('kvmScrollSettings').hidden = !m.enabled || !m.peer || m.local.role !== 'target' || state.scrollSpeed == null;
-        node('kvmScrollHint').hidden = !m.enabled || !m.peer || m.local.role !== 'source';
+        node('kvmScrollSettings').hidden = !m.enabled || !m.peer;
+        node('kvmScrollHint').hidden = !m.enabled || !m.peer || state.scrollSpeed != null;
         if (!scrollDirty && state.scrollSpeed != null) { node('kvmScrollSpeed').value = state.scrollSpeed; text('kvmScrollValue', (state.scrollSpeed/100).toFixed(2)+'×'); }
         node('kvmPointerSettings').hidden = !m.enabled || !m.peer || m.local.role !== 'source' || state.pointerSpeed == null;
         if (!speedDirty && state.pointerSpeed != null) { node('kvmPointerSpeed').value = state.pointerSpeed; text('kvmPointerValue', (state.pointerSpeed / 100).toFixed(2) + '×'); }
@@ -84,20 +84,25 @@
             node('kvmPeerScreen').dataset.side = m.side;
             if (document.activeElement !== node('kvmSide')) node('kvmSide').value = m.side;
         }
-        const list = node('kvmEvents'); list.replaceChildren();
+        const list = node('kvmEvents');
+        const nextEventsKey = JSON.stringify(state.events || []);
+        if (eventsKey !== nextEventsKey) { eventsKey = nextEventsKey; list.replaceChildren();
         for (const event of (state.events || []).slice().reverse()) {
             const item = document.createElement('li'); item.textContent = `${new Date(event.time * 1000).toLocaleTimeString()} · ${event.message}`; list.append(item);
+        }
         }
         node('kvmEventsSection').hidden = !m.enabled || !list.childElementCount;
         controls();
     }
     function schedule() { clearTimeout(timer); if (desktop && visible()) timer = setTimeout(() => refresh(false), snapshot?.managed?.pending ? 1800 : 3500); }
     async function refresh(clearError = true) {
-        if (busy || !visible()) return;
-        busy = true; controls(); if (clearError) errorBox.hidden = true;
-        try { render(await invoke('kvm_status', {})); }
-        catch (error) { snapshot = null; errorBox.textContent = String(error?.message || error); errorBox.hidden = false; }
-        finally { busy = false; controls(); schedule(); }
+        if (busy || polling || !visible()) return;
+        polling = true;
+        const requestEpoch = epoch;
+        if (clearError) errorBox.hidden = true;
+        try { const state = await invoke('kvm_status', {}); if (!busy && requestEpoch === epoch) render(state); }
+        catch (error) { if (!busy && requestEpoch === epoch) { snapshot = null; errorBox.textContent = String(error?.message || error); errorBox.hidden = false; controls(); } }
+        finally { polling = false; if (!busy) schedule(); }
     }
     function candidates(items) {
         const list = node('kvmCandidates'); list.replaceChildren();
@@ -119,7 +124,7 @@
     async function act(action) {
         if (!desktop || busy) return;
         clearTimeout(timer); if (action === 'refresh') return refresh();
-        busy = true; controls(); errorBox.hidden = true;
+        epoch++; busy = true; controls(); errorBox.hidden = true;
         try {
             if (action === 'diagnostics') {
                 const managed = snapshot?.managed;

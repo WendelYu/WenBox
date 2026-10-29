@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "WenBox",
-    "version": "1.4.6"
+    "version": "1.4.7"
   },
   "tauri": {
     "allowlist": {
@@ -58,12 +58,16 @@
       ],
       "windows": {
         "webviewInstallMode": {
-          "type": "offlineInstaller",
-          "silent": true
+          "type": "skip"
         },
         "nsis": {
           "installMode": "perMachine",
-          "template": "resources/kvm/installer.nsi"
+          "template": "resources/kvm/installer.nsi",
+          "languages": [
+            "SimpChinese",
+            "English"
+          ],
+          "displayLanguageSelector": true
         }
       },
       "macOS": {

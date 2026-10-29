@@ -1,14 +1,14 @@
 #Requires -Version 5.1
 # Run only on a disposable Windows build/test machine: installs, upgrades, then uninstalls WenBox.
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$Installer)
+param([Parameter(Mandatory=$true)][string]$Installer, [string]$InstallDirectory)
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
-$root=Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WenBox'
+$root=if($InstallDirectory){[IO.Path]::GetFullPath($InstallDirectory)}else{Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WenBox'}
 $state=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'WenBoxKvm'
 if (Get-Service -Name WenBoxKvm -ErrorAction SilentlyContinue) { throw 'This smoke test requires a clean disposable machine, not an existing WenBox installation.' }
 function Stop-TestApp { Get-Process -Name 'wenbox' -ErrorAction SilentlyContinue | Stop-Process -Force }
-function Run-Installer([string]$Path) { $p=Start-Process -FilePath $Path -ArgumentList '/S' -PassThru -Wait; if($p.ExitCode -ne 0){throw ('Installer exit '+$p.ExitCode)} }
+function Run-Installer([string]$Path) { $argsText=if($Path -eq $Installer){'/S /D='+$root}else{'/S'}; $p=Start-Process -FilePath $Path -ArgumentList $argsText -PassThru -Wait; if($p.ExitCode -ne 0){throw ('Installer exit '+$p.ExitCode)} }
 try {
  Run-Installer $Installer
  $service=Get-Service -Name WenBoxKvm

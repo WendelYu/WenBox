@@ -121,9 +121,13 @@ async function main() {
         await page.waitForFunction(() => !document.getElementById('createRoomModal').open);
         await page.locator('[data-view="view-kvm"]').click();
         await page.locator('#btnBrowseRooms').click();
-        assert.equal(await page.locator('#view-room').isVisible(), true);
+        assert.equal(await page.locator('#view-rooms').isVisible(), true);
         assert.equal(await page.evaluate(()=>document.body.dataset.discoveryOpen), 'true');
-        await page.locator('#btnBrowseRooms').click();
+        await page.locator('[data-view="view-kvm"]').click();
+        await page.locator('.nav-tabs [data-view="view-room"]').first().click();
+        assert.equal(await page.locator('#view-room').isVisible(),true);
+        assert.equal(await page.locator('#roomLobby').isVisible(),false);
+        assert.equal(await page.locator('#roomStatus').isVisible(),true);
         await page.locator('#btnChangeNicknameChat').click();
         await page.locator('#modalInputEditNickname').fill('现场 MacBook');
         assert.equal(await page.locator('#nicknamePreview').textContent(), '现场 MacBook');
@@ -260,7 +264,7 @@ async function main() {
                 await page.screenshot({ path: path.join(screenshots, `${tool}-${theme}-1100.png`) });
             }
         }
-        await page.locator('[data-view="view-room"]').click();
+        await page.locator('.nav-tabs [data-view="view-room"]').click();
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.locator('#webBtnClearChat').click();
         await page.waitForTimeout(2300);

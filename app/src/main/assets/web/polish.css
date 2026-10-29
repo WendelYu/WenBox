@@ -446,3 +446,24 @@ dialog.members-drawer { border-radius: 18px 0 0 18px; padding: 28px; width: min(
 .chat-img-thumb-wrapper[data-state="error"] { min-width: 220px; min-height: 100px; }
 .chat-img-thumb-wrapper[data-state="error"] .chat-img-thumb { opacity: 0; }
 .chat-img-thumb-wrapper[data-state="error"] .chat-img-overlay { opacity: 1; inset: 0; display: grid; place-items: center; padding: 14px; white-space: normal; text-align: center; color: var(--text-1); background: var(--surface-2); }
+
+/* The room context stays above every workspace. Discovery is a separate page. */
+.app-container, body[data-active-view="view-tools"] .app-container { grid-template-rows: auto 66px minmax(0, 1fr); }
+.room-status, body[data-active-view="view-tools"] .room-status { display: flex; grid-column: 1 / -1; grid-row: 1; margin: 0; padding: 10px 22px; border-width: 0 0 1px; border-radius: 0; box-shadow: none; min-height: 62px; }
+.app-rail { grid-row: 2 / 4; }
+.header { grid-row: 2; }
+#view-rooms { overflow-y: auto; }
+#view-rooms #roomLobby { display: block; max-width: 1100px; margin: 0 auto; }
+#view-room .room-workspace, #view-room .room-mobile-tabs { display: grid; }
+#view-room .room-mobile-tabs { display: none; }
+#view-room .room-workspace.only-in-room { flex: 1; }
+.quick-transfer-empty { max-width: 620px; margin: 36px auto; text-align: center; }
+.quick-transfer-empty p { margin: 14px 0 24px; color: var(--text-2); }
+@media(max-width:760px) {
+ .app-container, body[data-active-view="view-tools"] .app-container { grid-template-rows: auto 58px minmax(0, 1fr); }
+ .room-status, body[data-active-view="view-tools"] .room-status { grid-column: 1; padding: 8px 12px; gap: 8px; }
+ .room-status .connection-mark { display: none; }.room-status .connection-summary { min-width: 100px; }
+ .header { height: 58px; }.app-rail .nav-tabs { gap: 3px; padding-inline: 10px; }
+ #view-room .room-mobile-tabs { display: flex; }
+ #view-room .room-workspace { display: flex; }
+}

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
-    <meta name="wenbox-version" content="1.4.6">
+    <meta name="wenbox-version" content="1.4.7">
     <title>WenBox · 文件与消息直传</title>
     <script src="theme.js"></script>
     <link rel="icon" type="image/png" href="logo.png">
@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="kvm.css">
     <link rel="stylesheet" href="polish.css">
 </head>
-<body data-room-mode="client" data-room-page="chat" data-active-view="view-room"><svg hidden aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+<body data-room-mode="client" data-room-page="chat" data-active-view="view-rooms"><svg hidden aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
   <!--
     WenBox 图标 sprite（离线打包，不走 CDN，保证局域网离线场景可用）。
     图标取自 Lucide (ISC License, https://lucide.dev)，描边 1.75，24x24 视图框。
@@ -80,26 +80,6 @@
 </svg>
 
     <div class="app-container">
-        <aside class="app-rail" aria-label="WenBox工作区">
-            <div class="brand" title="WenBox">
-                <div class="logo-icon"><img src="logo.png" alt="WenBox" class="w-full h-full"></div>
-                <div class="brand-text"><h1>WenBox</h1></div>
-            </div>
-            <nav class="nav-tabs" aria-label="主导航">
-                <button type="button" class="nav-tab active" data-view="view-room" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="#i-message-square"></use></svg><span>快传</span></button>
-                <button type="button" class="nav-tab" data-view="view-kvm" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-link"></use></svg><span>流转</span></button>
-                <button type="button" class="nav-tab" data-view="view-tools" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-braces"></use></svg><span>工具</span></button>
-            </nav>
-            <div class="rail-footer"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-shield"></use></svg><span>离线可用</span></div>
-        </aside>
-        <header class="header">
-            <div class="workspace-heading"><h1 id="workspaceTitle">快传工作台</h1><p id="workspaceSubtitle">文件与消息，在设备间轻松流转</p></div>
-            <div class="device-status">
-                <span class="local-label" id="serviceHealth" role="status" aria-live="polite" data-state="checking"><span class="status-dot"></span><span id="clientVersion"></span><span id="serviceHealthText">正在检查服务…</span></span><button id="retryServiceHealth" class="btn btn--ghost btn--sm" type="button" hidden>重新检测</button><span id="phoneName" hidden></span>
-                <button id="btnThemeToggle" class="btn btn--ghost btn--icon" type="button" title="切换深色 / 浅色主题" aria-label="切换深色或浅色主题"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-sun"></use></svg></button>
-                <button id="btnChangeNicknameChat" class="btn btn--ghost btn--sm identity-button" type="button" aria-label="修改昵称"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-user"></use></svg><span id="chatMyNicknameDisplay">我的昵称</span></button>
-            </div>
-        </header>
         <section id="roomStatus" class="status-bar room-status" aria-label="房间状态">
             <div class="connection-mark"><svg class="icon icon--lg" aria-hidden="true"><use href="#i-monitor"></use></svg></div>
             <div class="connection-summary">
@@ -107,7 +87,7 @@
                 <div class="connection-meta"><span id="roomLock" class="only-in-room"></span><button id="chatOnlineMemberBadge" class="btn btn--ghost btn--sm only-in-room" type="button">查看成员</button><span id="roomConnectionNotice" role="status" hidden></span><span id="directConnectionStatus" role="status" hidden></span><span class="only-client">连接同一网络，或使用 USB 网卡加网线直连</span></div>
             </div>
             <div class="room-status-actions">
-                <button id="btnBrowseRooms" class="btn btn--secondary btn--sm only-in-room" type="button">附近房间</button>
+                <button id="btnBrowseRooms" class="btn btn--secondary btn--sm" type="button">附近房间</button>
                 <button id="btnOpenCreateRoomModal" class="btn btn--primary btn--sm only-client" type="button"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-plus"></use></svg>创建房间</button>
                 <button id="btnOpenManualJoinModal" class="btn btn--secondary btn--sm only-client" type="button">输入地址</button>
                 <details id="connectionDetails" class="connection-details only-in-room">
@@ -122,7 +102,28 @@
                 <button id="btnLeaveRoom" class="btn btn--ghost btn--sm only-joined room-exit" type="button"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-log-out"></use></svg>退出</button>
                 <button id="btnToggleFiles" class="btn btn--secondary btn--sm only-in-room" type="button" aria-expanded="false" aria-controls="filePanel"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-folder"></use></svg>文件</button>
             </div>
-        </section><main id="view-room" class="primary-view active" aria-label="快传"><div class="card lobby" id="roomLobby">
+        </section>
+        <aside class="app-rail" aria-label="WenBox工作区">
+            <div class="brand" title="WenBox">
+                <div class="logo-icon"><img src="logo.png" alt="WenBox" class="w-full h-full"></div>
+                <div class="brand-text"><h1>WenBox</h1></div>
+            </div>
+            <nav class="nav-tabs" aria-label="主导航"><button type="button" class="nav-tab active" data-view="view-rooms" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="#i-monitor"></use></svg><span>房间</span></button>
+                <button type="button" class="nav-tab" data-view="view-room" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-message-square"></use></svg><span>快传</span></button>
+                <button type="button" class="nav-tab" data-view="view-kvm" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-link"></use></svg><span>流转</span></button>
+                <button type="button" class="nav-tab" data-view="view-tools" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-braces"></use></svg><span>工具</span></button>
+            </nav>
+            <div class="rail-footer"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-shield"></use></svg><span>离线可用</span></div>
+        </aside>
+        <header class="header">
+            <div class="workspace-heading"><h1 id="workspaceTitle">房间</h1><p id="workspaceSubtitle">发现、加入和管理局域网房间</p></div>
+            <div class="device-status">
+                <span class="local-label" id="serviceHealth" role="status" aria-live="polite" data-state="checking"><span class="status-dot"></span><span id="clientVersion"></span><span id="serviceHealthText">正在检查服务…</span></span><button id="retryServiceHealth" class="btn btn--ghost btn--sm" type="button" hidden>重新检测</button><span id="phoneName" hidden></span>
+                <button id="btnThemeToggle" class="btn btn--ghost btn--icon" type="button" title="切换深色 / 浅色主题" aria-label="切换深色或浅色主题"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-sun"></use></svg></button>
+                <button id="btnChangeNicknameChat" class="btn btn--ghost btn--sm identity-button" type="button" aria-label="修改昵称"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-user"></use></svg><span id="chatMyNicknameDisplay">我的昵称</span></button>
+            </div>
+        </header>
+<main id="view-rooms" class="primary-view" aria-label="房间"><div class="card lobby" id="roomLobby">
                     <div class="section-title row row--between mb-2">
                         <span class="fs-md fw-semibold text-1"> 局域网可用房间 (<span id="discoveredRoomsCount">0</span>)</span>
                         <button id="btnRefreshDiscoveredRooms" class="btn btn--ghost btn--sm" type="button"> 刷新房间</button>
@@ -139,7 +140,7 @@
                             <button class="btn btn--primary btn--sm" data-action="openCreateRoomModal" type="button"> 创建房间</button>
                         </div>
                     </div>
-                </div><div class="segmented room-mobile-tabs only-in-room" aria-label="房间内容"><button type="button" data-room-page="chat" class="active" aria-pressed="true">聊天</button><button type="button" data-room-page="files" aria-pressed="false">文件</button></div><div class="room-workspace only-in-room"><section id="chatActiveContent" class="card chat-card">
+                </div></main><main id="view-room" class="primary-view" aria-label="快传" hidden><section class="card quick-transfer-empty only-client"><h2>快传会话</h2><p>加入或创建房间后，在这里发送消息、图片和文件。</p><button type="button" class="btn btn--primary" data-view="view-rooms">打开房间</button></section><div class="segmented room-mobile-tabs only-in-room" aria-label="房间内容"><button type="button" data-room-page="chat" class="active" aria-pressed="true">聊天</button><button type="button" data-room-page="files" aria-pressed="false">文件</button></div><div class="room-workspace only-in-room"><section id="chatActiveContent" class="card chat-card">
                 <div class="conversation-heading"><div><svg class="icon icon--sm" aria-hidden="true"><use href="#i-message-square"></use></svg><h2>会话</h2></div><span>消息 · 截图 · 文件</span></div>
 
 
@@ -300,12 +301,12 @@
             </section></aside></div></main><main id="view-kvm" class="primary-view kvm-view" aria-label="键鼠流转" hidden>
                 <section class="card kvm-hero">
                     <div class="section-header">
-                        <div class="section-title"><span class="kvm-eyebrow">你的双机工作台</span><h2>一套键鼠，自由切换</h2><span class="subtitle">用一套键鼠操作 Mac 和 Windows</span></div>
+                        <div class="section-title"><span class="kvm-eyebrow">INPUT SHARING</span><h2>连接与设备</h2><span class="subtitle">用一套键鼠操作 Mac 和 Windows</span></div>
                         <button type="button" class="btn btn--secondary btn--sm" data-kvm="refresh">重新检测</button>
                     </div>
-                    <div id="kvmStatusBadge" class="kvm-status-badge">未开启</div><p id="kvmMessage" role="status" aria-live="polite">打开此页后检测本机输入后端。</p>
-                    <p id="kvmError" class="kvm-error" role="alert" hidden></p>
-                    <div class="row row--wrap gap-2">
+                    <div class="kvm-connection-summary"><div id="kvmStatusBadge" class="kvm-status-badge">未开启</div><p id="kvmMessage" role="status" aria-live="polite">打开此页后检测本机输入后端。</p>
+                    </div><p id="kvmError" class="kvm-error" role="alert" hidden></p>
+                    <div class="row row--wrap gap-2 kvm-main-actions">
                         <button type="button" class="btn btn--primary" data-kvm="start" disabled>开启键鼠流转</button>
                         <button type="button" class="btn btn--secondary" data-kvm="stop" disabled>关闭流转</button>
                         <button type="button" class="btn btn--secondary" data-kvm="diagnostics" disabled>复制诊断</button>
@@ -325,7 +326,7 @@
                             <button type="button" class="btn btn--secondary" data-kvm="input-settings" disabled>打开输入监控</button><span id="kvmInputStatus" role="status">待检测</span>
                             <button type="button" class="btn btn--secondary" data-kvm="reveal-app" disabled>在访达中显示 WenBox</button>
                         </div>
-                        <p class="subtitle">列表中没有 WenBox？点击“＋”添加当前应用，或从访达拖入列表。授权后重新打开 WenBox；若更新后开关已开启却仍无权限，请移除旧条目并重新添加。</p>
+                        <p class="subtitle">列表中没有 WenBox？点击“＋”添加当前应用，或从访达拖入列表。授权后重新打开 WenBox。当前版本使用临时签名，更新后可能需要移除旧条目并重新添加；请始终运行“应用程序”中的 WenBox。</p>
                     </div>
                     </details><p id="kvmIntro" class="subtitle kvm-note">按需开启，只与你确认的电脑共享键鼠。房间内其他成员不会自动加入。</p>
                     <p id="kvmEscape" class="subtitle" hidden>随时按 <kbd>Control + Alt + Escape</kbd> 返回主控电脑。</p>
@@ -341,16 +342,16 @@
                 </section>
                 <section class="card" id="kvmLayoutCard" hidden>
                     <div class="section-header"><div class="section-title"><h2>你的屏幕布局</h2><span id="kvmPeerLabel" class="subtitle"></span></div><button type="button" class="btn btn--secondary btn--sm" data-kvm="forget" disabled>解除配对</button></div>
-                    <p class="subtitle">点击方向即可保存。把对端放到与你桌面一致的位置。</p><div class="kvm-layout" aria-label="两台电脑的相对位置"><button type="button" data-kvm-side="top" class="kvm-direction kvm-top" aria-label="将对端放在上方">↑ 上方</button><button type="button" data-kvm-side="left" class="kvm-direction kvm-left" aria-label="将对端放在左侧">← 左侧</button><button type="button" data-kvm-side="right" class="kvm-direction kvm-right" aria-label="将对端放在右侧">右侧 →</button><button type="button" data-kvm-side="bottom" class="kvm-direction kvm-bottom" aria-label="将对端放在下方">↓ 下方</button><div id="kvmOwnScreen" class="kvm-screen kvm-own">本机</div><div id="kvmPeerScreen" class="kvm-screen kvm-peer"></div></div>
-                    <div id="kvmPointerSettings" class="kvm-pointer" hidden>
+                    <div class="kvm-arrangement">                    <p class="subtitle">点击方向即可保存。把对端放到与你桌面一致的位置。</p><div class="kvm-layout" aria-label="两台电脑的相对位置"><button type="button" data-kvm-side="top" class="kvm-direction kvm-top" aria-label="将对端放在上方">↑ 上方</button><button type="button" data-kvm-side="left" class="kvm-direction kvm-left" aria-label="将对端放在左侧">← 左侧</button><button type="button" data-kvm-side="right" class="kvm-direction kvm-right" aria-label="将对端放在右侧">右侧 →</button><button type="button" data-kvm-side="bottom" class="kvm-direction kvm-bottom" aria-label="将对端放在下方">↓ 下方</button><div id="kvmOwnScreen" class="kvm-screen kvm-own">本机</div><div id="kvmPeerScreen" class="kvm-screen kvm-peer"></div></div>
+</div><aside class="kvm-controls-panel" aria-label="被控端速度设置">                    <div id="kvmPointerSettings" class="kvm-pointer" hidden>
                         <div><h3>被控端鼠标速度</h3><p class="subtitle">只影响跨屏后的移动速度，主控电脑手感不变。</p></div>
                         <div class="kvm-speed-presets"><button type="button" data-kvm-speed="75">慢 · 0.75×</button><button type="button" data-kvm-speed="100">标准 · 1.0×</button><button type="button" data-kvm-speed="150">快 · 1.5×</button></div>
                         <div class="kvm-form-row"><label for="kvmPointerSpeed">速度倍率</label><input id="kvmPointerSpeed" type="range" min="50" max="200" step="5" value="100"><output id="kvmPointerValue" for="kvmPointerSpeed">1.00×</output><button type="button" class="btn btn--secondary" data-kvm="speed">保存速度</button></div>
                         <p class="subtitle">保存会短暂重连；标准速度为 1.0×。</p>
                     </div>
-                    <div id="kvmScrollSettings" class="kvm-pointer" hidden><h3>被控端滚轮速度</h3><p class="subtitle">只改变接收到的滚动速度，不修改系统鼠标设置。</p><div class="kvm-form-row"><label for="kvmScrollSpeed">滚动倍率</label><input id="kvmScrollSpeed" type="range" min="50" max="200" step="5" value="100"><output id="kvmScrollValue" for="kvmScrollSpeed">1.00×</output><button type="button" class="btn btn--secondary" data-kvm="scroll-speed">保存滚轮速度</button></div><p class="subtitle">保存会短暂重连，默认倍率为 1.0×。</p></div>
-                    <p id="kvmScrollHint" class="subtitle" hidden>滚轮速度可在被控电脑的流转页独立调整。</p>
-                    <details class="kvm-layout-advanced"><summary>精确设置与连接说明</summary><div class="kvm-form-row"><label for="kvmSide">对端位于本机</label><select id="kvmSide"><option value="left">左侧</option><option value="right">右侧</option><option value="top">上方</option><option value="bottom">下方</option></select><button type="button" class="btn btn--primary btn--sm" data-kvm="layout" disabled>应用方位</button></div><p class="subtitle">在主控端修改后同步到对端，应用时会短暂重连。关闭流转会立即停止输入共享，但保留配对。</p></details>
+                    <div id="kvmScrollSettings" class="kvm-pointer" hidden><h3>被控端滚轮速度</h3><p class="subtitle">调整被控电脑的滚动倍率，与指针速度分开保存。</p><div class="kvm-form-row"><label for="kvmScrollSpeed">滚动倍率</label><input id="kvmScrollSpeed" type="range" min="50" max="200" step="5" value="100"><output id="kvmScrollValue" for="kvmScrollSpeed">1.00×</output><button type="button" class="btn btn--secondary" data-kvm="scroll-speed">保存滚轮速度</button></div><p class="subtitle">保存会短暂重连，默认倍率为 1.0×。</p></div>
+                    <p id="kvmScrollHint" class="subtitle" hidden>正在读取被控端设置；若一直未出现，请将两端更新到同一版本。</p>
+</aside>                    <details class="kvm-layout-advanced"><summary>精确设置与连接说明</summary><div class="kvm-form-row"><label for="kvmSide">对端位于本机</label><select id="kvmSide"><option value="left">左侧</option><option value="right">右侧</option><option value="top">上方</option><option value="bottom">下方</option></select><button type="button" class="btn btn--primary btn--sm" data-kvm="layout" disabled>应用方位</button></div><p class="subtitle">在主控端修改后同步到对端，应用时会短暂重连。关闭流转会立即停止输入共享，但保留配对。</p></details>
                 </section>
                 <details class="card kvm-events" id="kvmEventsSection" hidden><summary>最近的控制操作</summary>
                     <div class="section-title"><h2>最近的控制操作</h2><span class="subtitle">仅记录启动与停止等状态，不记录键入内容</span></div>

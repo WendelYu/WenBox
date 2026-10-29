@@ -61,6 +61,10 @@ enum Request {
     },
     Status,
     InputStatus,
+    ScrollSettings,
+    ScrollSpeed {
+        percent: u16,
+    },
     Layout {
         side: Side,
     },
@@ -69,6 +73,8 @@ enum Request {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Reply {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scroll_speed: Option<u16>,
     ok: bool,
     info: Info,
     accepted: bool,
@@ -114,6 +120,7 @@ pub struct Managed {
     state: Mutex<State>,
     engine: Mutex<Engine>,
     remote_input: Mutex<Option<(Instant, bool)>>,
+    remote_scroll: Mutex<Option<(Instant, u16)>>,
     file: PathBuf,
     candidates: Arc<dyn Fn() -> Vec<Ipv4Addr> + Send + Sync>,
     active: AtomicUsize,
@@ -179,6 +186,7 @@ impl Managed {
             }),
             engine: Mutex::new(Engine::new(root.join("engine"), resources)),
             remote_input: Mutex::new(None),
+            remote_scroll: Mutex::new(None),
             file,
             candidates,
             active: AtomicUsize::new(0),
@@ -239,15 +247,47 @@ impl Managed {
     pub fn engine_diagnostics(&self) -> String {
         lock(&self.engine).diagnostics()
     }
-    pub fn scroll_speed(&self) -> u16 {
-        lock(&self.engine).scroll_speed()
+    pub fn scroll_speed(&self) -> Option<u16> {
+        let target = lock(&self.state).saved.role == Role::Target;
+        if target {
+            Some(lock(&self.engine).scroll_speed())
+        } else {
+            lock(&self.remote_scroll)
+                .filter(|(at, _)| at.elapsed() < Duration::from_secs(15))
+                .map(|(_, speed)| speed)
+        }
     }
     pub fn set_scroll_speed(&self, percent: u16) -> Result<(), String> {
-        if lock(&self.state).saved.role != Role::Target {
-            return Err("请在被控电脑调整滚轮速度".into());
+        if !(50..=200).contains(&percent) {
+            return Err("滚轮倍率范围为 0.5× 至 2.0×".into());
         }
-        lock(&self.engine).set_scroll_speed(percent)?;
-        self.reconfigure()
+        let s = lock(&self.state);
+        let target = s.saved.role == Role::Target;
+        if target {
+            drop(s);
+            lock(&self.engine).set_scroll_speed(percent)?;
+            return self.reconfigure();
+        }
+        if !s.saved.enabled {
+            return Err("请先开启流转".into());
+        }
+        let peer = s.saved.peer.clone().ok_or("请先配对被控电脑")?;
+        let id = s.saved.identity.clone();
+        drop(s);
+        let mut ch = Channel::connect(
+            &id,
+            SocketAddr::from((peer.ip, CONTROL_PORT)),
+            Some(&peer.fingerprint),
+        )?;
+        ch.send(&Request::ScrollSpeed { percent })?;
+        let reply = ch
+            .receive::<Reply>()
+            .map_err(|_| "被控端未响应滚轮设置，请确认两端均已更新".to_string())?;
+        if !reply.ok || reply.info.id != peer.id {
+            return Err(reply.error.unwrap_or("被控端拒绝设置".into()));
+        }
+        *lock(&self.remote_scroll) = Some((Instant::now(), percent));
+        Ok(())
     }
     pub fn pointer_speed(&self) -> Option<u16> {
         lock(&self.engine).pointer_speed()
@@ -580,6 +620,7 @@ impl Managed {
         engine.apply(&profile)
     }
     fn handle(&self, ch: &mut Channel, req: Request) -> Reply {
+        let scroll_query = matches!(&req, Request::ScrollSettings | Request::ScrollSpeed { .. });
         let result = (|| -> Result<bool, String> {
             let pending_known = {
                 let s = lock(&self.state);
@@ -661,6 +702,22 @@ impl Managed {
                 }
                 // The accepted bit is the boolean result of this authenticated query.
                 // Older peers reject this optional request; ordinary pairing remains unchanged.
+                Request::ScrollSettings if trusted => {
+                    let s = lock(&self.state);
+                    if !s.saved.enabled || s.saved.role != Role::Target {
+                        return Err("对端尚未开启被控功能".into());
+                    }
+                    Ok(true)
+                }
+                Request::ScrollSpeed { percent } if trusted => {
+                    let s = lock(&self.state);
+                    if !s.saved.enabled || s.saved.role != Role::Target {
+                        return Err("仅能调整已开启流转的被控电脑".into());
+                    }
+                    drop(s);
+                    self.set_scroll_speed(percent)?;
+                    Ok(true)
+                }
                 Request::InputStatus if trusted => {
                     let s = lock(&self.state);
                     if !s.saved.enabled || s.saved.role != Role::Source {
@@ -725,12 +782,18 @@ impl Managed {
         let info = self.info();
         match result {
             Ok(accepted) => Reply {
+                scroll_speed: if scroll_query {
+                    Some(lock(&self.engine).scroll_speed())
+                } else {
+                    None
+                },
                 ok: true,
                 info,
                 accepted,
                 error: None,
             },
             Err(error) => Reply {
+                scroll_speed: None,
                 ok: false,
                 info,
                 accepted: false,
@@ -823,6 +886,26 @@ impl Managed {
                                     })();
                                     *lock(&self.remote_input) =
                                         input.ok().map(|v| (Instant::now(), v));
+                                }
+                                if !target {
+                                    let speed = (|| -> Result<u16, String> {
+                                        let mut probe = Channel::connect(
+                                            &id,
+                                            SocketAddr::from((ip, CONTROL_PORT)),
+                                            Some(&peer.fingerprint),
+                                        )?;
+                                        probe.send(&Request::ScrollSettings)?;
+                                        let reply = probe.receive::<Reply>()?;
+                                        if !reply.ok || reply.info.id != peer.id {
+                                            return Err("滚轮设置不可用".into());
+                                        }
+                                        reply
+                                            .scroll_speed
+                                            .filter(|v| (50..=200).contains(v))
+                                            .ok_or("滚轮设置格式无效".into())
+                                    })();
+                                    *lock(&self.remote_scroll) =
+                                        speed.ok().map(|v| (Instant::now(), v));
                                 }
                                 match self.apply() {
                                     Ok(()) => lock(&self.state).error = None,
@@ -980,6 +1063,7 @@ mod tests {
         saved.role = role;
         Arc::new(Managed {
             remote_input: Mutex::new(None),
+            remote_scroll: Mutex::new(None),
             state: Mutex::new(State {
                 saved,
                 pending: None,
@@ -1012,6 +1096,52 @@ mod tests {
         let server = t.join().unwrap();
         Ok((client?, server?))
     }
+    #[test]
+    fn remote_scroll_requires_the_pinned_source_and_enforces_bounds() {
+        let da = tempfile::tempdir().unwrap();
+        let db = tempfile::tempdir().unwrap();
+        let a = fixture(da.path(), Role::Source);
+        let b = fixture(db.path(), Role::Target);
+        let (_, mut server) = channels(&a, &b, None).unwrap();
+        assert!(
+            !b.handle(&mut server, Request::ScrollSpeed { percent: 150 })
+                .ok
+        );
+        assert_eq!(lock(&b.engine).scroll_speed(), 100);
+        let id = lock(&a.state).saved.identity.clone();
+        lock(&b.state).saved.peer = Some(Peer {
+            id: id.id,
+            name: "source".into(),
+            platform: "macOS".into(),
+            fingerprint: server.fingerprint.clone(),
+            ip: "192.168.1.1".parse().unwrap(),
+            local_ip: "192.168.1.2".parse().unwrap(),
+        });
+        let settings = b.handle(&mut server, Request::ScrollSettings);
+        assert!(settings.ok);
+        assert_eq!(settings.scroll_speed, Some(100));
+        for percent in [0, 49, 201, u16::MAX] {
+            assert!(!b.handle(&mut server, Request::ScrollSpeed { percent }).ok);
+        }
+        assert_eq!(lock(&b.engine).scroll_speed(), 100);
+        // The fixture has no OS input core. Suppress core application while testing RPC persistence.
+        b.stopping.store(true, Ordering::SeqCst);
+        let result = b.handle(&mut server, Request::ScrollSpeed { percent: 150 });
+        assert!(result.ok);
+        assert_eq!(result.scroll_speed, Some(150));
+        lock(&b.state).saved.enabled = false;
+        assert!(
+            !b.handle(&mut server, Request::ScrollSpeed { percent: 75 })
+                .ok
+        );
+        assert_eq!(lock(&b.engine).scroll_speed(), 150);
+        let ordinary = b.handle(&mut server, Request::Status);
+        assert!(serde_json::to_value(ordinary)
+            .unwrap()
+            .get("scrollSpeed")
+            .is_none());
+    }
+
     #[test]
     fn pairing_offer_roundtrips_with_nonblocking_accepted_socket() {
         let da = tempfile::tempdir().unwrap();
