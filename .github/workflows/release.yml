@@ -90,20 +90,22 @@ jobs:
           node scripts/check-native-transport.cjs
 
       - name: Build Tauri Windows EXE
-        run: npx @tauri-apps/cli@1.5 build
+        run: npx --yes @tauri-apps/cli@1.5 build --bundles nsis
+
+      - name: Verify input resources and installation
+        shell: powershell
+        run: |
+          node scripts/prepare-kvm-backend.cjs --verify-only
+          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          if (-not $installer) { throw "Unified Windows installer missing" }
+          & ./scripts/check-kvm-installation.ps1 -Installer $installer.FullName
 
       - name: Prepare Windows Files for Release
         shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
           mkdir -p release-win
-          cp src-tauri/target/release/wenbox.exe "release-win/WenBox-Windows-v${VERSION}-x64.exe"
-          if ls src-tauri/target/release/bundle/nsis/*.exe 1> /dev/null 2>&1; then
-            cp src-tauri/target/release/bundle/nsis/*.exe "release-win/WenBox-Windows-v${VERSION}-Installer.exe"
-          fi
-          if ls src-tauri/target/release/bundle/msi/*.msi 1> /dev/null 2>&1; then
-            cp src-tauri/target/release/bundle/msi/*.msi "release-win/WenBox-Windows-v${VERSION}-Installer.msi"
-          fi
+          cp src-tauri/target/release/bundle/nsis/*.exe "release-win/WenBox-Windows-v${VERSION}-Installer.exe"
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4

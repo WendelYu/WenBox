@@ -30,7 +30,12 @@ jobs:
           npm test
           cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Build Intel and Apple Silicon application
-        run: npx --yes @tauri-apps/cli@1.5 build --target universal-apple-darwin --bundles app,dmg
+        run: npx --yes @tauri-apps/cli@1.5 build --target universal-apple-darwin --bundles app
+      - name: Sign application and verify packaged input resources
+        run: |
+          node scripts/prepare-kvm-backend.cjs --verify-only
+          codesign --force --deep --sign - src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app
+          codesign --verify --deep --strict src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app
       - name: Check local network permission description
         run: |
           /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/Info.plist
@@ -40,7 +45,10 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           mkdir -p release-macos
           ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app release-macos/WenBox-macOS-v${VERSION}-universal.zip
-          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg release-macos/WenBox-macOS-v${VERSION}-universal.dmg
+          mkdir -p release-dmg
+          ditto src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app release-dmg/WenBox.app
+          ln -s /Applications release-dmg/Applications
+          hdiutil create -volname WenBox -srcfolder release-dmg -ov -format UDZO release-macos/WenBox-macOS-v${VERSION}-universal.dmg
           lipo src-tauri/target/universal-apple-darwin/release/bundle/macos/WenBox.app/Contents/MacOS/WenBox -verify_arch arm64 x86_64
           cd release-macos
           shasum -a 256 WenBox-macOS-v${VERSION}-universal.dmg WenBox-macOS-v${VERSION}-universal.zip > SHA256SUMS-macOS-v${VERSION}.txt
