@@ -197,3 +197,5 @@ body[data-discovery-open="true"] .room-mobile-tabs { display: none; }
 .wenbox-context-menu button { display: block; width: 100%; text-align: left; padding: 9px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--text-1); font: inherit; cursor: pointer; }
 .wenbox-context-menu button:hover, .wenbox-context-menu button:focus-visible { background: var(--surface-2); outline: none; }
 .wenbox-context-menu button:disabled { opacity: .4; cursor: default; }
+
+.file-drag-target { outline: 2px solid var(--color-primary, #318a81); outline-offset: -3px; }

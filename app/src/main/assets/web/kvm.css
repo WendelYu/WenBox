@@ -50,3 +50,11 @@
 @media(max-width:600px) { .kvm-hero { grid-template-columns: 1fr; gap: 14px; }.kvm-hero > *, .kvm-hero > #kvmDetails[open] { grid-column: 1; }.kvm-main-actions { justify-content: start; }.kvm-hero > #kvmEscape { text-align: left; margin-top: 0; } }
 
 #kvmDetails[data-permission-missing=true] > summary { color: var(--danger-fg); font-weight: 600; }
+
+.kvm-keymap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin: 18px 0; }
+.kvm-keymap-grid label { display: grid; gap: 8px; }
+.kvm-keyboard h2 { margin-top: 0; }
+
+.kvm-keyboard .subtitle { color: var(--text-2); font-size: 13px; line-height: 1.6; margin: 10px 0; }
+.kvm-keymap-grid select { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; color: var(--text); background: var(--bg); font: inherit; }
+.kvm-keymap-grid label { font-size: 13px; }

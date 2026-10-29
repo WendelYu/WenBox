@@ -200,7 +200,12 @@
                         </div>
                     </div>
 
-                </div></section><aside id="filePanel" class="card file-panel" aria-label="房间文件"><div class="file-panel-heading"><div><h2>房间文件</h2><span>分享与接收，都在这里</span></div><button id="btnCloseFiles" type="button" class="btn btn--ghost btn--sm">收起</button></div><div class="segmented" aria-label="文件分类"><button type="button" data-file-page="panel-remote" class="only-joined active" aria-pressed="true">对方分享</button><button type="button" data-file-page="panel-shared" class="only-host active" aria-pressed="true">我分享的</button><button type="button" data-file-page="panel-received" class="only-host" aria-pressed="false">已接收</button></div><section class="file-panel-page only-joined" id="panel-remote">
+                </div></section><aside id="filePanel" class="card file-panel" aria-label="房间文件"><div class="file-panel-heading"><div><h2>房间文件</h2><span>先分享信息，点击下载才传输</span></div><button id="btnCloseFiles" type="button" class="btn btn--ghost btn--sm">收起</button></div>                            <button id="btnSelectShareFile" class="btn btn--primary" type="button">
+                                <svg viewbox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 5v14m-7-7h14"></path>
+                                </svg>
+                                添加文件
+                            </button><div class="segmented" aria-label="文件分类"><button type="button" data-file-page="panel-remote" class="only-joined active" aria-pressed="true">房间文件</button><button type="button" data-file-page="panel-shared" class="only-host active" aria-pressed="true">房间文件</button><button type="button" data-file-page="panel-received" class="only-host" aria-pressed="false">已接收</button></div><section class="file-panel-page only-joined" id="panel-remote">
                     <div class="section-header">
                         <div class="section-title">
                             <h2 id="currentViewingDeviceTitle"> 对方分享的文件</h2>
@@ -227,15 +232,10 @@
                     <div class="section-header">
                         <div class="section-title">
                             <h2 class="visually-hidden">本机分享文件</h2>
-                            <span class="subtitle">供手机或其他设备从本电脑下载的文件列表</span>
+                            <span class="subtitle">房间成员分享的文件；发送方需保持在线</span>
                         </div>
                         <div class="actions row gap-2">
-                            <button id="btnSelectShareFile" class="btn btn--primary" type="button">
-                                <svg viewbox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M12 5v14m-7-7h14"></path>
-                                </svg>
-                                添加文件
-                            </button>
+
                             <button id="btnClearShareFiles" class="btn btn--ghost btn--sm" title="清空分享" type="button" hidden>清空</button>
                             <button id="btnRefreshLocalFiles" class="btn btn--secondary btn--sm" title="刷新列表" type="button"> 刷新</button>
                         </div>
@@ -292,7 +292,7 @@
                             </svg>
                         </div>
                         <p class="drop-text">拖入文件，或 <span class="browse-link">点击选择</span></p>
-                        <p class="drop-hint" id="dropZoneHint">原文件直传，保留原始画质与格式</p>
+                        <p class="drop-hint" id="dropZoneHint">拖入此处加入房间文件，不发送聊天消息</p>
                     </div>
                 </div>
 
@@ -352,6 +352,12 @@
                     <div id="kvmScrollSettings" class="kvm-pointer" hidden><h3>被控端滚轮速度</h3><p class="subtitle">调整被控电脑的滚动倍率，与指针速度分开保存。</p><div class="kvm-form-row"><label for="kvmScrollSpeed">滚动倍率</label><input id="kvmScrollSpeed" type="range" min="50" max="200" step="5" value="100"><output id="kvmScrollValue" for="kvmScrollSpeed">1.00×</output><button type="button" class="btn btn--secondary" data-kvm="scroll-speed">保存滚轮速度</button></div><p class="subtitle">保存会短暂重连，默认倍率为 1.0×。</p></div>
                     <p id="kvmScrollHint" class="subtitle" hidden>正在读取被控端设置；若一直未出现，请将两端更新到同一版本。</p>
 </aside>                    <details class="kvm-layout-advanced"><summary>精确设置与连接说明</summary><div class="kvm-form-row"><label for="kvmSide">对端位于本机</label><select id="kvmSide"><option value="left">左侧</option><option value="right">右侧</option><option value="top">上方</option><option value="bottom">下方</option></select><button type="button" class="btn btn--primary btn--sm" data-kvm="layout" disabled>应用方位</button></div><p class="subtitle">在主控端修改后同步到对端，应用时会短暂重连。关闭流转会立即停止输入共享，但保留配对。</p></details>
+                </section>
+                <section class="card kvm-keyboard" id="kvmKeyboardSettings" hidden>
+                    <div class="section-title"><h2>跨屏按键映射</h2><span class="subtitle">仅影响被控端，本机快捷键保持原样。</span></div>
+                    <div class="kvm-form-row"><label for="kvmKeyboardPreset">映射方式</label><select id="kvmKeyboardPreset"><option value="shortcuts">常用快捷键</option><option value="original">原始映射</option><option value="custom">自定义</option></select></div>
+                    <div class="kvm-keymap-grid" id="kvmKeymapFields"><label>Command / Win → <select data-keymap="super_key" aria-label="Command / Win 映射到"><option value="ctrl">Ctrl</option><option value="super">Win / Command</option><option value="alt">Alt / Option</option><option value="shift">Shift</option></select></label><label>Control → <select data-keymap="ctrl" aria-label="Control 映射到"><option value="ctrl">Ctrl</option><option value="super">Win / Command</option><option value="alt">Alt / Option</option><option value="shift">Shift</option></select></label><label>Option / Alt → <select data-keymap="alt" aria-label="Option / Alt 映射到"><option value="ctrl">Ctrl</option><option value="super">Win / Command</option><option value="alt">Alt / Option</option><option value="shift">Shift</option></select></label><label>Shift → <select data-keymap="shift" aria-label="Shift 映射到"><option value="ctrl">Ctrl</option><option value="super">Win / Command</option><option value="alt">Alt / Option</option><option value="shift">Shift</option></select></label></div><p class="subtitle" id="kvmKeymapHint">常用快捷键会交换 Command/Win 与 Control。Mac 的 Command+C/V/A/Z 对应 Windows 的 Ctrl+C/V/A/Z。</p>
+                    <button type="button" class="btn btn--secondary" data-kvm="keymap">保存映射</button><p class="subtitle">保存后会短暂重连。返回主控仍使用本机 Control + Alt + Escape。</p>
                 </section>
                 <details class="card kvm-events" id="kvmEventsSection" hidden><summary>最近的控制操作</summary>
                     <div class="section-title"><h2>最近的控制操作</h2><span class="subtitle">仅记录启动与停止等状态，不记录键入内容</span></div>
@@ -732,7 +738,7 @@
                 </div>
     <script src="runtime.js"></script>
     <script src="upload-queue.js"></script><script src="ui-state.js"></script>
-    <script src="app.js"></script>
+    <script src="demand-files.js"></script><script src="app.js"></script>
     <script src="service-health.js"></script>
     <script src="kvm.js"></script>
 </body>

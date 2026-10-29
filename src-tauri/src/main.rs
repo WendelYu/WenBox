@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod kvm;
+mod demand_files;
 mod network;
 mod native_transport;
 mod clipboard_files;
@@ -164,6 +165,7 @@ pub struct DiscoveredRoom {
 
 struct AppState {
     files: Mutex<HashMap<String, SharedFile>>,
+    demand_files: Arc<demand_files::DemandFiles>,
     received_files: Mutex<Vec<SharedFile>>,
     messages: Mutex<Vec<ChatMessage>>,
     devices: Mutex<HashMap<String, LanDevice>>,
@@ -496,6 +498,7 @@ fn create_room_cmd(
     // room_id 必须是唯一标识：设备名可能重复，两台 Mac 会互相不可见 (S6)
     let room_id = uuid::Uuid::new_v4().to_string();
 
+    state.demand_files.clear();
     let cfg = RoomConfig {
         is_active: true,
         room_id,
@@ -553,6 +556,7 @@ fn close_room_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
     state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
 
     // 与 HTTP 关房接口共用同一个逐网卡广播实现
+    state.demand_files.clear();
     broadcast_room_closed(old_room_id);
     session_store::save(&state)?;
 
@@ -584,6 +588,7 @@ fn can_auto_connect(state: &AppState) -> bool {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     room.is_active && room.auto_connect && !room.need_password
         && state.files.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+        && state.demand_files.is_empty()
         && state.messages.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
         && !state.members.lock().unwrap_or_else(|e| e.into_inner()).iter()
             .any(|(key, member)| key != "host" && now.saturating_sub(member.last_seen) < 15)
@@ -1690,7 +1695,7 @@ fn serve_http_requests(server: Arc<Server>, state: Arc<AppState>, port: u16) {
     let mut workers = Vec::new();
     let mut queues = Vec::new();
     // Control requests have dedicated workers so slow transfers cannot block heartbeats.
-    for _ in 0..2 {
+    for _ in 0..3 {
         let (sender, receiver) = sync_channel::<tiny_http::Request>(32);
         queues.push(sender);
         let receiver = Arc::new(Mutex::new(receiver));
@@ -1709,9 +1714,8 @@ fn serve_http_requests(server: Arc<Server>, state: Arc<AppState>, port: u16) {
         }
     }
     for request in server.incoming_requests() {
-        let transfer = request.method() != &Method::Options &&
-            (request.url().split('?').next() == Some("/api/upload") || request.url().starts_with("/api/download/"));
-        if let Err(TrySendError::Full(request) | TrySendError::Disconnected(request)) = queues[usize::from(transfer)].try_send(request) {
+        let transfer = if request.method() == &Method::Options { 0 } else if request.url().starts_with("/api/download/") { 1 } else if request.url().split('?').next()==Some("/api/upload") || request.url().starts_with("/api/offers/transfer/") { 2 } else { 0 };
+        if let Err(TrySendError::Full(request) | TrySendError::Disconnected(request)) = queues[transfer].try_send(request) {
             // 队列已满：回显已校验的 Origin，并提示前端退避重试
             let (allow, vary) = cors_headers_for(&request);
             let mut response = Response::from_string("{\"success\":false,\"message\":\"请求较多，请稍后重试\"}").with_status_code(503);
@@ -1733,7 +1737,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
     // CORS: 只回显已通过校验的 Origin，不再使用 `*` (S1)
     let (cors_origin, cors_vary) = cors_headers_for(&req);
     let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS, PUT, DELETE"[..]).unwrap();
-    let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization, X-Room-Token, X-Host-Token"[..]).unwrap();
+    let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization, X-Room-Token, X-Host-Token, X-Share-Key, X-Share-File"[..]).unwrap();
 
     // 统一拦截：Origin 不属于本机/局域网的浏览器请求，以及 Host 指向外部域名的
     // 请求 (DNS rebinding)，全部 403。非浏览器客户端 (Android 原生、Rust 客户端、
@@ -1875,6 +1879,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 };
                 // 房间 ID 使用 UUID：设备名可能重复 (S6)，room_id 只作为唯一标识，
                 // room_name 承担展示职责。
+                state.demand_files.clear();
                 let room_id = uuid::Uuid::new_v4().to_string();
                 let host_token = uuid::Uuid::new_v4().to_string();
                 let host_member_id = uuid::Uuid::new_v4().to_string();
@@ -1982,7 +1987,8 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
 
                 // 逐网卡广播关房通知 (原来只从 0.0.0.0 发一次)
-                broadcast_room_closed(old_room_id);
+                state.demand_files.clear();
+    broadcast_room_closed(old_room_id);
                 session_store::remember(&state);
 
                 let mut resp = Response::from_string("{\"success\":true}");
@@ -2428,6 +2434,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
             // 鉴权拦截检查 (当房间处于活跃且设置密码保护时，未授权的客户端拒绝访问敏感文件与消息接口)
             let is_protected = url.starts_with("/api/files")
                 || url.starts_with("/api/download/")
+                || url.starts_with("/api/offers")
                 || url == "/api/upload"
                 || url == "/api/received_files"
                 || url.starts_with("/api/messages");
@@ -2440,10 +2447,18 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 return;
             }
 
+            if url.starts_with("/api/offers") || url.starts_with("/api/download/offer-") {
+                let room_id = state.room.lock().unwrap_or_else(|e|e.into_inner()).room_id.clone();
+                let cors = [cors_origin.clone(),cors_vary.clone()].into_iter().flatten().collect();
+                demand_files::route(req,state.demand_files.clone(),room_id,&url,cors);return;
+            }
+
             // 3. 待发文件列表 (对外清空绝对路径，避免泄露本机用户名与目录结构)
             if url.starts_with("/api/files") && method == Method::Get {
                 let files_map = state.files.lock().unwrap_or_else(|e| e.into_inner());
-                let list: Vec<SharedFile> = files_map.values().map(public_file_view).collect();
+                let mut list: Vec<serde_json::Value> = files_map.values().map(|f|serde_json::to_value(public_file_view(f)).unwrap()).collect();
+                let room_id=state.room.lock().unwrap_or_else(|e|e.into_inner()).room_id.clone();
+                list.extend(state.demand_files.list(&room_id));
                 let json = serde_json::json!({ "files": list }).to_string();
                 let mut resp = Response::from_string(json);
                 resp = with_cors!(resp);
@@ -2513,7 +2528,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
 
             // 4.5 电脑接收文件上传 (手机或其他设备向这台电脑发送文件)
             if url == "/api/upload" && method == Method::Post {
-                let download_dir = get_download_dir();
+                let download_dir = dirs_next::cache_dir().unwrap_or_else(std::env::temp_dir).join("WenBox").join("legacy-uploads");
                 if !download_dir.exists() {
                     let _ = std::fs::create_dir_all(&download_dir);
                 }
@@ -2884,6 +2899,7 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                     let closed_id = {
                         let mut room = state_bcast.room.lock().unwrap_or_else(|e| e.into_inner());
                         let id = room.room_id.clone();
+                        state.demand_files.clear();
                         *room = RoomConfig::default();
                         id
                     };
@@ -3062,7 +3078,7 @@ fn main() {
     #[cfg(windows)]
     if !windows_runtime::ensure_available() { return; }
     let state = Arc::new(AppState {
-        files: Mutex::new(HashMap::new()),
+        files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
         received_files: Mutex::new(Vec::new()),
         messages: Mutex::new(Vec::new()),
         devices: Mutex::new(HashMap::new()),
@@ -3108,6 +3124,7 @@ fn main() {
             kvm::kvm_open_settings,
             kvm::kvm_pointer_speed,
             kvm::kvm_scroll_speed,
+            kvm::kvm_keyboard_map,
             kvm::kvm_pairing_window,
             kvm::kvm_discover,
             kvm::kvm_pair,
@@ -3390,7 +3407,7 @@ mod tests {
 
     pub(super) fn protected_state() -> Arc<AppState> {
         let state = Arc::new(AppState {
-            files: Mutex::new(HashMap::new()),
+            files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
             received_files: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()),
             devices: Mutex::new(HashMap::new()),
@@ -3622,7 +3639,7 @@ mod tests {
         let path = dir.join("large.bin");
         File::create(&path).unwrap().set_len(16 * 1024 * 1024).unwrap();
         let state = Arc::new(AppState {
-            files: Mutex::new(HashMap::new()), received_files: Mutex::new(Vec::new()),
+            files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()), received_files: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()), devices: Mutex::new(HashMap::new()),
             room: Mutex::new(RoomConfig::default()), members: Mutex::new(HashMap::new()),
             discovered_rooms: Mutex::new(HashMap::new()), auth_tokens: Mutex::new(HashSet::new()),
@@ -3741,7 +3758,7 @@ mod tests {
         // 端到端复现用户报告的场景: 浏览器在已开房的服务端上再建新房间应被 409 拒绝,
         // 否则会覆盖设备原生端的房间, 原房主解散时误伤新房间
         let state = Arc::new(AppState {
-            files: Mutex::new(HashMap::new()),
+            files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
             received_files: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()),
             devices: Mutex::new(HashMap::new()),
@@ -3807,7 +3824,7 @@ mod tests {
         std::fs::write(&file_path, content).unwrap();
 
         let state = Arc::new(AppState {
-            files: Mutex::new(HashMap::new()),
+            files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
             received_files: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()),
             devices: Mutex::new(HashMap::new()),

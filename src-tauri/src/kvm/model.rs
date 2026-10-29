@@ -116,10 +116,55 @@ pub fn normal_speed() -> u16 {
 fn is_normal_speed(v: &u16) -> bool {
     *v == 100
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct KeyboardMap {
+    pub ctrl: String,
+    pub super_key: String,
+    pub alt: String,
+    pub shift: String,
+}
+impl Default for KeyboardMap {
+    fn default() -> Self {
+        Self {
+            ctrl: "ctrl".into(),
+            super_key: "super".into(),
+            alt: "alt".into(),
+            shift: "shift".into(),
+        }
+    }
+}
+impl KeyboardMap {
+    pub fn shortcuts() -> Self {
+        Self {
+            ctrl: "super".into(),
+            super_key: "ctrl".into(),
+            ..Self::default()
+        }
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        let mut keys = vec![
+            self.ctrl.as_str(),
+            self.super_key.as_str(),
+            self.alt.as_str(),
+            self.shift.as_str(),
+        ];
+        keys.sort_unstable();
+        if keys != ["alt", "ctrl", "shift", "super"] {
+            return Err("四个修饰键需分别映射到不同的 Ctrl、Win/Command、Alt/Option、Shift".into());
+        }
+        Ok(())
+    }
+    fn is_original(&self) -> bool {
+        *self == Self::default()
+    }
+}
 // Used solely on the local service pipe. Never return or log this structure in UI/HTTP.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EngineProfile {
+    #[serde(default, skip_serializing_if = "KeyboardMap::is_original")]
+    pub keyboard_map: KeyboardMap,
     #[serde(default = "normal_speed", skip_serializing_if = "is_normal_speed")]
     pub scroll_speed: u16,
     pub identity: Identity,
@@ -129,6 +174,7 @@ pub struct EngineProfile {
 }
 impl EngineProfile {
     pub fn validate(&self) -> Result<(), String> {
+        self.keyboard_map.validate()?;
         if !(50..=200).contains(&self.scroll_speed) {
             return Err("滚轮速度范围为 50% 至 200%".into());
         }
@@ -211,6 +257,11 @@ pub fn render_profile(root: &Path, p: &EngineProfile) -> Result<std::path::PathB
             f64::from(p.scroll_speed) / 100.0
         ),
     );
+    let config = if p.role == Role::Source {
+        config.replace(&format!("[computer_{peer}]\nname={peer}\n"), &format!("[computer_{peer}]\nname={peer}\nmodifierCtrl={}\nmodifierSuper={}\nmodifierAlt={}\nmodifierShift={}\n", p.keyboard_map.ctrl, p.keyboard_map.super_key, p.keyboard_map.alt, p.keyboard_map.shift))
+    } else {
+        config
+    };
     let path = root.join("input.ini");
     atomic(&path, config.as_bytes())?;
     Ok(path)
@@ -234,6 +285,7 @@ mod tests {
             let path = render_profile(
                 d.path(),
                 &EngineProfile {
+                    keyboard_map: Default::default(),
                     scroll_speed: 100,
                     identity: id.clone(),
                     peer: peer.clone(),
@@ -264,6 +316,7 @@ mod tests {
     #[test]
     fn scroll_config_and_old_profile_defaults_remain_compatible() {
         let mut profile = EngineProfile {
+            keyboard_map: Default::default(),
             identity: Identity::new().unwrap(),
             peer: Peer {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -290,6 +343,13 @@ mod tests {
         let file = render_profile(root.path(), &profile).unwrap();
         let ini = std::fs::read_to_string(file).unwrap();
         assert!(ini.contains("xScrollScale=1.75\nyScrollScale=1.75"));
+        profile.role = Role::Source;
+        profile.keyboard_map = KeyboardMap::shortcuts();
+        let config =
+            std::fs::read_to_string(render_profile(root.path(), &profile).unwrap()).unwrap();
+        assert!(config.contains(
+            "modifierCtrl=super\nmodifierSuper=ctrl\nmodifierAlt=alt\nmodifierShift=shift"
+        ));
         for invalid in [0, 49, 201, u16::MAX] {
             profile.scroll_speed = invalid;
             assert!(profile.validate().is_err());
@@ -339,5 +399,24 @@ mod pem_tests {
             .output()
             .unwrap();
         assert!(key.status.success());
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    use super::*;
+    #[test]
+    fn modifier_maps_reject_collisions_and_config_injection() {
+        KeyboardMap::shortcuts().validate().unwrap();
+        KeyboardMap::default().validate().unwrap();
+        let mut map = KeyboardMap::shortcuts();
+        map.alt = "ctrl".into();
+        assert!(map.validate().is_err());
+        map.alt = "alt\n[core]\n".into();
+        assert!(map.validate().is_err());
+        assert!(serde_json::from_str::<KeyboardMap>(
+            r#"{"ctrl":"ctrl","super_key":"super","alt":"alt","shift":"shift","unknown":1}"#
+        )
+        .is_err());
     }
 }

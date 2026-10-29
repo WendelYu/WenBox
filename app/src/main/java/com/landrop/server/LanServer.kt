@@ -22,6 +22,8 @@ class LanServer(
     private val serverPort: Int = 9527
 ) : NanoHTTPD(serverPort) {
 
+    private val demandFiles = DemandFiles()
+
     companion object {
         /** 房间控制类接口的请求体上限 (S4) */
         private const val CTRL_MAX_BYTES = 64 * 1024
@@ -53,7 +55,7 @@ class LanServer(
 
         // 统一鉴权：密码保护房间的敏感接口要求有效房间令牌 (与桌面端行为一致)
         val isProtected = uri == "/api/files" || uri == "/api/files/clear" || uri == "/api/received_files"
-                || uri.startsWith("/api/download/") || uri == "/api/upload" || uri.startsWith("/api/messages")
+                || uri.startsWith("/api/download/") || uri.startsWith("/api/offers") || uri == "/api/upload" || uri.startsWith("/api/messages")
         if (isProtected && !isRequestAuthorized(session)) {
             return cors(newFixedLengthResponse(
                 Response.Status.UNAUTHORIZED,
@@ -64,7 +66,7 @@ class LanServer(
 
         val response = try {
             // 控制类接口的请求体上限，超限直接 413 (S4)
-            if (method == Method.POST && session.headers["content-length"]?.toLongOrNull()?.let { it > CTRL_MAX_BYTES } == true) {
+            if (method == Method.POST && !uri.startsWith("/api/offers/transfer/") && session.headers["content-length"]?.toLongOrNull()?.let { it > CTRL_MAX_BYTES } == true) {
                 newFixedLengthResponse(
                     Response.Status.PAYLOAD_TOO_LARGE,
                     "application/json; charset=UTF-8",
@@ -72,6 +74,8 @@ class LanServer(
                 )
             } else {
             when {
+                uri.startsWith("/api/offers") || uri.startsWith("/api/download/offer-") -> demandFiles.handle(session, RoomManager.currentRoom?.roomId.orEmpty())
+                uri == "/demand-files.js" -> serveAsset("web/demand-files.js", "application/javascript; charset=UTF-8")
                 // 1. 静态资源路由
                 uri == "/" || uri == "/index.html" -> serveAsset("web/index.html", "text/html; charset=UTF-8")
                 uri == "/style.css" -> serveAsset("web/style.css", "text/css; charset=UTF-8")
@@ -514,6 +518,8 @@ class LanServer(
                         }
                         jsonArray.put(item)
                     }
+                    val offered = demandFiles.list(RoomManager.currentRoom?.roomId.orEmpty())
+                    for (index in 0 until offered.length()) jsonArray.put(offered.getJSONObject(index))
                     val result = JSONObject().apply {
                         put("files", jsonArray)
                     }
@@ -661,7 +667,7 @@ class LanServer(
             val tempFile = File(tempFilePath)
             if (tempFile.exists()) {
                 val sharedFile = FileInputStream(tempFile).use { inStream ->
-                    FileManager.saveIncomingFile(context, originalName, inStream)
+                    FileManager.cacheLegacyUpload(context, originalName, inStream)
                 }
                 tempFile.delete()
                 if (sharedFile == null) return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json; charset=utf-8", "{\"success\":false,\"message\":\"保存文件失败\"}")
@@ -670,7 +676,7 @@ class LanServer(
                     put("fileId", sharedFile.id)
                     put("name", originalName)
                     put("size", sharedFile.size)
-                    put("message", "File saved to Download/WenBox")
+                    put("message", "File cached; explicit download required")
                 }
                 val resBytes = resObj.toString().toByteArray(Charsets.UTF_8)
                 return newFixedLengthResponse(
@@ -960,7 +966,7 @@ class LanServer(
             response.addHeader("Vary", "Origin")
         }
         response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
-        response.addHeader("Access-Control-Allow-Headers", "Content-Type, X-File-Name, Range, Authorization, X-Room-Token, X-Host-Token")
+        response.addHeader("Access-Control-Allow-Headers", "Content-Type, X-File-Name, Range, Authorization, X-Room-Token, X-Host-Token, X-Share-Key, X-Share-File")
         return response
     }
 }

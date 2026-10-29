@@ -7,7 +7,7 @@
     const errorBox = node('kvmError');
     const invoke = window.__TAURI__?.invoke || window.__TAURI__?.tauri?.invoke || window.__TAURI_INVOKE__;
     const desktop = typeof invoke === 'function';
-    let snapshot = null, busy = false, polling = false, epoch = 0, timer = null, eventsKey = null, speedDirty = false, scrollDirty = false;
+    let snapshot = null, busy = false, polling = false, epoch = 0, timer = null, eventsKey = null, speedDirty = false, scrollDirty = false, keymapDirty = false;
     const visible = () => !view.hidden && !document.hidden;
     function controls() {
         const m = snapshot?.managed, peer = m?.peer, pending = m?.pending;
@@ -22,6 +22,7 @@
                 || (a === 'reject' && !pending)
                 || (a === 'forget' && !peer)
                 || (a === 'layout' && (!peer || m?.local?.role !== 'source'))
+                || (a === 'keymap' && (!m?.enabled || !peer || m.local.role !== 'source'))
                 || (a === 'scroll-speed' && (!m?.enabled || !peer || snapshot?.scrollSpeed == null))
                 || (a === 'speed' && (!m?.enabled || !peer || m.local.role !== 'source' || snapshot?.pointerSpeed == null))
                 || (a === 'diagnostics' && !snapshot);
@@ -37,10 +38,12 @@
         for (const b of view.querySelectorAll('[data-kvm-speed]')) b.disabled = busy;
         node('kvmPointerSpeed').disabled = busy;
         node('kvmScrollSpeed').disabled = busy || snapshot?.scrollSpeed == null;
+        text('kvmKeymapHint', node('kvmKeyboardPreset').value === 'shortcuts' ? '交换 Command/Win 与 Control；Mac 的 Command+C/V/A/Z 对应 Windows 的 Ctrl+C/V/A/Z。' : node('kvmKeyboardPreset').value === 'original' ? '按原始修饰键发送：Command 对应 Win，Control 对应 Ctrl，Option 对应 Alt。' : '为每个修饰键选择目标。四个目标不能重复，左右两侧同名按键使用相同映射。');
+        for (const select of node('kvmKeyboardSettings').querySelectorAll('select')) select.disabled = busy || (select.hasAttribute('data-keymap') && node('kvmKeyboardPreset').value !== 'custom');
         view.setAttribute('aria-busy', String(busy));
     }
     function render(state) {
-        if (snapshot?.managed?.peer?.id !== state.managed?.peer?.id || snapshot?.role !== state.role) { speedDirty = false; scrollDirty = false; }
+        if (snapshot?.managed?.peer?.id !== state.managed?.peer?.id || snapshot?.role !== state.role) { speedDirty = false; scrollDirty = false; keymapDirty = false; }
         snapshot = state;
         const m = state.managed;
         node('kvmPermissions').hidden = state.platform !== 'macOS';
@@ -74,6 +77,11 @@
             const code = String(m.pending.code);
             text('kvmPairCode', `${code.slice(0, 4)} ${code.slice(4)}`);
             text('kvmPairExpiry', `${m.pending.localConfirmed ? '本机已确认，等待对端' : '等待本机确认'} · 约 ${m.pending.expiresIn} 秒后过期`);
+        }
+        node('kvmKeyboardSettings').hidden = !m.enabled || !m.peer || m.local.role !== 'source' || !state.keyboardMap;
+        if (!keymapDirty && state.keyboardMap) {
+            for (const input of view.querySelectorAll('[data-keymap]')) input.value = state.keyboardMap[input.dataset.keymap];
+            node('kvmKeyboardPreset').value = sameMap(state.keyboardMap, shortcutMap) ? 'shortcuts' : sameMap(state.keyboardMap, originalMap) ? 'original' : 'custom';
         }
         node('kvmScrollSettings').hidden = !m.enabled || !m.peer;
         node('kvmScrollHint').hidden = !m.enabled || !m.peer || state.scrollSpeed != null;
@@ -137,9 +145,10 @@
             } else if (action === 'discover') { candidates(await invoke('kvm_discover', {})); }
             else {
                 const m = snapshot?.managed;
-                const commands = { 'scroll-speed': ['kvm_scroll_speed', { percent: Number(node('kvmScrollSpeed').value) }], speed: ['kvm_pointer_speed', { percent: Number(node('kvmPointerSpeed').value) }], start: ['kvm_start', {}], stop: ['kvm_stop', {}], settings: ['kvm_open_settings', { pane: 'accessibility' }], 'input-settings': ['kvm_open_settings', { pane: 'input-monitoring' }], 'reveal-app': ['kvm_open_settings', { pane: 'reveal-app' }], pairing: ['kvm_pairing_window', {}], pair: ['kvm_pair', { ip: node('kvmPeerIp').value.trim() }], confirm: ['kvm_confirm', { session: m?.pending?.session, accept: true }], reject: ['kvm_confirm', { session: m?.pending?.session, accept: false }], forget: ['kvm_forget', {}], layout: ['kvm_layout', { side: node('kvmSide').value }], role: ['kvm_role', { role: node('kvmRoleSelect').value }] };
+                const commands = { keymap: ['kvm_keyboard_map', { mapping: readKeymap() }], 'scroll-speed': ['kvm_scroll_speed', { percent: Number(node('kvmScrollSpeed').value) }], speed: ['kvm_pointer_speed', { percent: Number(node('kvmPointerSpeed').value) }], start: ['kvm_start', {}], stop: ['kvm_stop', {}], settings: ['kvm_open_settings', { pane: 'accessibility' }], 'input-settings': ['kvm_open_settings', { pane: 'input-monitoring' }], 'reveal-app': ['kvm_open_settings', { pane: 'reveal-app' }], pairing: ['kvm_pairing_window', {}], pair: ['kvm_pair', { ip: node('kvmPeerIp').value.trim() }], confirm: ['kvm_confirm', { session: m?.pending?.session, accept: true }], reject: ['kvm_confirm', { session: m?.pending?.session, accept: false }], forget: ['kvm_forget', {}], layout: ['kvm_layout', { side: node('kvmSide').value }], role: ['kvm_role', { role: node('kvmRoleSelect').value }] };
                 const entry = commands[action]; if (!entry) return;
                 await invoke(entry[0], entry[1]);
+                if (action === 'keymap') keymapDirty = false;
                 if (action === 'speed') speedDirty = false;
                 if (action === 'scroll-speed') scrollDirty = false;
                 if (action !== 'settings') render(await invoke('kvm_status', {}));
@@ -147,6 +156,17 @@
         } catch (error) { errorBox.textContent = String(error?.message || error); errorBox.hidden = false; }
         finally { busy = false; controls(); schedule(); }
     }
+    const originalMap = { ctrl: 'ctrl', super_key: 'super', alt: 'alt', shift: 'shift' };
+    const shortcutMap = { ...originalMap, ctrl: 'super', super_key: 'ctrl' };
+    function sameMap(a, b) { return Object.keys(b).every(k => a[k] === b[k]); }
+    function readKeymap() { return Object.fromEntries(Array.from(view.querySelectorAll('[data-keymap]'), el => [el.dataset.keymap, el.value])); }
+    node('kvmKeyboardPreset').addEventListener('change', () => {
+        keymapDirty = true;
+        const preset = node('kvmKeyboardPreset').value;
+        if (preset !== 'custom') for (const input of view.querySelectorAll('[data-keymap]')) input.value = (preset === 'shortcuts' ? shortcutMap : originalMap)[input.dataset.keymap];
+        controls();
+    });
+    for (const input of view.querySelectorAll('[data-keymap]')) input.addEventListener('change', () => { keymapDirty = true; });
     node('kvmScrollSpeed').addEventListener('input', () => { scrollDirty = true; text('kvmScrollValue', (Number(node('kvmScrollSpeed').value)/100).toFixed(2)+'×'); });
     node('kvmPointerSpeed').addEventListener('input', () => { speedDirty = true; text('kvmPointerValue', (Number(node('kvmPointerSpeed').value) / 100).toFixed(2) + '×'); });
     view.addEventListener('click', event => { const preset = event.target.closest('[data-kvm-speed]'); if (preset && !preset.disabled) { node('kvmPointerSpeed').value = preset.dataset.kvmSpeed; speedDirty = true; text('kvmPointerValue', (Number(preset.dataset.kvmSpeed) / 100).toFixed(2) + '×'); act('speed'); return; } const direction = event.target.closest('[data-kvm-side]'); if (direction && !direction.disabled) { node('kvmSide').value = direction.dataset.kvmSide; act('layout'); return; } const button = event.target.closest('button[data-kvm]'); if (button && !button.disabled) act(button.dataset.kvm); });

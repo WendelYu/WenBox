@@ -166,6 +166,7 @@ impl Managed {
         saved.identity.key_der()?;
         if let Some(peer) = saved.peer.clone() {
             EngineProfile {
+                keyboard_map: Default::default(),
                 scroll_speed: 100,
                 identity: saved.identity.clone(),
                 peer,
@@ -288,6 +289,16 @@ impl Managed {
         }
         *lock(&self.remote_scroll) = Some((Instant::now(), percent));
         Ok(())
+    }
+    pub fn keyboard_map(&self) -> KeyboardMap {
+        lock(&self.engine).keyboard_map()
+    }
+    pub fn set_keyboard_map(&self, mapping: KeyboardMap) -> Result<(), String> {
+        if lock(&self.state).saved.role != Role::Source {
+            return Err("请在主控电脑设置按键映射".into());
+        }
+        lock(&self.engine).set_keyboard_map(mapping)?;
+        self.reconfigure()
     }
     pub fn pointer_speed(&self) -> Option<u16> {
         lock(&self.engine).pointer_speed()
@@ -607,6 +618,7 @@ impl Managed {
             return Ok(());
         };
         let profile = EngineProfile {
+            keyboard_map: Default::default(),
             scroll_speed: 100,
             identity: s.saved.identity.clone(),
             peer,

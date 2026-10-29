@@ -21,6 +21,7 @@ pub struct Engine {
     source: bool,
     pointer_speed: u16,
     scroll_speed: u16,
+    keyboard_map: KeyboardMap,
     connected: Arc<Mutex<Option<bool>>>,
     monitor_stop: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -36,7 +37,19 @@ impl Engine {
             .and_then(|b| serde_json::from_slice::<u16>(&b).ok())
             .filter(|v| (50..=200).contains(v))
             .unwrap_or(100);
+        let keyboard_map = std::fs::read(root.join("keyboard-map.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<KeyboardMap>(&b).ok())
+            .filter(|m| m.validate().is_ok())
+            .unwrap_or_else(|| {
+                if cfg!(target_os = "macos") {
+                    KeyboardMap::shortcuts()
+                } else {
+                    KeyboardMap::default()
+                }
+            });
         Self {
+            keyboard_map,
             scroll_speed,
             pointer_speed,
             root,
@@ -146,6 +159,18 @@ impl Engine {
         }
         (self.binary().is_file(), self.running, self.message.clone())
     }
+    pub fn keyboard_map(&self) -> KeyboardMap {
+        self.keyboard_map.clone()
+    }
+    pub fn set_keyboard_map(&mut self, mapping: KeyboardMap) -> Result<(), String> {
+        mapping.validate()?;
+        atomic(
+            &self.root.join("keyboard-map.json"),
+            &serde_json::to_vec(&mapping).map_err(|e| e.to_string())?,
+        )?;
+        self.keyboard_map = mapping;
+        Ok(())
+    }
     pub fn scroll_speed(&self) -> u16 {
         self.scroll_speed
     }
@@ -220,6 +245,9 @@ impl Engine {
     pub fn apply(&mut self, profile: &EngineProfile) -> Result<(), String> {
         let mut adjusted = profile.clone();
         adjusted.scroll_speed = self.scroll_speed;
+        if adjusted.role == Role::Source {
+            adjusted.keyboard_map = self.keyboard_map.clone();
+        }
         let profile = &adjusted;
         profile.validate()?;
         let stamp = fingerprint(&serde_json::to_vec(profile).map_err(|e| e.to_string())?);
@@ -381,6 +409,7 @@ mod output_tests {
         let dir = tempfile::tempdir().unwrap();
         let mut engine = Engine::new(dir.path().into(), dir.path().into());
         let profile = EngineProfile {
+            keyboard_map: Default::default(),
             scroll_speed: 100,
             identity: Identity::new().unwrap(),
             peer: Peer {
@@ -394,6 +423,7 @@ mod output_tests {
             role: Role::Source,
             side: Side::Left,
         };
+        engine.keyboard_map = profile.keyboard_map.clone();
         engine.applied = Some(fingerprint(&serde_json::to_vec(&profile).unwrap()));
         let mut child = Command::new("/bin/sh")
             .args(["-c", "exit 4"])
@@ -422,6 +452,7 @@ mod output_tests {
         assert_eq!(engine.scroll_speed(), 100);
         engine.set_pointer_speed(150).unwrap();
         engine.set_scroll_speed(75).unwrap();
+        engine.set_keyboard_map(KeyboardMap::default()).unwrap();
         for invalid in [0, 49, 201, u16::MAX] {
             assert!(engine.set_pointer_speed(invalid).is_err());
             assert!(engine.set_scroll_speed(invalid).is_err());
@@ -429,6 +460,7 @@ mod output_tests {
         let restored = Engine::new(root.path().into(), root.path().into());
         assert_eq!(restored.pointer_speed(), Some(150));
         assert_eq!(restored.scroll_speed(), 75);
+        assert_eq!(restored.keyboard_map(), KeyboardMap::default());
     }
 
     #[test]

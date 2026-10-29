@@ -110,6 +110,15 @@ object FileManager {
     /**
      * 流式保存到下载目录。接收到的文件不自动加入全房间共享列表。
      */
+    fun cacheLegacyUpload(context: Context, originalName: String, input: InputStream): SharedFile? {
+        val directory = File(context.cacheDir, "legacy-uploads").apply { mkdirs() }
+        val target = reserveFile(directory, SafeFileName.sanitize(originalName))
+        return try {
+            val size = FileOutputStream(target).use { input.copyTo(it) }
+            SharedFile(UUID.randomUUID().toString(), target.name, size, "application/octet-stream", Uri.fromFile(target)).also { receivedFiles.add(0, it); onFilesChangedListener?.invoke() }
+        } catch (error: Exception) { target.delete(); throw error }
+    }
+
     fun saveIncomingFile(context: Context, originalName: String, inputStream: InputStream): SharedFile? {
         val fileName = SafeFileName.sanitize(originalName)
         return try {

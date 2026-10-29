@@ -14,6 +14,8 @@ async function main() {
     const screenshots = path.resolve(process.env.UI_SCREEN_DIR || 'docs/ui-screens/phase-3');
     fs.mkdirSync(screenshots, { recursive: true });
     let active = false, serial = 0, discoveries = 0, offline = false, messageFailures = 0, expired = false, resumed = 0;
+    let legacyUploads = 0;
+    const offers = [];
     const sendAttempts = new Map();
     const room = { roomId: 'fixture-room', roomName: '现场协作', hostDevice: '测试电脑', hostIp: '192.168.1.8', hostPort: 9527, needPassword: true, pin: '6888' };
     const messages = [], received = [], attempts = new Map();
@@ -45,6 +47,14 @@ async function main() {
         if (url.pathname === '/api/room/heartbeat') return send({ success: true, room: { ...room, isActive: active } });
         if (url.pathname === '/api/room/members') return send({ count: 2, members: [{ id: 'host-id', name: '测试电脑 (房主)', ip: '192.168.1.8', platform: 'macOS' }, { id: 'guest-id', name: '现场工程师', ip: '192.168.1.20', accessIp: '192.168.1.8:9527', platform: 'Android' }] });
         if (url.pathname === '/api/room/leave' || url.pathname === '/api/room/set_ip') return send({ success: true });
+        if (url.pathname === '/api/offers') {
+            const input = json(); assert.equal(body.length < 65536, true);
+            const added = input.files.map(f => ({ ...f, id: 'offer-' + (++serial), scope: input.scope, onDemand: true, online: true, ownerName: input.senderName }));
+            offers.push(...added); shared.push(...added.filter(f => f.scope === 'room'));
+            return send({ success: true, files: added });
+        }
+        if (url.pathname === '/api/offers/requests') return send({ jobs: [] });
+        if (url.pathname === '/api/offers/revoke') return send({ success: true });
         if (url.pathname === '/api/files') return send({ files: shared });
         if (url.pathname === '/api/received_files') return send({ files: received });
         if (url.pathname === '/api/messages' && req.method === 'GET') return send({ messages: messages.filter(m => m.timestamp > Number(url.searchParams.get('since') || 0)), isActive: active, roomId: room.roomId });
@@ -56,7 +66,7 @@ async function main() {
             const msg = { ...input, id: String(++serial), timestamp: Date.now() + serial };
             messages.push(msg); return send({ success: true, message: msg });
         }
-        if (url.pathname === '/api/upload') {
+        if (url.pathname === '/api/upload') { legacyUploads++;
             if (!['host-token', 'guest-token'].includes(req.headers['x-room-token'])) return send({ success: false }, 401);
             const name = /filename="([^"]+)"/.exec(body.toString())?.[1] || 'file.bin';
             attempts.set(name, (attempts.get(name) || 0) + 1);
@@ -170,24 +180,25 @@ async function main() {
         await page.locator('#btnShowHostQrCode').click();
         assert.equal(await page.locator('#hostQrCanvas').getAttribute('width'), '240');
         await page.keyboard.press('Escape');
-        // Three simultaneous uploads: succeed, fail then retry, and cancel independently.
+        // Room selection/drop publish metadata without chat messages or upload bytes.
         const payload = name => ({ name, mimeType: 'text/plain', buffer: Buffer.from('fixture data') });
-        await page.locator('#fileInput').setInputFiles([payload('成功文件.txt'), payload('retry-report.txt'), payload('slow-cancel.txt')]);
-        const row = name => page.locator('#uploadQueue .upload-row').filter({ hasText: name });
-        await row('retry-report.txt').locator('[data-action="retry-upload"]').waitFor();
-        await page.screenshot({ path: path.join(screenshots, 'detail-transfer-states.png') });
-        await row('slow-cancel.txt').locator('[data-action="cancel-upload"]').click();
-        await row('retry-report.txt').locator('[data-action="retry-upload"]').click();
-        await page.waitForFunction(() => document.querySelectorAll('#uploadQueue [data-state="done"]').length === 2);
-        assert.equal(await row('slow-cancel.txt').getAttribute('data-state'), 'cancelled');
+        const beforeMessages = messages.length;
+        await page.locator('#fileInput').setInputFiles([payload('成功文件.txt')]);
+        await page.waitForFunction(() => document.querySelector('#localSharedFileListContainer').textContent.includes('成功文件.txt'));
+        assert.equal(messages.length, beforeMessages);
         await page.evaluate(() => {
-            const data = new DataTransfer();
-            data.items.add(new File(['drag fixture'], '拖入文件.txt', { type: 'text/plain' }));
-            document.dispatchEvent(new DragEvent('dragenter', { bubbles: true, dataTransfer: data }));
-            document.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
+            const data = new DataTransfer(); data.items.add(new File(['drag fixture'], '拖入文件.txt', { type: 'text/plain' }));
+            document.querySelector('#filePanel').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
         });
-        await page.waitForFunction(() => [...document.querySelectorAll('#uploadQueue .upload-row')].some(row => row.textContent.includes('拖入文件.txt') && row.dataset.state === 'done'));
-        assert.equal(await page.locator('#chatDropOverlay').isVisible(), false);
+        await page.waitForFunction(() => document.querySelector('#localSharedFileListContainer').textContent.includes('拖入文件.txt'));
+        assert.equal(messages.length, beforeMessages);
+        await page.evaluate(() => {
+            const data = new DataTransfer(); data.items.add(new File(['chat fixture'], '聊天附件.txt', { type: 'text/plain' }));
+            document.querySelector('#chatActiveContent').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
+        });
+        await page.locator('.chat-file-card').filter({hasText:'聊天附件.txt'}).waitFor();
+        assert.equal(shared.some(f => f.name === '聊天附件.txt'), false);
+        assert.equal(legacyUploads, 0);
         await page.evaluate(() => {
             const data = new DataTransfer();
             data.items.add(new File(['paste file'], '粘贴文件.txt', { type: 'text/plain' }));
@@ -197,7 +208,7 @@ async function main() {
             Object.defineProperty(event, 'clipboardData', { value: data });
             document.getElementById('webChatMessageInput').dispatchEvent(event);
         });
-        await page.waitForFunction(() => [...document.querySelectorAll('#uploadQueue .upload-row')].some(row => row.textContent.includes('粘贴文件.txt') && row.dataset.state === 'done'));
+        await page.locator('.chat-file-card').filter({hasText:'粘贴文件.txt'}).waitFor();
         await page.evaluate(async () => {
             const originalNeeds = WenBox.needsNativeTransport, originalFiles = WenBox.clipboardFiles;
             try {
@@ -217,7 +228,7 @@ async function main() {
                 input.value = '';
             } finally { WenBox.needsNativeTransport = originalNeeds; WenBox.clipboardFiles = originalFiles; }
         });
-        await page.waitForFunction(() => [...document.querySelectorAll('#uploadQueue .upload-row')].some(row => row.textContent.includes('系统剪贴板.txt') && row.dataset.state === 'done'));
+        await page.locator('.chat-file-card').filter({hasText:'系统剪贴板.txt'}).waitFor();
 
         await page.locator('.chat-file-card').first().waitFor();
         const downloadEvent = page.waitForEvent('download');
@@ -407,7 +418,7 @@ async function main() {
         await page.locator('#btnLeaveRoom').click(); await page.locator('#appConfirmOkBtn').click();
         await page.waitForFunction(() => document.body.dataset.roomMode === 'client');
         assert.deepEqual(browserErrors, []); assert.deepEqual(failures, []);
-        console.log('Browser regression passed: strict CSP, create/join/leave, PIN modes/reveal/429 cooldown, optimistic messages/retry/reconciliation/avatars, code copy, upload/cancel/retry, download, tools, tablet drawer, mobile segments, and light/dark screenshots.');
+        console.log('Browser regression passed: strict CSP, create/join/leave, PIN modes/reveal/429 cooldown, optimistic messages/retry/reconciliation/avatars, code copy, metadata-only publication, room/chat drop routing, download, tools, tablet drawer, mobile segments, and light/dark screenshots.');
     } catch (error) {
         await page?.screenshot({ path: path.join(screenshots, 'failure.png'), fullPage: true }).catch(() => {});
         console.error('Browser errors:', browserErrors);

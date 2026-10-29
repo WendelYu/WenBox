@@ -2,7 +2,7 @@
     // ---------------- 全局通知 Toast ----------------
     const { copyText, singleFlight, fetchWithTimeout, listChanged, scheduler, resolveRequestUrl } = window.WenBox;
     const fetch = fetchWithTimeout;
-    let uploadQueue = null;
+    let uploadQueue = null, demandFiles = null;
     const cooldown = window.WenBoxUI.createCooldown();
     const outbox = window.WenBoxUI.createOutbox();
     let discoveryStartedAt = Date.now();
@@ -1135,7 +1135,7 @@
         updateRemoteConnection('ready');
         if (mode !== 'joined') joinedPin = '';
         const changed = roomState.mode !== mode || roomState.roomInfo?.roomId !== data?.roomId;
-        if (changed) { resetChatRoomHistory(); uploadQueue?.clear(); outbox.clear(); }
+        if (changed) { resetChatRoomHistory(); uploadQueue?.clear(); demandFiles?.reset(); outbox.clear(); }
         if (mode === 'client') discoveryStartedAt = Date.now();
         discoveryOpen = currentActiveTab === 'view-rooms';
         document.body.dataset.discoveryOpen = String(discoveryOpen);
@@ -2053,15 +2053,15 @@
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
                             <div class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
-                            <div class="file-size">${size} • 对方分享</div>
+                            <div class="file-size">${size} · ${file.onDemand ? escapeHtml(file.ownerName || '成员') + (file.online ? ' · 按需下载' : ' · 发送方离线') : '对方分享'}</div>
                         </div>
                     </div>
-                    <button data-action="download-file" data-value="${escapeHtml(file.id)}" data-name="${escapeHtml(file.name)}" class="btn btn--secondary btn--sm">
+                    <div class="file-row-actions"><button ${file.onDemand && !file.online ? 'disabled' : ''} data-action="download-file" data-value="${escapeHtml(file.id)}" data-name="${escapeHtml(file.name)}" class="btn btn--secondary btn--sm">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
                         </svg>
                         下载
-                    </button>
+                    </button>${file.onDemand && demandFiles?.owns(file.id) ? `<button data-action="remove-file" data-value="${escapeHtml(file.id)}" class="btn-danger-outline file-remove-button">移除</button>` : ''}</div>
                 </div>
             `;
         }).join('');
@@ -2074,17 +2074,9 @@
         const revision = roomRevision;
         if (!localSharedFileListContainer) return;
         try {
-            let files = [];
-            const invoke = getTauriInvoke();
-            if (invoke) {
-                files = await invoke('fetch_node_files', { baseUrl: '' });
-            } else {
-                const res = await fetch(getApiOrigin() + '/api/files?t=' + Date.now(), { headers: authHeaders() });
-                if (res.ok) {
-                    const data = await res.json();
-                    files = data.files || [];
-                }
-            }
+            const res = await fetch(getApiOrigin() + '/api/files?t=' + Date.now(), { headers: authHeaders() });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const files = (await res.json()).files || [];
             if (revision !== roomRevision) return;
             renderLocalSharedFiles(files);
         } catch (e) {
@@ -2147,17 +2139,17 @@
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
                             <div class="file-name" title="${escapeHtml(file.path || file.name)}">${escapeHtml(file.name)}</div>
-                            <div class="file-size">${size} · 已分享</div>
+                            <div class="file-size">${size} · ${file.onDemand ? escapeHtml(file.ownerName || '成员') + (file.online ? ' · 按需下载' : ' · 发送方离线') : '已分享'}</div>
                         </div>
                     </div>
                     <div class="file-row-actions">
-                        <a href="${dlUrl}" class="btn btn--secondary btn--sm" download="${escapeHtml(file.name)}" title="保存文件副本">
+                        <button data-action="download-file" data-value="${escapeHtml(file.id)}" data-name="${escapeHtml(file.name)}" class="btn btn--secondary btn--sm" title="保存文件副本">
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
                             </svg>
                             下载
-                        </a>
-                        <button data-action="remove-file" data-value="${escapeHtml(file.id)}" class="btn-danger-outline file-remove-button" >
+                        </button>
+                        <button ${file.onDemand && !demandFiles?.owns(file.id) ? 'hidden' : ''} data-action="remove-file" data-value="${escapeHtml(file.id)}" class="btn-danger-outline file-remove-button" >
                             移除
                         </button>
                     </div>
@@ -2169,13 +2161,13 @@
     window.removeLocalSharedFile = async function (fileId) {
         try {
             const invoke = getTauriInvoke();
-            if (invoke) {
+            if (fileId.startsWith('offer-')) { await demandFiles.remove(fileId); } else if (invoke) {
                 await invoke('remove_share_file', { id: fileId });
             } else {
                 await fetch(getApiOrigin() + `/api/files/remove?id=${encodeURIComponent(fileId)}`, { method: 'POST', headers: authHeaders() });
             }
             showToast('已移除该分享文件');
-            loadLocalSharedFiles();
+            if (roomState.mode === 'host') loadLocalSharedFiles(); else loadFiles();
         } catch (e) {
             showToast(`移除失败: ${e.message || e}`);
         }
@@ -2239,32 +2231,7 @@
 
     if (btnSelectShareFile) {
         btnSelectShareFile.addEventListener('click', async () => {
-            const tauriDialog = getTauriDialog();
-            const invoke = getTauriInvoke();
-            if (tauriDialog && invoke) {
-                try {
-                    const revision = roomRevision;
-                    const selected = await tauriDialog.open({
-                        multiple: true,
-                        title: '选择要对外分享的电脑文件'
-                    });
-                    if (selected && revision === roomRevision && roomState.mode === 'host') {
-                        const paths = Array.isArray(selected) ? selected : [selected];
-                        for (const p of paths) {
-                            const file = await invoke('add_share_file', { pathStr: p });
-                            if (roomState.mode === 'host' && revision === roomRevision) {
-                                await sendChatMessageDirect(`[file:${file.name.replace(/[|\[\]]/g, '_')}|${formatBytes(file.size)}|/api/download/${encodeURIComponent(file.id)}]`);
-                            }
-                        }
-                        showToast(`已添加 ${paths.length} 个电脑文件到分享列表！`);
-                        loadLocalSharedFiles();
-                    }
-                } catch (e) {
-                    showToast(`选择文件失败: ${e.message || e}`);
-                }
-            } else {
-                if (fileInput) fileInput.click();
-            }
+            if (fileInput) fileInput.click();
         });
     }
 
@@ -2278,6 +2245,7 @@
             );
             if (!ok) return;
             try {
+                await demandFiles.reset();
                 const invoke = getTauriInvoke();
                 if (invoke) {
                     await invoke('clear_share_files');
@@ -2442,19 +2410,24 @@
         finally { btnSelectReimburseDir.disabled = false; }
     });
 
-    // File objects from picker, drop and chat all enter the same cancellable XHR queue.
-    function uploadFiles(fileList, image = false) {
+    async function uploadFiles(fileList, image = false, scope = 'chat') {
         if (roomState.mode === 'client') { showToast('请先创建或加入房间'); return; }
-        for (const file of Array.from(fileList)) uploadQueue.enqueue(file, {
-            url: (currentTargetBaseUrl || getApiOrigin()) + '/api/upload',
-            token: getEffectiveRoomToken(), revision: roomRevision,
-            image: image || file.type.startsWith('image/')
-        });
-        if (fileInput) fileInput.value = '';
+        const revision = roomRevision;
+        try {
+            const offers = await demandFiles.publish(fileList, scope);
+            if (revision !== roomRevision) return;
+            if (scope === 'chat') for (const file of offers) {
+                const name = file.name.replace(/[|\[\]]/g, '_');
+                if (!await sendChatMessageDirect(`[file:${name}|${formatBytes(file.size)} · 按需下载，发送方需在线|/api/download/${encodeURIComponent(file.id)}]`)) throw new Error('文件信息已发布，但消息发送失败');
+            }
+            showToast(`已分享 ${offers.length} 个文件，点击下载时才传输；请保持 WenBox 开启`);
+            if (roomState.mode === 'host') loadLocalSharedFiles(); else loadFiles();
+        } catch (error) { showToast(error.message || String(error)); }
+        finally { if (fileInput) fileInput.value = ''; }
     }
     if (dropZone && fileInput) {
         dropZone.addEventListener('click', () => fileInput.click());
-        fileInput.addEventListener('change', event => uploadFiles(event.target.files));
+        fileInput.addEventListener('change', event => uploadFiles(event.target.files, false, 'room'));
     }
 
     if (btnRefresh) {
@@ -3411,24 +3384,30 @@
             if (roomState.mode === 'host') loadReceivedFiles();
         }
     });
-    let dragDepth = 0;
-    document.addEventListener('dragenter', event => {
-        if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
-        event.preventDefault(); dragDepth++;
-        if (roomState.mode !== 'client') chatDropOverlay.hidden = false;
-    });
+    demandFiles = window.WenBoxDemandFiles.create({ fetch: fetchWithTimeout, context: captureAttachmentContext, sender: getClientSenderName, nativeUpload: window.WenBox.needsNativeTransport() ? window.WenBox.nativeUpload : null, error: e => showToast(e.message) });
+    function dropScope(target) {
+        if (currentActiveTab !== 'view-room' || roomState.mode === 'client') return null;
+        if (target.closest('#filePanel, #dropZone')) return 'room';
+        if (target.closest('#chatPanel, #chatActiveContent, .chat-composer')) return 'chat';
+        return null;
+    }
     document.addEventListener('dragover', event => {
-        if (Array.from(event.dataTransfer?.types || []).includes('Files')) event.preventDefault();
+        if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+        event.preventDefault();
+        const scope = dropScope(event.target);
+        event.dataTransfer.dropEffect = scope ? 'copy' : 'none';
+        for (const panel of document.querySelectorAll('#filePanel, #chatActiveContent')) panel.classList.toggle('file-drag-target', !!scope && panel.contains(event.target));
     });
-    document.addEventListener('dragleave', event => {
-        event.preventDefault(); dragDepth = Math.max(0, dragDepth - 1);
-        if (!dragDepth) chatDropOverlay.hidden = true;
-    });
+    function clearDrag() { chatDropOverlay.hidden = true; document.querySelectorAll('.file-drag-target').forEach(el => el.classList.remove('file-drag-target')); }
+    document.addEventListener('dragleave', event => { if (!event.relatedTarget) clearDrag(); });
     document.addEventListener('drop', event => {
-        event.preventDefault(); dragDepth = 0; chatDropOverlay.hidden = true;
-        if (event.dataTransfer?.files.length) uploadFiles(event.dataTransfer.files);
+        if (!event.dataTransfer?.files.length) return;
+        event.preventDefault(); clearDrag();
+        const scope = dropScope(event.target);
+        if (scope) uploadFiles(event.dataTransfer.files, false, scope);
+        else showToast('请将文件拖到房间文件区或聊天区');
     });
-    window.addEventListener('blur', () => { dragDepth = 0; chatDropOverlay.hidden = true; });
+    window.addEventListener('blur', clearDrag);
     scheduler.add('messages', 2000, async () => {
         if (currentActiveTab === 'view-room') await pollChatMessages();
     });

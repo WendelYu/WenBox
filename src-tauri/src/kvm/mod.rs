@@ -12,7 +12,7 @@ mod managed;
 mod model;
 mod tls; // Preserve the M1 security regression cases during migration.
 use managed::{Candidate, Info, Managed, View};
-use model::{Role, Side};
+use model::{KeyboardMap, Role, Side};
 use serde::Serialize;
 use std::{
     net::Ipv4Addr,
@@ -107,6 +107,7 @@ fn permissions() -> Option<Permissions> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
+    keyboard_map: KeyboardMap,
     scroll_speed: Option<u16>,
     pointer_speed: Option<u16>,
     input_connected: Option<bool>,
@@ -150,6 +151,7 @@ fn status() -> Result<Status, String> {
         message
     };
     Ok(Status {
+        keyboard_map: m.keyboard_map(),
         scroll_speed: m.scroll_speed(),
         pointer_speed: m.pointer_speed(),
         input_connected: m.input_connected(),
@@ -160,7 +162,7 @@ fn status() -> Result<Status, String> {
         engine_diagnostics: m.engine_diagnostics(),
         service_ready: service,
         service_error,
-        kvm_revision: "m2.5",
+        kvm_revision: "m2.6",
         profile_ready: view.peer.is_some(),
         role: Some(view.local.role),
         tls_configured: true,
@@ -257,6 +259,13 @@ pub async fn kvm_layout(window: tauri::Window, side: Side) -> Result<(), String>
 pub async fn kvm_role(window: tauri::Window, role: Role) -> Result<(), String> {
     local(&window)?;
     tauri::async_runtime::spawn_blocking(move || manager()?.role(role))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn kvm_keyboard_map(window: tauri::Window, mapping: KeyboardMap) -> Result<(), String> {
+    local(&window)?;
+    tauri::async_runtime::spawn_blocking(move || manager()?.set_keyboard_map(mapping))
         .await
         .map_err(|e| e.to_string())?
 }

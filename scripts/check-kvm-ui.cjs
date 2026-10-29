@@ -14,7 +14,7 @@ async function main() {
   const page=await browser.newPage();page.on('pageerror',e=>errors.push(e.message));await page.setContent('<meta name="wenbox-version" content="1.4.5">'+panel);
   await page.evaluate(()=>{
    window.calls=[];window.failStatus=false;
-   window.state={platform:'Windows',installed:true,backendRunning:false,serviceReady:true,profileReady:false,role:'source',tlsConfigured:true,systemInput:true,message:'流转已关闭',events:[],managed:{enabled:false,side:'right',peer:null,pending:null,error:null,local:{id:'local',name:'本机',platform:'Windows',enabled:false,pairing:false,role:'source',side:'right'}}};
+   window.state={keyboardMap:{ctrl:'super',super_key:'ctrl',alt:'alt',shift:'shift'},platform:'Windows',installed:true,backendRunning:false,serviceReady:true,profileReady:false,role:'source',tlsConfigured:true,systemInput:true,message:'流转已关闭',events:[],managed:{enabled:false,side:'right',peer:null,pending:null,error:null,local:{id:'local',name:'本机',platform:'Windows',enabled:false,pairing:false,role:'source',side:'right'}}};
    window.WenBox={async copyText(text){window.copied=text;}};
    window.__TAURI__={async invoke(command,args){window.calls.push({command,args});const s=window.state,m=s.managed;
     if(command==='kvm_status'){if(window.failStatus)throw new Error('fixture failed');const value=structuredClone(s);if(window.statusDelay)await new Promise(r=>setTimeout(r,window.statusDelay));return value;}
@@ -25,6 +25,7 @@ async function main() {
     if(command==='kvm_pair'){m.pending={session:'fixture-session',name:'<img src=x onerror=alert(1)>',code:'12345678',expiresIn:120,localConfirmed:false,remoteConfirmed:false};}
     if(command==='kvm_confirm'){if(args.accept){m.peer={id:'peer',name:'测试 Mac',ip:'192.168.1.2',fingerprint:'a'.repeat(64)};s.profileReady=true;s.backendRunning=true;}m.pending=null;}
     if(command==='kvm_forget'){m.peer=null;m.pending=null;s.profileReady=false;s.backendRunning=false;}
+    if(command==='kvm_keyboard_map'){s.keyboardMap=args.mapping;}
     if(command==='kvm_layout'){m.side=args.side;}
     if(command==='kvm_pointer_speed'){s.pointerSpeed=args.percent;}
     if(command==='kvm_scroll_speed'){s.scrollSpeed=args.percent;}
@@ -63,6 +64,15 @@ async function main() {
   assert.equal(await page.locator('#kvmStatusBadge').innerText(),'已连接');
   await page.evaluate(()=>{window.state.inputConnected=false;});await page.locator('[data-kvm="refresh"]').click();
   assert.equal(await page.locator('#kvmStatusBadge').innerText(),'等待连接');
+  await page.locator('#kvmKeyboardPreset').selectOption('custom');
+  await page.locator('[data-keymap="alt"]').selectOption('shift');
+  await page.locator('[data-keymap="shift"]').selectOption('alt');
+  await page.locator('[data-kvm="refresh"]').click();
+  assert.equal(await page.locator('[data-keymap="alt"]').inputValue(),'shift','polling preserves draft');
+  await page.locator('[data-kvm="keymap"]').click();
+  await page.waitForFunction(()=>window.state.keyboardMap.alt==='shift');
+  await page.locator('#kvmKeyboardPreset').selectOption('original');await page.locator('[data-kvm="keymap"]').click();
+  await page.waitForFunction(()=>window.state.keyboardMap.ctrl==='ctrl');
   await page.evaluate(()=>{window.state.role='target';window.state.managed.local.role='target';window.state.scrollSpeed=100;});
   await page.locator('[data-kvm="refresh"]').click();await page.locator('#kvmScrollSettings').waitFor({state:'visible'});
   await page.locator('#kvmScrollSpeed').fill('150');await page.locator('[data-kvm="scroll-speed"]').click();

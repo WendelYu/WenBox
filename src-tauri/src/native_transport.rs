@@ -75,8 +75,15 @@ fn request(
     }
     let mut req = client(image).request(&method, url.as_str());
     for (key, value) in headers {
-        if ["content-type", "x-room-token", "x-host-token", "range"]
-            .contains(&key.to_ascii_lowercase().as_str())
+        if [
+            "content-type",
+            "x-room-token",
+            "x-host-token",
+            "range",
+            "x-share-key",
+            "x-share-file",
+        ]
+        .contains(&key.to_ascii_lowercase().as_str())
         {
             req = req.set(&key, &value);
         }
@@ -133,8 +140,49 @@ pub async fn native_request(
         .map_err(|e| e.to_string())?
 }
 
+struct StreamUpload {
+    tx: Mutex<Option<std::sync::mpsc::SyncSender<Vec<u8>>>>,
+    result: Mutex<std::sync::mpsc::Receiver<Result<serde_json::Value, String>>>,
+    received: AtomicU64,
+}
+struct ChunkReader {
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    current: std::io::Cursor<Vec<u8>>,
+    upload: Arc<Upload>,
+}
+impl Read for ChunkReader {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self.upload.cancelled.load(Ordering::Relaxed) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "已取消",
+                ));
+            }
+            let count = self.current.read(bytes)?;
+            if count > 0 {
+                self.upload.sent.fetch_add(count as u64, Ordering::Relaxed);
+                return Ok(count);
+            }
+            match self.rx.recv_timeout(Duration::from_secs(30)) {
+                Ok(chunk) => self.current = std::io::Cursor::new(chunk),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(0),
+                Err(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "文件读取超时",
+                    ))
+                }
+            }
+        }
+    }
+}
 struct Upload {
     file: Mutex<Option<tempfile::NamedTempFile>>,
+    stream: Option<StreamUpload>,
     target: String,
     name: String,
     token: Option<String>,
@@ -162,7 +210,7 @@ pub fn native_upload_begin(
     size: u64,
 ) -> Result<String, String> {
     let url = validate_target(&url)?;
-    if url.path() != "/api/upload" {
+    if url.path() != "/api/upload" && !url.path().starts_with("/api/offers/transfer/") {
         return Err("无效的上传接口".into());
     }
     let mut active = uploads().lock().unwrap_or_else(|e| e.into_inner());
@@ -170,6 +218,64 @@ pub fn native_upload_begin(
         return Err("同时传输的文件过多".into());
     }
     let id = uuid::Uuid::new_v4().to_string();
+    if url.path().starts_with("/api/offers/transfer/") {
+        let parts: Vec<_> = url
+            .path()
+            .trim_start_matches("/api/offers/transfer/")
+            .split('/')
+            .collect();
+        if parts.len() != 2
+            || uuid::Uuid::parse_str(parts[0]).is_err()
+            || parts[1].len() != 64
+            || !parts[1].bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err("无效的下载请求".into());
+        }
+        let (tx, rx) = std::sync::mpsc::sync_channel(2);
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let item = Arc::new(Upload {
+            file: Mutex::new(None),
+            stream: Some(StreamUpload {
+                tx: Mutex::new(Some(tx)),
+                result: Mutex::new(result_rx),
+                received: AtomicU64::new(0),
+            }),
+            target: url.to_string(),
+            name,
+            token,
+            size,
+            cancelled: AtomicBool::new(false),
+            sent: AtomicU64::new(0),
+        });
+        active.insert(id.clone(), item.clone());
+        std::thread::spawn(move || {
+            let mut req = client(true)
+                .post(&item.target)
+                .set("Content-Type", "application/octet-stream")
+                .set("Content-Length", &item.size.to_string());
+            if let Some(token) = &item.token {
+                req = req.set("X-Room-Token", token);
+            }
+            let result = req
+                .send(ChunkReader {
+                    rx,
+                    current: std::io::Cursor::new(Vec::new()),
+                    upload: item.clone(),
+                })
+                .map_err(|e| format!("传输失败：{e}"))
+                .and_then(|response| {
+                    let mut body = String::new();
+                    response
+                        .into_reader()
+                        .take(65536)
+                        .read_to_string(&mut body)
+                        .map_err(|e| e.to_string())?;
+                    serde_json::from_str(&body).map_err(|e| e.to_string())
+                });
+            let _ = result_tx.send(result);
+        });
+        return Ok(id);
+    }
     let file = tempfile::Builder::new()
         .prefix("wenbox-upload-")
         .tempfile()
@@ -178,6 +284,7 @@ pub fn native_upload_begin(
         id.clone(),
         Arc::new(Upload {
             file: Mutex::new(Some(file)),
+            stream: None,
             target: url.to_string(),
             name: super::sanitize_file_name(&name),
             token,
@@ -202,6 +309,24 @@ fn chunk(id: &str, offset: u64, bytes: &str) -> Result<(), String> {
     let upload = upload(id)?;
     if upload.cancelled.load(Ordering::Relaxed) {
         return Err("已取消".into());
+    }
+    if let Some(stream) = &upload.stream {
+        let tx = stream.tx.lock().unwrap_or_else(|e| e.into_inner());
+        if offset != stream.received.load(Ordering::Relaxed)
+            || offset
+                .checked_add(bytes.len() as u64)
+                .filter(|n| *n <= upload.size)
+                .is_none()
+        {
+            return Err("文件分块顺序或长度不正确".into());
+        }
+        let count = bytes.len() as u64;
+        tx.as_ref()
+            .ok_or("传输已结束")?
+            .send(bytes)
+            .map_err(|_| "接收方已停止下载".to_string())?;
+        stream.received.fetch_add(count, Ordering::Relaxed);
+        return Ok(());
     }
     let mut guard = upload.file.lock().unwrap_or_else(|e| e.into_inner());
     let file = guard.as_mut().ok_or("文件已开始发送")?;
@@ -228,6 +353,9 @@ pub fn native_upload_cancel(id: String) {
         .remove(&id)
     {
         upload.cancelled.store(true, Ordering::Relaxed);
+        if let Some(stream) = &upload.stream {
+            stream.tx.lock().unwrap_or_else(|e| e.into_inner()).take();
+        }
     }
 }
 struct ProgressReader<'a> {
@@ -250,6 +378,18 @@ impl Read for ProgressReader<'_> {
 fn finish(id: &str) -> Result<serde_json::Value, String> {
     let upload = upload(id)?;
     let result = (|| {
+        if let Some(stream) = &upload.stream {
+            if stream.received.load(Ordering::Relaxed) != upload.size {
+                return Err("文件尚未完整读取".into());
+            }
+            stream.tx.lock().unwrap_or_else(|e| e.into_inner()).take();
+            return stream
+                .result
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .recv_timeout(Duration::from_secs(120))
+                .map_err(|_| "传输确认超时".to_string())?;
+        }
         let mut file = upload
             .file
             .lock()
@@ -491,5 +631,46 @@ mod tests {
         let image = request(url, "GET".into(), HashMap::new(), None, true).unwrap();
         assert_eq!(STANDARD.decode(image.body).unwrap(), [0, 255, 128]);
         worker.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod demand_stream_tests {
+    use super::*;
+    #[test]
+    fn demand_upload_streams_without_tempfile_and_preserves_bytes() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let expected = vec![0x93; 2 * 1024 * 1024];
+        let copy = expected.clone();
+        let server_thread = std::thread::spawn(move || {
+            let mut req = server.recv().unwrap();
+            assert_eq!(req.body_length(), Some(copy.len()));
+            let mut actual = Vec::new();
+            req.as_reader().read_to_end(&mut actual).unwrap();
+            assert_eq!(actual, copy);
+            req.respond(tiny_http::Response::from_string(
+                r#"{"success":true,"fileId":"offer-test"}"#,
+            ))
+            .unwrap();
+        });
+        let id = native_upload_begin(
+            format!(
+                "http://127.0.0.1:{port}/api/offers/transfer/{}/{}",
+                uuid::Uuid::new_v4(),
+                "a".repeat(64)
+            ),
+            "file.bin".into(),
+            Some("room-token".into()),
+            expected.len() as u64,
+        )
+        .unwrap();
+        assert!(upload(&id).unwrap().file.lock().unwrap().is_none());
+        for (index, part) in expected.chunks(512 * 1024).enumerate() {
+            chunk(&id, (index * 512 * 1024) as u64, &STANDARD.encode(part)).unwrap();
+        }
+        assert_eq!(finish(&id).unwrap()["fileId"], "offer-test");
+        assert!(upload(&id).is_err());
+        server_thread.join().unwrap();
     }
 }
