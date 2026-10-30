@@ -1223,7 +1223,12 @@ impl Managed {
                             };
                             if permitted {
                                 if let Ok(req) = ch.receive_limited::<Request>(
-                                    if pins.contains(&ch.fingerprint) {
+                                    if lock(&conn.state)
+                                        .saved
+                                        .peer
+                                        .as_ref()
+                                        .is_some_and(|peer| peer.fingerprint == ch.fingerprint)
+                                    {
                                         super::clipboard::FRAME_LIMIT
                                     } else {
                                         32768
