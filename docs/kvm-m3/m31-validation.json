@@ -1,0 +1,51 @@
+{
+  "version": "1.4.8",
+  "revision": "m3.1",
+  "commit": "3a960a8d2186e32e46a44c3caa210d136dc66432",
+  "branch": "codex/chat-reconnect-identity",
+  "issue": "Own historical messages appeared on the left after application restart",
+  "cause": "Temporary sessionStorage client ID changed while hosted message history retained prior IDs",
+  "behavior": [
+    "Persistent chat identity with live-session migration",
+    "Explicit reversible recovery of unknown historical IDs; no nickname-only claim of messages carrying another ID",
+    "Canonical grouping of known own IDs; negative time gaps never group",
+    "Recovery updates display only and preserves file attachment links"
+  ],
+  "checks": {
+    "node": {
+      "passed": 51
+    },
+    "browserFullWorkspace": "passed",
+    "restartRejoinIdentityAndNewSend": "passed",
+    "legacyRecoveryUndoAndReload": "passed",
+    "sameNameAndIpDifferentSenderIsolation": "passed",
+    "fileAttachmentLinkPreserved": "passed",
+    "macUniversalBuild": "passed",
+    "macInputResourcesVerified": 68,
+    "macAdHocSignature": "verified"
+  },
+  "windows": {
+    "run": "https://github.com/WendelYu/WenBox/actions/runs/40997684344",
+    "status": "functional_checks_passed_cache_finalizing",
+    "defaultAndCustomInstallUpgradeUninstall": "passed",
+    "serviceBoundary": "passed",
+    "unsafeParentRejected": true,
+    "rustTests": "passed"
+  },
+  "artifacts": [
+    {
+      "file": "WenBox-M3.1-macOS-universal.zip",
+      "bytes": 60402632,
+      "sha256": "b3e0b3fd8806f1f81ae09dd831fee8847c20a8764c076af1494755cad2341755"
+    },
+    {
+      "file": "WenBox-M3.1-Windows-x64-setup.exe",
+      "bytes": 17531785,
+      "sha256": "814cc7a2d4f977bf9db78800233e328fbd448cc3c9a0abb9cc176b2871a8bd8a"
+    }
+  ],
+  "manualValidation": [
+    "Install on affected Windows and perform a complete application exit/reopen",
+    "Recover each already-lost historical sender using the message action; confirm history remains on right after another restart"
+  ]
+}
