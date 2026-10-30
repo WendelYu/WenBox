@@ -159,6 +159,22 @@ impl Engine {
         }
         (self.binary().is_file(), self.running, self.message.clone())
     }
+    pub fn keyboard_map_for(&self, peer: &str) -> KeyboardMap {
+        screen(peer)
+            .ok()
+            .and_then(|_| std::fs::read(self.root.join(format!("keyboard-map-{peer}.json"))).ok())
+            .and_then(|b| serde_json::from_slice::<KeyboardMap>(&b).ok())
+            .filter(|m| m.validate().is_ok())
+            .unwrap_or_else(|| self.keyboard_map.clone())
+    }
+    pub fn set_keyboard_map_for(&mut self, peer: &str, mapping: KeyboardMap) -> Result<(), String> {
+        screen(peer)?;
+        mapping.validate()?;
+        atomic(
+            &self.root.join(format!("keyboard-map-{peer}.json")),
+            &serde_json::to_vec(&mapping).map_err(|e| e.to_string())?,
+        )
+    }
     pub fn keyboard_map(&self) -> KeyboardMap {
         self.keyboard_map.clone()
     }
@@ -246,7 +262,7 @@ impl Engine {
         let mut adjusted = profile.clone();
         adjusted.scroll_speed = self.scroll_speed;
         if adjusted.role == Role::Source {
-            adjusted.keyboard_map = self.keyboard_map.clone();
+            adjusted.keyboard_map = self.keyboard_map_for(&adjusted.peer.id);
         }
         let profile = &adjusted;
         profile.validate()?;
@@ -351,6 +367,30 @@ impl Engine {
         }
         .into();
         Ok(())
+    }
+    #[cfg(all(test, target_os = "macos"))]
+    pub(super) fn install_health_fixture(&mut self, runtime: tempfile::TempDir) {
+        self.child = Some(Command::new("/bin/sleep").arg("30").spawn().unwrap());
+        self.runtime = Some(runtime);
+        self.running = true;
+    }
+    #[cfg(target_os = "macos")]
+    pub fn health_target(&self) -> Option<(u32, PathBuf)> {
+        if !self.running {
+            return None;
+        }
+        Some((
+            self.child.as_ref()?.id(),
+            self.runtime.as_ref()?.path().into(),
+        ))
+    }
+    pub fn emergency_stop(&mut self) -> Result<(), String> {
+        // Kill only the child owned by this Engine. No network or Qt IPC roundtrip.
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.stop()
     }
     pub fn stop(&mut self) -> Result<(), String> {
         self.monitor_stop
@@ -463,6 +503,39 @@ mod output_tests {
         assert_eq!(restored.keyboard_map(), KeyboardMap::default());
     }
 
+    #[test]
+    fn peer_modifier_preferences_are_independent() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(root.path().into(), root.path().into());
+        let a = uuid::Uuid::new_v4().to_string();
+        let b = uuid::Uuid::new_v4().to_string();
+        engine
+            .set_keyboard_map_for(&a, KeyboardMap::default())
+            .unwrap();
+        engine
+            .set_keyboard_map_for(&b, KeyboardMap::shortcuts())
+            .unwrap();
+        let restored = Engine::new(root.path().into(), root.path().into());
+        assert_eq!(restored.keyboard_map_for(&a), KeyboardMap::default());
+        assert_eq!(restored.keyboard_map_for(&b), KeyboardMap::shortcuts());
+        assert!(engine
+            .set_keyboard_map_for("../outside", KeyboardMap::default())
+            .is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn emergency_stop_reaps_the_owned_child_without_ipc() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(root.path().into(), root.path().into());
+        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        engine.child = Some(child);
+        engine.running = true;
+        let started = Instant::now();
+        engine.emergency_stop().unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(engine.child.is_none());
+        assert!(!engine.running);
+    }
     #[test]
     fn startup_output_is_drained_and_retains_only_a_bounded_tail() {
         let mut bytes = vec![b'x'; 100_000];

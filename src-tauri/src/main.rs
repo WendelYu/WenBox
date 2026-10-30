@@ -3125,6 +3125,8 @@ fn main() {
             kvm::kvm_pointer_speed,
             kvm::kvm_scroll_speed,
             kvm::kvm_keyboard_map,
+            kvm::kvm_clipboard,
+            kvm::kvm_release,
             kvm::kvm_pairing_window,
             kvm::kvm_discover,
             kvm::kvm_pair,

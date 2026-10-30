@@ -22,6 +22,7 @@
                 || (a === 'reject' && !pending)
                 || (a === 'forget' && !peer)
                 || (a === 'layout' && (!peer || m?.local?.role !== 'source'))
+                || (['clipboard', 'release'].includes(a) && !m?.enabled)
                 || (a === 'keymap' && (!m?.enabled || !peer || m.local.role !== 'source'))
                 || (a === 'scroll-speed' && (!m?.enabled || !peer || snapshot?.scrollSpeed == null))
                 || (a === 'speed' && (!m?.enabled || !peer || m.local.role !== 'source' || snapshot?.pointerSpeed == null))
@@ -78,6 +79,12 @@
             text('kvmPairCode', `${code.slice(0, 4)} ${code.slice(4)}`);
             text('kvmPairExpiry', `${m.pending.localConfirmed ? '本机已确认，等待对端' : '等待本机确认'} · 约 ${m.pending.expiresIn} 秒后过期`);
         }
+        node('kvmClipboardSettings').hidden = !m.enabled || !m.peer || !state.clipboard;
+        text('kvmClipboardStatus', state.clipboard?.message || '请更新桌面客户端');
+        const clipboardButton = view.querySelector('[data-kvm="clipboard"]');
+        clipboardButton.textContent = state.clipboard?.enabled ? '关闭文本同步' : '开启文本同步';
+        clipboardButton.setAttribute('aria-pressed', String(!!state.clipboard?.enabled));
+        view.querySelector('[data-kvm="release"]').hidden = !m.enabled;
         node('kvmKeyboardSettings').hidden = !m.enabled || !m.peer || m.local.role !== 'source' || !state.keyboardMap;
         if (!keymapDirty && state.keyboardMap) {
             for (const input of view.querySelectorAll('[data-keymap]')) input.value = state.keyboardMap[input.dataset.keymap];
@@ -145,7 +152,7 @@
             } else if (action === 'discover') { candidates(await invoke('kvm_discover', {})); }
             else {
                 const m = snapshot?.managed;
-                const commands = { keymap: ['kvm_keyboard_map', { mapping: readKeymap() }], 'scroll-speed': ['kvm_scroll_speed', { percent: Number(node('kvmScrollSpeed').value) }], speed: ['kvm_pointer_speed', { percent: Number(node('kvmPointerSpeed').value) }], start: ['kvm_start', {}], stop: ['kvm_stop', {}], settings: ['kvm_open_settings', { pane: 'accessibility' }], 'input-settings': ['kvm_open_settings', { pane: 'input-monitoring' }], 'reveal-app': ['kvm_open_settings', { pane: 'reveal-app' }], pairing: ['kvm_pairing_window', {}], pair: ['kvm_pair', { ip: node('kvmPeerIp').value.trim() }], confirm: ['kvm_confirm', { session: m?.pending?.session, accept: true }], reject: ['kvm_confirm', { session: m?.pending?.session, accept: false }], forget: ['kvm_forget', {}], layout: ['kvm_layout', { side: node('kvmSide').value }], role: ['kvm_role', { role: node('kvmRoleSelect').value }] };
+                const commands = { release: ['kvm_release', {}], clipboard: ['kvm_clipboard', { enabled: !snapshot?.clipboard?.enabled }], keymap: ['kvm_keyboard_map', { mapping: readKeymap() }], 'scroll-speed': ['kvm_scroll_speed', { percent: Number(node('kvmScrollSpeed').value) }], speed: ['kvm_pointer_speed', { percent: Number(node('kvmPointerSpeed').value) }], start: ['kvm_start', {}], stop: ['kvm_stop', {}], settings: ['kvm_open_settings', { pane: 'accessibility' }], 'input-settings': ['kvm_open_settings', { pane: 'input-monitoring' }], 'reveal-app': ['kvm_open_settings', { pane: 'reveal-app' }], pairing: ['kvm_pairing_window', {}], pair: ['kvm_pair', { ip: node('kvmPeerIp').value.trim() }], confirm: ['kvm_confirm', { session: m?.pending?.session, accept: true }], reject: ['kvm_confirm', { session: m?.pending?.session, accept: false }], forget: ['kvm_forget', {}], layout: ['kvm_layout', { side: node('kvmSide').value }], role: ['kvm_role', { role: node('kvmRoleSelect').value }] };
                 const entry = commands[action]; if (!entry) return;
                 await invoke(entry[0], entry[1]);
                 if (action === 'keymap') keymapDirty = false;

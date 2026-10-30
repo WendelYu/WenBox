@@ -204,46 +204,71 @@ impl Channel {
         )
     }
     pub fn send<T: serde::Serialize>(&mut self, value: &T) -> Result<(), String> {
+        self.send_limited(value, 32768)
+    }
+    pub fn send_limited<T: serde::Serialize>(
+        &mut self,
+        value: &T,
+        limit: usize,
+    ) -> Result<(), String> {
         let mut bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
-        if bytes.len() > 32768 {
+        if bytes.len() > limit {
             return Err("设备消息过大".into());
         }
         bytes.push(b'\n');
-        self.connection
-            .writer()
-            .write_all(&bytes)
-            .map_err(|_| "发送设备消息失败")?;
         let until = Instant::now() + Duration::from_secs(4);
-        while self.connection.wants_write() {
-            if Instant::now() > until {
-                return Err("发送设备消息超时".into());
-            }
+        // rustls bounds queued plaintext; flush each record instead of staging a MiB at once.
+        for chunk in bytes.chunks(16384) {
             self.connection
-                .write_tls(&mut self.socket)
+                .writer()
+                .write_all(chunk)
                 .map_err(|_| "发送设备消息失败")?;
+            while self.connection.wants_write() {
+                if Instant::now() > until {
+                    return Err("发送设备消息超时".into());
+                }
+                self.connection
+                    .write_tls(&mut self.socket)
+                    .map_err(|_| "发送设备消息失败")?;
+            }
         }
+
         Ok(())
     }
     pub fn receive<T: serde::de::DeserializeOwned>(&mut self) -> Result<T, String> {
+        self.receive_limited(32768)
+    }
+    pub fn receive_limited<T: serde::de::DeserializeOwned>(
+        &mut self,
+        limit: usize,
+    ) -> Result<T, String> {
         let until = Instant::now() + Duration::from_secs(4);
         let mut bytes = Vec::new();
+        let mut buffer = [0u8; 16384];
         loop {
-            if bytes.len() > 32768 || Instant::now() > until {
-                return Err("设备消息过大或读取超时".into());
+            if Instant::now() > until {
+                return Err("设备消息读取超时".into());
             }
-            let mut b = [0];
-            match self.connection.reader().read(&mut b) {
+            match self.connection.reader().read(&mut buffer) {
                 Ok(0) => return Err("设备消息中断".into()),
-                Ok(_) => {
-                    if b[0] == b'\n' {
+                Ok(count) => {
+                    let newline = buffer[..count].iter().position(|b| *b == b'\n');
+                    let used = newline.unwrap_or(count);
+                    if bytes.len() + used > limit {
+                        return Err("设备消息过大".into());
+                    }
+                    bytes.extend_from_slice(&buffer[..used]);
+                    if let Some(at) = newline {
+                        if at + 1 != count {
+                            return Err("设备消息包含多余数据".into());
+                        }
                         break;
                     }
-                    bytes.push(b[0]);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     self.connection
                         .complete_io(&mut self.socket)
-                        .map_err(|e| format!("设备消息读取失败：{e}"))?;
+                        .map_err(|_| "设备消息读取失败".to_string())?;
                 }
                 Err(_) => return Err("设备消息读取失败".into()),
             }

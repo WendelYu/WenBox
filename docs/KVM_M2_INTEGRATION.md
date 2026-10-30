@@ -1,5 +1,7 @@
 # KVM M2 集成与验收交接
 
+当前安装与设置请使用 [安装文档](INSTALLATION.md)，后续实现/待验收见 [M3 集成文档](KVM_M3_INTEGRATION.md)。本页保留 M2 历史故障与当时的测试边界；当前 v1.4.7 已正式发布，安装支持中文和目录选择，鼠标、键盘及 UAC 的正常操作已获用户确认。
+
 更新：2026-10-28。M2.1 热修复已通过本机与 Windows CI：Windows 接受的非阻塞 TCP 连接恢复阻塞超时模式；服务管道用 PeekNamedPipe 区分空数据和断开，并在客户端确认读完回复后关闭连接。诊断增加 kvmRevision=m2.1 和 serviceError。旧 M2 的安装冒烟通过不代表配对链路已验收；热修复补了真实 TLS 消息往返、Windows 非阻塞管道延迟读取专项回归。
 
 M2 实现已进入可构建阶段；本机回归、Mac 构建与 Windows 实际 NSIS 构建均通过；Windows 一次性 runner 的安装、服务启动、升级和卸载检查通过，集成 UAC 仍待真机验收。M0 用户确认的 Deskflow 管理员窗口/UAC 可行性保留，不将其等同于本轮服务已验证。

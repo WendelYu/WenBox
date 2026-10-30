@@ -62,6 +62,9 @@ enum Request {
     Status,
     InputStatus,
     ScrollSettings,
+    Clipboard {
+        exchange: super::clipboard::Exchange,
+    },
     ScrollSpeed {
         percent: u16,
     },
@@ -73,6 +76,8 @@ enum Request {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Reply {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clipboard: Option<super::clipboard::ExchangeReply>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scroll_speed: Option<u16>,
     ok: bool,
@@ -119,6 +124,7 @@ pub struct View {
 pub struct Managed {
     state: Mutex<State>,
     engine: Mutex<Engine>,
+    clipboard: super::clipboard::Clipboard,
     remote_input: Mutex<Option<(Instant, bool)>>,
     remote_scroll: Mutex<Option<(Instant, u16)>>,
     file: PathBuf,
@@ -176,7 +182,9 @@ impl Managed {
             .validate()?;
         }
 
+        let clipboard = super::clipboard::Clipboard::open(root.clone(), saved.identity.id.clone());
         let this = Arc::new(Self {
+            clipboard,
             state: Mutex::new(State {
                 saved,
                 pending: None,
@@ -195,6 +203,13 @@ impl Managed {
         });
         let weak = Arc::downgrade(&this);
         std::thread::spawn(move || Self::worker(weak));
+        let weak = Arc::downgrade(&this);
+        std::thread::spawn(move || Self::clipboard_worker(weak));
+        #[cfg(target_os = "macos")]
+        {
+            let weak = Arc::downgrade(&this);
+            std::thread::spawn(move || Self::health_worker(weak));
+        }
         Ok(this)
     }
     fn persist(&self, s: &State) -> Result<(), String> {
@@ -245,6 +260,145 @@ impl Managed {
     pub fn events(&self) -> Vec<Event> {
         lock(&self.state).events.iter().cloned().collect()
     }
+    pub fn clipboard_view(&self) -> super::clipboard::View {
+        self.clipboard.view()
+    }
+    pub fn set_clipboard(&self, enabled: bool) -> Result<(), String> {
+        self.clipboard.set_enabled(enabled)
+    }
+    fn clipboard_context(&self) -> Option<(Identity, Peer)> {
+        if !self.clipboard.enabled()
+            || self.stopping.load(Ordering::SeqCst)
+            || self.input_connected() != Some(true)
+        {
+            return None;
+        }
+        let s = lock(&self.state);
+        if !s.saved.enabled {
+            return None;
+        }
+        Some((s.saved.identity.clone(), s.saved.peer.clone()?))
+    }
+    #[cfg(target_os = "macos")]
+    fn health_worker(weak: Weak<Self>) {
+        let mut last_pid = None;
+        let mut armed = false;
+        let mut misses = 0;
+        let mut last_tick = Instant::now();
+        loop {
+            let Some(this) = weak.upgrade() else {
+                break;
+            };
+            if this.stopping.load(Ordering::SeqCst) {
+                break;
+            }
+            if last_tick.elapsed() > Duration::from_secs(2) {
+                armed = false;
+                misses = 0;
+            }
+            last_tick = Instant::now();
+            let target = lock(&this.engine).health_target();
+            let current_pid = target.as_ref().map(|t| t.0);
+            if current_pid != last_pid {
+                last_pid = current_pid;
+                armed = false;
+                misses = 0;
+            }
+            if let Some((pid, root)) = target {
+                // The private Qt IPC probe is independent of the input core's event loop.
+                // A hung loop cannot defer this supervisor's bounded kill of its owned child.
+                if super::ipc::request_at(&root, super::ipc::Action::Probe).is_ok() {
+                    armed = true;
+                    misses = 0;
+                } else if armed {
+                    misses += 1;
+                    if misses >= 2 {
+                        let mut state = lock(&this.state);
+                        let mut engine = lock(&this.engine);
+                        if engine.health_target().is_some_and(|t| t.0 == pid) {
+                            state.saved.enabled = false;
+                            this.clipboard.pause("输入核心未响应，文本同步暂停");
+                            let _ = engine.emergency_stop();
+                            state.error =
+                                Some("输入核心未响应，已停止流转并收回本机输入；可重新开启".into());
+                            record(&mut state, "输入核心连续未响应，已由独立监测停止");
+                            let _ = this.persist(&state);
+                        }
+                        armed = false;
+                        misses = 0;
+                    }
+                }
+            }
+            drop(this);
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+    fn clipboard_worker(weak: Weak<Self>) {
+        let mut desktop: Option<arboard::Clipboard> = None;
+        loop {
+            let Some(this) = weak.upgrade() else {
+                break;
+            };
+            if this.stopping.load(Ordering::SeqCst) {
+                break;
+            }
+            if let Some((id, peer)) = this.clipboard_context() {
+                this.clipboard.activate(&peer.id);
+                if desktop.is_none() {
+                    desktop = arboard::Clipboard::new().ok();
+                    if desktop.is_none() {
+                        this.clipboard.notice("暂时无法访问系统剪贴板，将自动重试");
+                    }
+                }
+                if let Some(clipboard) = desktop.as_mut() {
+                    let text = clipboard.get_text().ok();
+                    this.clipboard.observe(text.as_deref(), |text| {
+                        clipboard
+                            .set_text(text)
+                            .map_err(|_| "剪贴板写入失败".into())
+                    });
+                }
+                if let Some(exchange) = this.clipboard.request() {
+                    let epoch = exchange.epoch().to_owned();
+                    let result = (|| -> Result<_, String> {
+                        let mut channel = Channel::connect(
+                            &id,
+                            SocketAddr::from((peer.ip, CONTROL_PORT)),
+                            Some(&peer.fingerprint),
+                        )?;
+                        channel.send_limited(
+                            &Request::Clipboard { exchange },
+                            super::clipboard::FRAME_LIMIT,
+                        )?;
+                        let reply: Reply =
+                            channel.receive_limited(super::clipboard::FRAME_LIMIT)?;
+                        if !reply.ok || reply.info.id != peer.id {
+                            return Err("请确认对端已更新并开启文本同步".into());
+                        }
+                        reply.clipboard.ok_or("对端尚不支持文本同步".into())
+                    })();
+                    // A stopped/unpaired session must not apply an in-flight response.
+                    if this.clipboard_context().is_some_and(|(_, current)| {
+                        current.id == peer.id && current.fingerprint == peer.fingerprint
+                    }) {
+                        match result {
+                            Ok(reply) => {
+                                let _ = this.clipboard.complete(&epoch, reply);
+                            }
+                            Err(_) => this.clipboard.pause("等待对端开启文本同步或恢复连接"),
+                        }
+                    } else {
+                        this.clipboard.pause("输入已断开，文本同步暂停");
+                    }
+                }
+            } else {
+                this.clipboard.pause("输入未连接，文本同步暂停");
+                desktop = None;
+            }
+            drop(this);
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
     pub fn engine_diagnostics(&self) -> String {
         lock(&self.engine).diagnostics()
     }
@@ -291,14 +445,31 @@ impl Managed {
         Ok(())
     }
     pub fn keyboard_map(&self) -> KeyboardMap {
-        lock(&self.engine).keyboard_map()
+        let peer = lock(&self.state).saved.peer.as_ref().map(|p| p.id.clone());
+        let engine = lock(&self.engine);
+        peer.map(|p| engine.keyboard_map_for(&p))
+            .unwrap_or_else(|| engine.keyboard_map())
     }
     pub fn set_keyboard_map(&self, mapping: KeyboardMap) -> Result<(), String> {
-        if lock(&self.state).saved.role != Role::Source {
+        let s = lock(&self.state);
+        if s.saved.role != Role::Source {
             return Err("请在主控电脑设置按键映射".into());
         }
-        lock(&self.engine).set_keyboard_map(mapping)?;
+        let peer = s.saved.peer.as_ref().ok_or("请先配对电脑")?.id.clone();
+        drop(s);
+        lock(&self.engine).set_keyboard_map_for(&peer, mapping)?;
         self.reconfigure()
+    }
+    pub fn emergency_release(&self) -> Result<(), String> {
+        let mut s = lock(&self.state);
+        s.saved.enabled = false;
+        s.pending = None;
+        s.pair_until = None;
+        self.clipboard.pause("已紧急停止流转");
+        *lock(&self.remote_input) = None;
+        lock(&self.engine).emergency_stop()?;
+        record(&mut s, "已收回输入并停止流转，重新开启后才能连接");
+        self.persist(&s)
     }
     pub fn pointer_speed(&self) -> Option<u16> {
         lock(&self.engine).pointer_speed()
@@ -331,6 +502,7 @@ impl Managed {
     pub fn enable(&self, enabled: bool) -> Result<(), String> {
         let mut s = lock(&self.state);
         if !enabled {
+            self.clipboard.pause("流转已关闭，文本同步暂停");
             *lock(&self.remote_input) = None;
             lock(&self.engine).stop()?;
         }
@@ -545,6 +717,7 @@ impl Managed {
         }
     }
     pub fn forget(&self) -> Result<(), String> {
+        self.clipboard.pause("已撤销设备授权");
         let old = {
             let mut s = lock(&self.state);
             lock(&self.engine).stop()?;
@@ -633,6 +806,7 @@ impl Managed {
     }
     fn handle(&self, ch: &mut Channel, req: Request) -> Reply {
         let scroll_query = matches!(&req, Request::ScrollSettings | Request::ScrollSpeed { .. });
+        let mut clipboard_reply = None;
         let result = (|| -> Result<bool, String> {
             let pending_known = {
                 let s = lock(&self.state);
@@ -714,6 +888,14 @@ impl Managed {
                 }
                 // The accepted bit is the boolean result of this authenticated query.
                 // Older peers reject this optional request; ordinary pairing remains unchanged.
+                Request::Clipboard { exchange } if trusted => {
+                    let (_, peer) = self
+                        .clipboard_context()
+                        .ok_or("输入连接未就绪或文本同步已关闭")?;
+                    self.clipboard.activate(&peer.id);
+                    clipboard_reply = Some(self.clipboard.exchange(&peer.id, exchange)?);
+                    Ok(true)
+                }
                 Request::ScrollSettings if trusted => {
                     let s = lock(&self.state);
                     if !s.saved.enabled || s.saved.role != Role::Target {
@@ -782,6 +964,7 @@ impl Managed {
                     if !matches_peer && !matches_pending {
                         return Err("该设备授权已撤销".into());
                     }
+                    self.clipboard.pause("已撤销设备授权");
                     lock(&self.engine).stop()?;
                     s.saved.peer = None;
                     s.pending = None;
@@ -794,6 +977,7 @@ impl Managed {
         let info = self.info();
         match result {
             Ok(accepted) => Reply {
+                clipboard: clipboard_reply,
                 scroll_speed: if scroll_query {
                     Some(lock(&self.engine).scroll_speed())
                 } else {
@@ -805,6 +989,7 @@ impl Managed {
                 error: None,
             },
             Err(error) => Reply {
+                clipboard: None,
                 scroll_speed: None,
                 ok: false,
                 info,
@@ -1032,9 +1217,16 @@ impl Managed {
                                 true
                             };
                             if permitted {
-                                if let Ok(req) = ch.receive::<Request>() {
+                                if let Ok(req) = ch.receive_limited::<Request>(
+                                    if pins.contains(&ch.fingerprint) {
+                                        super::clipboard::FRAME_LIMIT
+                                    } else {
+                                        32768
+                                    },
+                                ) {
                                     let response = conn.handle(&mut ch, req);
-                                    let _ = ch.send(&response);
+                                    let _ =
+                                        ch.send_limited(&response, super::clipboard::FRAME_LIMIT);
                                 }
                             }
                         }
@@ -1061,6 +1253,7 @@ impl Managed {
         }
     }
     pub fn shutdown(&self) {
+        self.clipboard.pause("应用已退出");
         self.stopping.store(true, Ordering::SeqCst);
         let _ = lock(&self.engine).stop();
     }
@@ -1074,6 +1267,10 @@ mod tests {
         saved.enabled = true;
         saved.role = role;
         Arc::new(Managed {
+            clipboard: crate::kvm::clipboard::Clipboard::open(
+                root.into(),
+                saved.identity.id.clone(),
+            ),
             remote_input: Mutex::new(None),
             remote_scroll: Mutex::new(None),
             state: Mutex::new(State {
@@ -1107,6 +1304,159 @@ mod tests {
         let client = Channel::connect(&id, addr, pin.as_deref());
         let server = t.join().unwrap();
         Ok((client?, server?))
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn independent_health_monitor_stops_a_previously_responsive_owned_core() {
+        use std::io::{BufRead, Write};
+        let root = tempfile::tempdir().unwrap();
+        let app = fixture(root.path(), Role::Source);
+        let runtime = tempfile::tempdir().unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(runtime.path().join("deskflow-core")).unwrap();
+        lock(&app.engine).install_health_fixture(runtime);
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let fake = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            {
+                let mut reader = std::io::BufReader::new(socket.try_clone().unwrap());
+                let mut hello = String::new();
+                reader.read_line(&mut hello).unwrap();
+            }
+            socket.write_all(b"hello=1.27.0\n").unwrap();
+            {
+                let mut reader = std::io::BufReader::new(socket.try_clone().unwrap());
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                assert_eq!(request, "noop\n");
+            }
+            socket.write_all(b"ok\n").unwrap();
+            ready_tx.send(()).unwrap();
+            let (_hung, _) = listener.accept().unwrap();
+            done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        let weak = Arc::downgrade(&app);
+        let supervisor = std::thread::spawn(move || Managed::health_worker(weak));
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while lock(&app.state).saved.enabled && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!lock(&app.state).saved.enabled);
+        assert!(lock(&app.state)
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("未响应"));
+        assert!(lock(&app.engine).health_target().is_none());
+        app.stopping.store(true, Ordering::SeqCst);
+        done_tx.send(()).unwrap();
+        fake.join().unwrap();
+        supervisor.join().unwrap();
+    }
+    #[test]
+    fn authenticated_clipboard_frame_transports_one_mib_without_plaintext_diagnostics() {
+        let da = tempfile::tempdir().unwrap();
+        let db = tempfile::tempdir().unwrap();
+        let a = fixture(da.path(), Role::Source);
+        let b = fixture(db.path(), Role::Target);
+        a.clipboard.set_enabled(true).unwrap();
+        b.clipboard.set_enabled(true).unwrap();
+        let aid = a.info().id;
+        let bid = b.info().id;
+        a.clipboard.activate(&bid);
+        b.clipboard.activate(&aid);
+        for _ in 0..3 {
+            let req = a.clipboard.request().unwrap();
+            let epoch = req.epoch().to_owned();
+            let response = b.clipboard.exchange(&aid, req).unwrap();
+            a.clipboard.complete(&epoch, response).unwrap();
+        }
+        a.clipboard.observe(Some("baseline"), |_| panic!());
+        let value = "x".repeat(super::super::clipboard::TEXT_LIMIT);
+        a.clipboard.observe(Some(&value), |_| panic!());
+        let request = Request::Clipboard {
+            exchange: a.clipboard.request().unwrap(),
+        };
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let sender_id = lock(&a.state).saved.identity.clone();
+        let receiver_id = lock(&b.state).saved.identity.clone();
+        let sender_pin = sender_id.fingerprint().unwrap();
+        let receiver_pin = receiver_id.fingerprint().unwrap();
+        let task = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            let mut ch = Channel::accept(&receiver_id, socket, vec![sender_pin], false).unwrap();
+            let req: Request = ch
+                .receive_limited(super::super::clipboard::FRAME_LIMIT)
+                .unwrap();
+            let Request::Clipboard { exchange } = req else {
+                panic!("expected clipboard");
+            };
+            let response = b.clipboard.exchange(&aid, exchange).unwrap();
+            ch.send_limited(&response, super::super::clipboard::FRAME_LIMIT)
+                .unwrap();
+            b.clipboard.observe(Some("baseline"), |_| Ok(()));
+            assert!(!serde_json::to_string(&b.clipboard.view())
+                .unwrap()
+                .contains(&"x".repeat(100)));
+        });
+        let mut ch = Channel::connect(&sender_id, addr, Some(&receiver_pin)).unwrap();
+        ch.send_limited(&request, super::super::clipboard::FRAME_LIMIT)
+            .unwrap();
+        let _: super::super::clipboard::ExchangeReply = ch
+            .receive_limited(super::super::clipboard::FRAME_LIMIT)
+            .unwrap();
+        task.join().unwrap();
+    }
+    #[test]
+    fn clipboard_rpc_rejects_unpaired_disabled_and_disconnected_devices() {
+        let da = tempfile::tempdir().unwrap();
+        let db = tempfile::tempdir().unwrap();
+        let a = fixture(da.path(), Role::Source);
+        let b = fixture(db.path(), Role::Target);
+        a.clipboard.set_enabled(true).unwrap();
+        a.clipboard.activate(&b.info().id);
+        let (_, mut ch) = channels(&a, &b, None).unwrap();
+        assert!(
+            !b.handle(
+                &mut ch,
+                Request::Clipboard {
+                    exchange: a.clipboard.request().unwrap()
+                }
+            )
+            .ok
+        );
+        let id = a.info().id;
+        lock(&b.state).saved.peer = Some(Peer {
+            id,
+            name: "source".into(),
+            platform: "macOS".into(),
+            fingerprint: ch.fingerprint.clone(),
+            ip: "192.168.1.1".parse().unwrap(),
+            local_ip: "192.168.1.2".parse().unwrap(),
+        });
+        assert!(
+            !b.handle(
+                &mut ch,
+                Request::Clipboard {
+                    exchange: a.clipboard.request().unwrap()
+                }
+            )
+            .ok
+        );
+        b.clipboard.set_enabled(true).unwrap();
+        assert!(
+            !b.handle(
+                &mut ch,
+                Request::Clipboard {
+                    exchange: a.clipboard.request().unwrap()
+                }
+            )
+            .ok
+        );
+        assert!(b.clipboard.request().is_none());
     }
     #[test]
     fn remote_scroll_requires_the_pinned_source_and_enforces_bounds() {

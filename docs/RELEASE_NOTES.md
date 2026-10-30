@@ -1,3 +1,16 @@
+## WenBox v1.4.8 · M3 文本同步与恢复（测试版）
+
+- 新增双向文本剪贴板开关，默认关闭；两端开启且输入已连接后同步新复制的 UTF-8 文本，上限 1 MiB，支持中文和多行内容。关闭、断线或撤权即暂停，不补发旧会话内容。
+- 新增“收回并停止输入”，保留配对并暂停流转；Mac 独立监测自有输入核心私有 IPC，连续无响应时停止该核心，恢复本机操作。Windows 目标挂死时逐键释放及端到端时延指标仍需后续验证。
+- 自定义修饰键映射按对端分别保存，更新完整中文安装、权限恢复与双机测试文档。
+- 本版是 M3 测试包，1 MiB 双机系统剪贴板时延、断网/挂死按键状态与休眠恢复仍需真机验收。
+
+### Windows WebView2
+
+安装包不含 WebView2；缺少时请从[微软官方下载页](https://developer.microsoft.com/microsoft-edge/webview2/#download-section)下载 Evergreen Standalone Installer x64，安装后重新打开 WenBox。具体步骤见[安装文档](INSTALLATION.md)。
+
+---
+
 ## WenBox v1.4.7 · 流转体验与安装优化
 
 M2.6 测试版新增：

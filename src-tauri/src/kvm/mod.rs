@@ -3,6 +3,7 @@
 mod broker_client;
 #[cfg(any(windows, test))]
 mod broker_protocol;
+mod clipboard;
 #[cfg(test)]
 mod config;
 mod engine;
@@ -107,6 +108,7 @@ fn permissions() -> Option<Permissions> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
+    clipboard: clipboard::View,
     keyboard_map: KeyboardMap,
     scroll_speed: Option<u16>,
     pointer_speed: Option<u16>,
@@ -151,6 +153,7 @@ fn status() -> Result<Status, String> {
         message
     };
     Ok(Status {
+        clipboard: m.clipboard_view(),
         keyboard_map: m.keyboard_map(),
         scroll_speed: m.scroll_speed(),
         pointer_speed: m.pointer_speed(),
@@ -162,7 +165,7 @@ fn status() -> Result<Status, String> {
         engine_diagnostics: m.engine_diagnostics(),
         service_ready: service,
         service_error,
-        kvm_revision: "m2.6",
+        kvm_revision: "m3.0",
         profile_ready: view.peer.is_some(),
         role: Some(view.local.role),
         tls_configured: true,
@@ -259,6 +262,20 @@ pub async fn kvm_layout(window: tauri::Window, side: Side) -> Result<(), String>
 pub async fn kvm_role(window: tauri::Window, role: Role) -> Result<(), String> {
     local(&window)?;
     tauri::async_runtime::spawn_blocking(move || manager()?.role(role))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn kvm_release(window: tauri::Window) -> Result<(), String> {
+    local(&window)?;
+    tauri::async_runtime::spawn_blocking(move || manager()?.emergency_release())
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn kvm_clipboard(window: tauri::Window, enabled: bool) -> Result<(), String> {
+    local(&window)?;
+    tauri::async_runtime::spawn_blocking(move || manager()?.set_clipboard(enabled))
         .await
         .map_err(|e| e.to_string())?
 }
