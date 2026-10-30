@@ -18,6 +18,43 @@
         const hash = characters.reduce((value, character) => (Math.imul(value, 31) + character.codePointAt(0)) | 0, 0);
         return { initial: characters[0].toUpperCase(), tone: (hash >>> 0) % 8 };
     }
+    function createChatIdentity(storage, session, generate = () => 'cid_' + Math.random().toString(36).slice(2) + '_' + Date.now().toString(36)) {
+        const key = 'wenbox_chat_identity';
+        const valid = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(id);
+        const read = (store, key) => { try { return store?.getItem(key); } catch (_) { return null; } };
+        let saved;
+        try { saved = JSON.parse(read(storage, key)); } catch (_) {}
+        const previous = [read(storage, 'wenbox_client_id'), read(session, 'wenbox_client_id')].filter(valid);
+        const id = valid(saved?.id) ? saved.id : previous[0] || generate();
+        const aliases = new Set((Array.isArray(saved?.aliases) ? saved.aliases : []).filter(valid).filter(v => v !== id).slice(0, 64));
+        for (const old of previous) if (old !== id && aliases.size < 64) aliases.add(old);
+        const save = values => storage.setItem(key, JSON.stringify({ schema: 1, id, aliases: Array.from(values) }));
+        let persistent = true;
+        try { save(aliases); } catch (_) { persistent = false; }
+        // Preserve continuity when opening an older client version in this same profile.
+        for (const store of [storage, session]) { try { store?.setItem('wenbox_client_id', id); } catch (_) {} }
+        return {
+            id, persistent,
+            owns(value) { return valid(value) && (value === id || aliases.has(value)); },
+            restored(value) { return aliases.has(value); },
+            claim(value) {
+                if (!valid(value)) throw new Error('历史消息身份无效');
+                if (value === id || aliases.has(value)) return;
+                if (aliases.size >= 64) throw new Error('历史身份数量已达上限');
+                const next = new Set(aliases); next.add(value); save(next); aliases.add(value);
+            },
+            unclaim(value) {
+                if (!aliases.has(value)) return;
+                const next = new Set(aliases); next.delete(value); save(next); aliases.delete(value);
+            },
+            canRestore(value) { return valid(value) && value !== id && !aliases.has(value); }
+        };
+    }
+    function sameMessageGroup(previous, current) {
+        if (!previous || previous.sender !== current.sender || previous.mine !== current.mine) return false;
+        const gap = Number(current.timestamp) - Number(previous.timestamp);
+        return Number.isFinite(gap) && gap >= 0 && gap < 120000;
+    }
     function createOutbox() {
         const entries = new Map();
         let serial = 0;
@@ -64,5 +101,5 @@
         const preferred = (ips || []).find(item => item.is_preferred || item.isPreferred);
         return address(preferred || (ips || [])[0] || { ip: '127.0.0.1' });
     }
-    root.WenBoxUI = { createCooldown, avatar, createOutbox, isLinkLocal, selectDirectPeer, selectLocalAddress };
+    root.WenBoxUI = { createChatIdentity, sameMessageGroup, createCooldown, avatar, createOutbox, isLinkLocal, selectDirectPeer, selectLocalAddress };
 })(typeof window === 'undefined' ? globalThis : window);

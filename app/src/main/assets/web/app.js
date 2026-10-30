@@ -224,6 +224,8 @@
             'copy-code': () => window.copyChatCode(button),
             'refresh-files': () => loadFiles(),
             'retry-message': () => retryMessage(button.dataset.value),
+            'restore-message-author': () => restoreMessageAuthor(value),
+            'unrestore-message-author': () => restoreMessageAuthor(value, true),
             'cancel-upload': () => uploadQueue?.cancel(button.dataset.uploadId),
             'retry-upload': () => uploadQueue?.retry(button.dataset.uploadId)
         };
@@ -2593,10 +2595,38 @@
         if (!keepCursor) { knownMessageIds.clear(); lastKnownMessageTimestamp = 0; chatHasSynced = false; }
     }
 
-    let myClientId = sessionStorage.getItem('wenbox_client_id');
-    if (!myClientId) {
-        myClientId = 'cid_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
-        sessionStorage.setItem('wenbox_client_id', myClientId);
+    const chatIdentity = window.WenBoxUI.createChatIdentity(localStorage, sessionStorage);
+    const myClientId = chatIdentity.id;
+    if (!chatIdentity.persistent) showToast('无法保存本机消息身份，重启后可能需要恢复历史消息显示');
+
+    function refreshMessageAuthors() {
+        let previous = null;
+        for (const item of webChatMessages.querySelectorAll('.chat-item')) {
+            const clientId = item.dataset.clientId;
+            const mine = chatIdentity.owns(clientId) || item.dataset.legacyOwn === 'true';
+            const sender = mine ? 'self:' + myClientId : clientId || item.dataset.legacySender;
+            const current = { sender, mine, timestamp: item.dataset.timestamp };
+            item.classList.toggle('is-me', mine);
+            item.classList.toggle('grouped', window.WenBoxUI.sameMessageGroup(previous, current));
+            item.dataset.sender = sender;
+            const header = item.querySelector('.chat-item_user');
+            header.classList.toggle('from-me', mine); header.classList.toggle('from-other', !mine);
+            header.querySelector('.user-name').textContent = (mine ? '（我）' : '') + item.dataset.authorName;
+            const restore = item.querySelector('.chat-identity-restore');
+            if (restore) {
+                restore.hidden = mine && !chatIdentity.restored(clientId);
+                restore.dataset.action = chatIdentity.restored(clientId) ? 'unrestore-message-author' : 'restore-message-author';
+                restore.textContent = chatIdentity.restored(clientId) ? '撤销恢复' : '这是我发的';
+            }
+            previous = current;
+        }
+    }
+    function restoreMessageAuthor(clientId, undo = false) {
+        try {
+            if (undo) chatIdentity.unclaim(clientId); else chatIdentity.claim(clientId);
+            refreshMessageAuthors();
+            showToast(undo ? '已撤销历史消息的位置恢复' : '已恢复这台设备的历史消息位置，仅影响本机显示');
+        } catch (error) { showToast('无法保存历史归属：' + error.message); }
     }
 
     function getClientSenderName() {
@@ -2757,15 +2787,17 @@
 
         const myName = getClientSenderName();
         const cleanSender = (msg.senderName || '').replace(/^[📱💻👑\s]+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim() || (msg.isFromPhone ? '手机用户' : '成员');
-        const isMe = (msg.clientId && msg.clientId === myClientId)
+        const isMe = (msg.clientId && chatIdentity.owns(msg.clientId))
             || (!msg.clientId && !msg.isFromPhone && (msg.senderName === myName || cleanSender === myName));
 
         // 整体条目: .chat-item (带悬停变色)
         const item = document.createElement('div');
         item.className = 'chat-item' + (isMe ? ' is-me' : '');
-        const senderKey = msg.clientId || `${cleanSender}|${msg.senderIp || ''}`;
+        const senderKey = isMe ? 'self:' + myClientId : msg.clientId || `${cleanSender}|${msg.senderIp || ''}`;
+        item.dataset.clientId = msg.clientId || ''; item.dataset.authorName = cleanSender;
+        item.dataset.legacyOwn = String(!msg.clientId && isMe); item.dataset.legacySender = `${cleanSender}|${msg.senderIp || ''}`;
         const previous = target.lastElementChild || webChatMessages.lastElementChild;
-        if (previous?.dataset.sender === senderKey && Number(msg.timestamp) - Number(previous.dataset.timestamp) < 120000) item.classList.add('grouped');
+        if (window.WenBoxUI.sameMessageGroup(previous && { sender: previous.dataset.sender, mine: previous.classList.contains('is-me'), timestamp: previous.dataset.timestamp }, { sender: senderKey, mine: !!isMe, timestamp: msg.timestamp })) item.classList.add('grouped');
         item.dataset.sender = senderKey; item.dataset.timestamp = String(msg.timestamp);
 
         // 消息头: .chat-item_user (仅展示纯昵称，不展示不准确的设备图标与IP)
@@ -2798,6 +2830,15 @@
         timeSpan.className = 'chat-item_time';
         timeSpan.textContent = formatTime(msg.timestamp);
         userHeader.appendChild(timeSpan);
+        let ownershipButton = null;
+        if (chatIdentity.restored(msg.clientId) || (chatIdentity.canRestore(msg.clientId) && (cleanSender === myName || msg.senderName === myName))) {
+            const restore = document.createElement('button'); restore.type = 'button';
+            restore.className = 'chat-identity-restore'; restore.dataset.value = msg.clientId;
+            restore.dataset.action = chatIdentity.restored(msg.clientId) ? 'unrestore-message-author' : 'restore-message-author';
+            restore.textContent = chatIdentity.restored(msg.clientId) ? '撤销恢复' : '这是我发的';
+            restore.title = '仅调整本机显示，不修改房间消息内容'; ownershipButton = restore;
+        }
+
 
         // 消息内容与复制按钮容器: .chat-item_content
         const contentWrap = document.createElement('div');
@@ -2989,6 +3030,7 @@
 
         item.appendChild(userHeader);
         item.appendChild(contentWrap);
+        if (ownershipButton) item.appendChild(ownershipButton);
         target.appendChild(item);
         return item;
     }

@@ -342,6 +342,47 @@ async function main() {
         await page.evaluate(() => WenBox.scheduler.runNow());
         await page.waitForFunction(() => document.body.dataset.remoteConnection === 'ready');
         assert.equal(await page.locator('.chat-item').count(), existingMessages, 'credential refresh must keep attachment history');
+        // A real app restart drops sessionStorage, while the same local profile keeps identity.
+        const ownId = await page.evaluate(() => JSON.parse(localStorage.getItem('wenbox_chat_identity')).id);
+        const sameName = await page.evaluate(() => localStorage.getItem('wenbox_nickname'));
+        const currentTime = Date.now() + serial + 100;
+        messages.push({id:'legacy-own-1',clientId:'cid_before_upgrade',senderName:sameName,senderIp:'192.168.1.20',content:'[file:重启前自己的文件消息.exe|16 MB|/api/download/legacy-own]',timestamp:currentTime});
+        messages.push({id:'same-name-other',clientId:'cid_other_device',senderName:sameName,senderIp:'192.168.1.20',content:'同名但另一台设备的消息',timestamp:currentTime+1});
+        await page.evaluate(() => WenBox.scheduler.runNow());
+        const oldOwn = page.locator('.chat-item').filter({hasText:'重启前自己的文件消息'});
+        const sameNamedOther = page.locator('.chat-item').filter({hasText:'同名但另一台设备的消息'});
+        await oldOwn.waitFor();
+        assert.equal(await oldOwn.evaluate(el => el.classList.contains('is-me')),false);
+        const oldAttachmentUrl = await oldOwn.locator('.chat-file-download-btn').getAttribute('href');
+        await oldOwn.locator('[data-action="restore-message-author"]').click();
+        assert.equal(await oldOwn.locator('.chat-file-download-btn').getAttribute('href'),oldAttachmentUrl);
+        assert.equal(await oldOwn.evaluate(el => el.classList.contains('is-me')),true);
+        assert.equal(await sameNamedOther.evaluate(el => el.classList.contains('is-me')),false);
+        // Recreate the window with a fresh tab session and reload hosted room history.
+        await page.evaluate(() => { sessionStorage.clear(); });
+        await page.reload();
+        await page.locator('#btnBrowseRooms').click();
+        await page.locator('[data-action="join-room"]').waitFor();
+        await page.locator('[data-action="join-room"]').click();
+        await page.locator('#modalInputJoinPin').fill('6888');
+        await page.locator('#modalBtnConfirmJoinPin').click();
+        await page.waitForFunction(() => document.body.dataset.roomMode === 'joined');
+        await page.waitForFunction(() => !document.getElementById('joinRoomPinModal').open);
+        await page.locator('.chat-item').filter({hasText:'重启前自己的文件消息'}).waitFor();
+        assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('wenbox_chat_identity')).id), ownId);
+        assert.equal(await oldOwn.evaluate(el => el.classList.contains('is-me')),true);
+        assert.equal(await sameNamedOther.evaluate(el => el.classList.contains('is-me')),false);
+        await page.locator('#webChatMessageInput').fill('重启后仍是我的消息');
+        await page.locator('#webBtnSendMessage').click();
+        const afterRestart = page.locator('.chat-item').filter({hasText:'重启后仍是我的消息'});
+        await afterRestart.waitFor();
+        assert.equal(await afterRestart.evaluate(el => el.classList.contains('is-me')),true);
+        await page.waitForFunction(() => !document.querySelector('[data-delivery]'));
+        assert.equal(messages.find(m => m.content === '重启后仍是我的消息').clientId,ownId);
+        await oldOwn.locator('[data-action="unrestore-message-author"]').click();
+        assert.equal(await oldOwn.evaluate(el => el.classList.contains('is-me')),false);
+        await oldOwn.locator('[data-action="restore-message-author"]').click();
+        await page.screenshot({ path: path.join(screenshots,'chat-after-restart.png') });
         // Error details remain selectable and copyable; no real save is performed.
         await page.evaluate(async () => {
             window.__TAURI__ = { dialog: { save: async () => '/tmp/fixture.pdf' }, clipboard: { writeText: async text => { window.copiedError = text; } }, invoke: async () => { throw Error('fixture file download: status code 404'); } };
@@ -418,7 +459,7 @@ async function main() {
         await page.locator('#btnLeaveRoom').click(); await page.locator('#appConfirmOkBtn').click();
         await page.waitForFunction(() => document.body.dataset.roomMode === 'client');
         assert.deepEqual(browserErrors, []); assert.deepEqual(failures, []);
-        console.log('Browser regression passed: strict CSP, create/join/leave, PIN modes/reveal/429 cooldown, optimistic messages/retry/reconciliation/avatars, code copy, metadata-only publication, room/chat drop routing, download, tools, tablet drawer, mobile segments, and light/dark screenshots.');
+        console.log('Browser regression passed: strict CSP, create/join/leave, PIN modes/reveal/429 cooldown, optimistic messages/retry/reconciliation/avatars, code copy, metadata-only publication, room/chat drop routing, restart identity/ownership recovery, download, tools, tablet drawer, mobile segments, and light/dark screenshots.');
     } catch (error) {
         await page?.screenshot({ path: path.join(screenshots, 'failure.png'), fullPage: true }).catch(() => {});
         console.error('Browser errors:', browserErrors);

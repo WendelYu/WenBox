@@ -36,3 +36,47 @@ test('outbox reconciles one repeated message at a time and isolates rooms and se
     assert.equal(outbox.get(second.id), second);
     outbox.clear(); assert.equal(outbox.get(second.id), undefined);
 });
+
+function memoryStorage(initial = {}) {
+    const entries = new Map(Object.entries(initial));
+    return { getItem: key => entries.get(key) ?? null, setItem: (key, value) => entries.set(key, String(value)) };
+}
+test('chat identity survives app restart, migrates a live session and preserves known aliases', () => {
+    const local = memoryStorage();
+    const first = context.WenBoxUI.createChatIdentity(local, memoryStorage({ wenbox_client_id: 'cid_live_session' }), () => 'cid_unexpected');
+    assert.equal(first.id, 'cid_live_session');
+    const restarted = context.WenBoxUI.createChatIdentity(local, memoryStorage(), () => 'cid_new');
+    assert.equal(restarted.id, first.id);
+    const anotherOldTab = context.WenBoxUI.createChatIdentity(local, memoryStorage({ wenbox_client_id: 'cid_other_session' }));
+    assert.equal(anotherOldTab.id, first.id);
+    assert.equal(anotherOldTab.owns('cid_other_session'), true);
+    assert.equal(context.WenBoxUI.createChatIdentity(local, memoryStorage()).owns('cid_other_session'), true);
+});
+test('history ownership is explicit, persistent and reversible; a same-name sender is never auto-claimed', () => {
+    const local = memoryStorage();
+    const identity = context.WenBoxUI.createChatIdentity(local, memoryStorage(), () => 'cid_current');
+    assert.equal(identity.owns('cid_different_device'), false);
+    identity.claim('cid_old_app'); assert.equal(identity.owns('cid_old_app'), true);
+    const reopened = context.WenBoxUI.createChatIdentity(local, memoryStorage());
+    assert.equal(reopened.owns('cid_old_app'), true);
+    reopened.unclaim('cid_old_app');
+    assert.equal(context.WenBoxUI.createChatIdentity(local, memoryStorage()).owns('cid_old_app'), false);
+    assert.equal(reopened.owns('cid_different_device'), false);
+    assert.throws(() => reopened.claim('<untrusted>'), /无效/);
+});
+test('failed storage never reports a history claim as saved', () => {
+    const storage = memoryStorage();
+    const identity = context.WenBoxUI.createChatIdentity(storage, memoryStorage(), () => 'cid_current');
+    storage.setItem = () => { throw Error('quota'); };
+    assert.throws(() => identity.claim('cid_old'), /quota/);
+    assert.equal(identity.owns('cid_old'), false);
+});
+test('message grouping keeps authors and sides separate and rejects backward timestamps', () => {
+    const group = context.WenBoxUI.sameMessageGroup;
+    const first = { sender: 'self:cid', mine: true, timestamp: 200000 };
+    assert.equal(group(first, { ...first, timestamp: 201000 }), true);
+    assert.equal(group(first, { ...first, mine: false, timestamp: 201000 }), false);
+    assert.equal(group(first, { ...first, sender: 'cid_someone_else', timestamp: 201000 }), false);
+    assert.equal(group(first, { ...first, timestamp: 190000 }), false);
+    assert.equal(group(first, { ...first, timestamp: 400000 }), false);
+});
