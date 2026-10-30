@@ -211,6 +211,14 @@ impl Channel {
         value: &T,
         limit: usize,
     ) -> Result<(), String> {
+        self.send_guarded(value, limit, || true)
+    }
+    pub fn send_guarded<T: serde::Serialize>(
+        &mut self,
+        value: &T,
+        limit: usize,
+        allowed: impl Fn() -> bool,
+    ) -> Result<(), String> {
         let mut bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
         if bytes.len() > limit {
             return Err("设备消息过大".into());
@@ -219,6 +227,9 @@ impl Channel {
         let until = Instant::now() + Duration::from_secs(4);
         // rustls bounds queued plaintext; flush each record instead of staging a MiB at once.
         for chunk in bytes.chunks(16384) {
+            if !allowed() {
+                return Err("设备传输已停止".into());
+            }
             self.connection
                 .writer()
                 .write_all(chunk)

@@ -64,6 +64,11 @@ pub struct ExchangeReply {
     known: Option<Version>,
     packet: Option<Packet>,
 }
+impl ExchangeReply {
+    pub fn epoch(&self) -> &str {
+        &self.epoch
+    }
+}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct View {
@@ -196,6 +201,10 @@ impl Clipboard {
                 clock: 0,
             });
         }
+    }
+    pub fn is_current(&self, epoch: &str) -> bool {
+        let s = self.lock();
+        s.enabled && s.link.as_ref().is_some_and(|l| l.epoch == epoch)
     }
     pub fn request(&self) -> Option<Exchange> {
         let s = self.lock();

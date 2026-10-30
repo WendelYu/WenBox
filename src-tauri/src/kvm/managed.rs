@@ -344,13 +344,15 @@ impl Managed {
             }
             if let Some((id, peer)) = this.clipboard_context() {
                 this.clipboard.activate(&peer.id);
-                if desktop.is_none() {
+                if this.clipboard.view().active && desktop.is_none() {
                     desktop = arboard::Clipboard::new().ok();
                     if desktop.is_none() {
                         this.clipboard.notice("暂时无法访问系统剪贴板，将自动重试");
+                    } else {
+                        this.clipboard.notice("已连接，仅同步新复制的文本");
                     }
                 }
-                if let Some(clipboard) = desktop.as_mut() {
+                if let Some(clipboard) = desktop.as_mut().filter(|_| this.clipboard.view().active) {
                     let text = clipboard.get_text().ok();
                     this.clipboard.observe(text.as_deref(), |text| {
                         clipboard
@@ -366,9 +368,10 @@ impl Managed {
                             SocketAddr::from((peer.ip, CONTROL_PORT)),
                             Some(&peer.fingerprint),
                         )?;
-                        channel.send_limited(
+                        channel.send_guarded(
                             &Request::Clipboard { exchange },
                             super::clipboard::FRAME_LIMIT,
+                            || this.clipboard.is_current(&epoch),
                         )?;
                         let reply: Reply =
                             channel.receive_limited(super::clipboard::FRAME_LIMIT)?;
@@ -1225,8 +1228,17 @@ impl Managed {
                                     },
                                 ) {
                                     let response = conn.handle(&mut ch, req);
-                                    let _ =
-                                        ch.send_limited(&response, super::clipboard::FRAME_LIMIT);
+                                    let reply_epoch =
+                                        response.clipboard.as_ref().map(|r| r.epoch().to_owned());
+                                    let _ = ch.send_guarded(
+                                        &response,
+                                        super::clipboard::FRAME_LIMIT,
+                                        || {
+                                            reply_epoch.as_ref().is_none_or(|epoch| {
+                                                conn.clipboard.is_current(epoch)
+                                            })
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -1403,6 +1415,10 @@ mod tests {
                 .contains(&"x".repeat(100)));
         });
         let mut ch = Channel::connect(&sender_id, addr, Some(&receiver_pin)).unwrap();
+        assert_eq!(
+            ch.send_guarded(&request, super::super::clipboard::FRAME_LIMIT, || false),
+            Err("设备传输已停止".into())
+        );
         ch.send_limited(&request, super::super::clipboard::FRAME_LIMIT)
             .unwrap();
         let _: super::super::clipboard::ExchangeReply = ch
