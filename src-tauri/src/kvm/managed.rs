@@ -344,22 +344,6 @@ impl Managed {
             }
             if let Some((id, peer)) = this.clipboard_context() {
                 this.clipboard.activate(&peer.id);
-                if this.clipboard.view().active && desktop.is_none() {
-                    desktop = arboard::Clipboard::new().ok();
-                    if desktop.is_none() {
-                        this.clipboard.notice("暂时无法访问系统剪贴板，将自动重试");
-                    } else {
-                        this.clipboard.notice("已连接，仅同步新复制的文本");
-                    }
-                }
-                if let Some(clipboard) = desktop.as_mut().filter(|_| this.clipboard.view().active) {
-                    let text = clipboard.get_text().ok();
-                    this.clipboard.observe(text.as_deref(), |text| {
-                        clipboard
-                            .set_text(text)
-                            .map_err(|_| "剪贴板写入失败".into())
-                    });
-                }
                 if let Some(exchange) = this.clipboard.request() {
                     let epoch = exchange.epoch().to_owned();
                     let result = (|| -> Result<_, String> {
@@ -386,13 +370,31 @@ impl Managed {
                     }) {
                         match result {
                             Ok(reply) => {
-                                let _ = this.clipboard.complete(&epoch, reply);
+                                if this.clipboard.complete(&epoch, reply).is_err() {
+                                    this.clipboard.pause("文本同步消息无效，已暂停");
+                                }
                             }
                             Err(_) => this.clipboard.pause("等待对端开启文本同步或恢复连接"),
                         }
                     } else {
                         this.clipboard.pause("输入已断开，文本同步暂停");
                     }
+                }
+                if this.clipboard.view().active && desktop.is_none() {
+                    desktop = arboard::Clipboard::new().ok();
+                    if desktop.is_none() {
+                        this.clipboard.notice("暂时无法访问系统剪贴板，将自动重试");
+                    } else {
+                        this.clipboard.notice("已连接，仅同步新复制的文本");
+                    }
+                }
+                if let Some(clipboard) = desktop.as_mut().filter(|_| this.clipboard.view().active) {
+                    let text = clipboard.get_text().ok();
+                    this.clipboard.observe(text.as_deref(), |text| {
+                        clipboard
+                            .set_text(text)
+                            .map_err(|_| "剪贴板写入失败".into())
+                    });
                 }
             } else {
                 this.clipboard.pause("输入未连接，文本同步暂停");
