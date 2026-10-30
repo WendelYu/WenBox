@@ -1,0 +1,61 @@
+{
+  "date": "2026-10-30",
+  "version": "1.4.8",
+  "revision": "m3.0",
+  "branch": "codex/kvm-m3-clipboard-recovery",
+  "mainRelease": {
+    "version": "1.4.7",
+    "commit": "e7949de7c78ec6f4ee00e63fa0cebdb74faa6d59",
+    "url": "https://github.com/WendelYu/WenBox/releases/tag/v1.4.7",
+    "workflow": "https://github.com/WendelYu/WenBox/actions/runs/40982036506",
+    "result": "success"
+  },
+  "checks": {
+    "macRust": {
+      "passed": 82,
+      "ignored": 1
+    },
+    "node": {
+      "passed": 47
+    },
+    "android": {
+      "passed": 33
+    },
+    "browserWorkspace": "passed",
+    "browserM3Controls": "passed",
+    "macUniversalBuild": "passed",
+    "macResourceIntegrity": "68 files verified",
+    "macAdHocSignature": "verified"
+  },
+  "macSource": "c4603940c2d05ae4899fdfa213b9dccbdab25004",
+  "windowsSource": "9d2f6d1c41d82e4e7da6bcbeac517ef20a0a1abd",
+  "platformDifference": "Mac-only sleep/wall-clock health baseline reset; no Windows functional change",
+  "windows": {
+    "run": "https://github.com/WendelYu/WenBox/actions/runs/40985502957",
+    "status": "success",
+    "rustPassed": 77,
+    "rustIgnored": 1,
+    "resourceFilesVerified": 89,
+    "defaultAndCustomInstallUpgradeUninstall": "passed",
+    "serviceBoundary": "passed",
+    "unsafeParentRejected": true
+  },
+  "artifacts": [
+    {
+      "file": "WenBox-M3.0-macOS-universal.zip",
+      "bytes": 60395828,
+      "sha256": "78b88b9757095fd834b88282bbe93b2cc0f982e2ae471d3a5b140b724030fd4f"
+    },
+    {
+      "file": "WenBox-M3.0-Windows-x64-setup.exe",
+      "bytes": 17532166,
+      "sha256": "164c12d0699490db2a1e49ce9f39342bb1d3f47406ea68ed98b495e9de31c418"
+    }
+  ],
+  "remaining": [
+    "Real desktop clipboard 1MiB latency and two-way behavior",
+    "Windows hung input core independent per-session key release",
+    "End-to-end 100ms/2s recovery and physical key/button state",
+    "Wake/network/multi-monitor measurements; remaining requirements documented in KVM_M3_INTEGRATION.md"
+  ]
+}
