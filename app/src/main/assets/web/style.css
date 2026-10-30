@@ -2312,13 +2312,11 @@ dialog.modal .modal-header { margin-bottom:var(--sp-4); }
 .max-w-lg { max-width: 560px; }
 .max-w-90vw { max-width: 90vw; }
 .max-h-75vh { max-height: 75vh; }
-.mw-120 { max-width: 120px; }
 .p-2 { padding:var(--sp-2); }
 .p-3 { padding:var(--sp-3); }
 .p-4 { padding:var(--sp-4); }
 .py-6 { padding-top:var(--sp-6); padding-bottom:var(--sp-6); }
 .mt-6 { margin-top:var(--sp-6); }
-.mb-3 { margin-bottom:var(--sp-3); }
 .gap-4 { gap:var(--sp-4); }
 .scroll-y { overflow-y:auto; }
 .center { display:flex; align-items:center; justify-content:center; }
@@ -2338,7 +2336,6 @@ dialog.modal .modal-header { margin-bottom:var(--sp-4); }
 .fs-3xl { font-size:var(--fs-3xl); }
 .fw-medium { font-weight:var(--fw-medium); }
 .fw-semibold { font-weight:var(--fw-semibold); }
-.text-warning { color:var(--warning-fg); }
 .text-info { color:var(--primary-fg); }
 .surface-inset {
     background:var(--surface-2);
