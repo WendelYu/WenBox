@@ -462,9 +462,11 @@ dialog.members-drawer { border-radius: var(--r-xl) 0 0 var(--r-xl); padding: 28p
 [id="clientVersion"] { font-variant-numeric: tabular-nums; }
 @media (max-width: 760px) { .device-status { flex-wrap: wrap; } [id="serviceHealth"] { font-size: var(--fs-xs); } }
 @media (max-width: 520px) {
-  .header { flex-wrap: wrap; gap: 8px; }
+  .app-container { grid-template-rows: auto auto minmax(0, 1fr); }
+  .header { height: auto; min-height: 66px; padding-block: 10px; flex-wrap: wrap; gap: 8px; }
   .workspace-heading { flex: 0 0 100%; }
   .device-status { width: 100%; }
+  .room-status-actions { flex: 1 1 100%; justify-content: flex-end; }
 }
 
 .chat-img-thumb-wrapper[data-state="error"] { min-width: 220px; min-height: 100px; }

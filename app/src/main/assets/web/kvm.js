@@ -7,6 +7,7 @@
     const errorBox = node('kvmError');
     const invoke = window.__TAURI__?.invoke || window.__TAURI__?.tauri?.invoke || window.__TAURI_INVOKE__;
     const desktop = typeof invoke === 'function';
+    view.dataset.support = desktop ? 'native' : 'unsupported';
     let snapshot = null, busy = false, polling = false, epoch = 0, timer = null, eventsKey = null, speedDirty = false, scrollDirty = false, keymapDirty = false;
     const visible = () => !view.hidden && !document.hidden;
     function controls() {

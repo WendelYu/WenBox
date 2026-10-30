@@ -300,18 +300,18 @@
 
             </section></aside></div></main><main id="view-kvm" class="primary-view kvm-view" aria-label="键鼠流转" hidden>
                 <section class="card kvm-hero">
-                    <div class="section-header">
-                        <div class="section-title"><span class="kvm-eyebrow">INPUT SHARING</span><h2>连接与设备</h2><span class="subtitle">用一套键鼠操作 Mac 和 Windows</span></div>
-                        <button type="button" class="btn btn--secondary btn--sm" data-kvm="refresh">重新检测</button>
-                    </div>
-                    <div class="kvm-connection-summary"><div id="kvmStatusBadge" class="kvm-status-badge">未开启</div><p id="kvmMessage" role="status" aria-live="polite">打开此页后检测本机输入后端。</p>
-                    </div><p id="kvmError" class="kvm-error" role="alert" hidden></p>
-                    <div class="row row--wrap gap-2 kvm-main-actions">
-                        <button type="button" class="btn btn--primary" data-kvm="start" disabled>开启键鼠流转</button>
-                        <button type="button" class="btn btn--secondary" data-kvm="stop" disabled>关闭流转</button>
-                        <button type="button" class="btn btn--secondary" data-kvm="release" disabled>收回并停止输入</button><button type="button" class="btn btn--secondary" data-kvm="diagnostics" disabled>复制诊断</button>
-                    </div>
-                    <details id="kvmDetails" class="kvm-settings" hidden><summary id="kvmSettingsSummary">权限与连接详情</summary>
+                    <div class="kvm-hero-copy">
+                        <span class="kvm-eyebrow">你的双机工作台</span>
+                        <h2>一套键鼠，自由切换</h2>
+                        <span class="kvm-hero-subtitle">用一套键鼠操作 Mac 和 Windows</span>
+                        <div class="kvm-flow" aria-hidden="true">
+                            <span class="kvm-flow-node"><svg class="icon icon--sm"><use href="#i-monitor"></use></svg>本机</span>
+                            <span class="kvm-flow-track"><span class="kvm-flow-pulse"></span></span>
+                            <span class="kvm-flow-node"><svg class="icon icon--sm"><use href="#i-monitor"></use></svg>对端</span>
+                        </div>
+                        <p id="kvmIntro" class="subtitle kvm-note">按需开启，只与你确认的电脑共享键鼠。房间内其他成员不会自动加入。</p>
+                        <p id="kvmEscape" class="subtitle kvm-escape" hidden>随时按 <kbd>Control + Alt + Escape</kbd> 返回主控电脑。</p>
+                        <details id="kvmDetails" class="kvm-settings" hidden><summary id="kvmSettingsSummary">权限与连接详情</summary>
                     <dl class="kvm-facts">
                         <div><dt>本机</dt><dd id="kvmPlatform">待检测</dd></div>
                         <div><dt>输入角色</dt><dd id="kvmRole">待检测</dd></div>
@@ -328,30 +328,81 @@
                         </div>
                         <p class="subtitle">列表中没有 WenBox？点击“＋”添加当前应用，或从访达拖入列表。授权后重新打开 WenBox。当前版本使用临时签名，更新后可能需要移除旧条目并重新添加；请始终运行“应用程序”中的 WenBox。</p>
                     </div>
-                    </details><p id="kvmIntro" class="subtitle kvm-note">按需开启，只与你确认的电脑共享键鼠。房间内其他成员不会自动加入。</p>
-                    <p id="kvmEscape" class="subtitle" hidden>随时按 <kbd>Control + Alt + Escape</kbd> 返回主控电脑。</p>
-                </section>
-                <section class="card" id="kvmPairingCard" hidden>
-                    <div class="section-title"><h2>配对电脑</h2><span class="subtitle">只允许你确认的设备共享键鼠</span></div>
-                    <div class="kvm-form-row"><label for="kvmRoleSelect">本机角色</label><select id="kvmRoleSelect"><option value="source">使用本机键鼠</option><option value="target">接收对端输入</option></select><button type="button" class="btn btn--secondary btn--sm" data-kvm="role" disabled>保存角色</button></div>
-                    <div class="row row--wrap gap-2"><button type="button" class="btn btn--primary" data-kvm="pairing" disabled>允许新设备配对（2 分钟）</button><button type="button" class="btn btn--secondary" data-kvm="discover" disabled>刷新设备</button></div>
-                    <p id="kvmPairingHint" class="subtitle">两端需要选择不同角色。</p>
-                    <ul id="kvmCandidates" class="kvm-candidates"></ul>
-                    <div class="kvm-form-row"><label for="kvmPeerIp">设备未出现？</label><input id="kvmPeerIp" type="text" inputmode="decimal" placeholder="对端局域网 IPv4 地址" autocomplete="off"><button type="button" class="btn btn--secondary btn--sm" data-kvm="pair" disabled>连接配对</button></div>
-                    <div id="kvmPending" class="kvm-confirm" hidden><p id="kvmPendingName"></p><p class="kvm-code" id="kvmPairCode"></p><p id="kvmPairExpiry" class="subtitle"></p><p>仅当两端验证码完全一致时确认。两端确认后，允许这台设备共享键鼠。</p><div class="row row--wrap gap-2"><button type="button" class="btn btn--primary" data-kvm="confirm" disabled>验证码一致，确认授权</button><button type="button" class="btn btn--secondary" data-kvm="reject" disabled>取消配对</button></div></div>
-                </section>
-                <section class="card" id="kvmLayoutCard" hidden>
-                    <div class="section-header"><div class="section-title"><h2>你的屏幕布局</h2><span id="kvmPeerLabel" class="subtitle"></span></div><button type="button" class="btn btn--secondary btn--sm" data-kvm="forget" disabled>解除配对</button></div>
-                    <div class="kvm-arrangement">                    <p class="subtitle">点击方向即可保存。把对端放到与你桌面一致的位置。</p><div class="kvm-layout" aria-label="两台电脑的相对位置"><button type="button" data-kvm-side="top" class="kvm-direction kvm-top" aria-label="将对端放在上方">↑ 上方</button><button type="button" data-kvm-side="left" class="kvm-direction kvm-left" aria-label="将对端放在左侧">← 左侧</button><button type="button" data-kvm-side="right" class="kvm-direction kvm-right" aria-label="将对端放在右侧">右侧 →</button><button type="button" data-kvm-side="bottom" class="kvm-direction kvm-bottom" aria-label="将对端放在下方">↓ 下方</button><div id="kvmOwnScreen" class="kvm-screen kvm-own">本机</div><div id="kvmPeerScreen" class="kvm-screen kvm-peer"></div></div>
-</div><aside class="kvm-controls-panel" aria-label="被控端速度设置">                    <div id="kvmPointerSettings" class="kvm-pointer" hidden>
-                        <div><h3>被控端鼠标速度</h3><p class="subtitle">只影响跨屏后的移动速度，主控电脑手感不变。</p></div>
-                        <div class="kvm-speed-presets"><button type="button" data-kvm-speed="75">慢 · 0.75×</button><button type="button" data-kvm-speed="100">标准 · 1.0×</button><button type="button" data-kvm-speed="150">快 · 1.5×</button></div>
-                        <div class="kvm-form-row"><label for="kvmPointerSpeed">速度倍率</label><input id="kvmPointerSpeed" type="range" min="50" max="200" step="5" value="100"><output id="kvmPointerValue" for="kvmPointerSpeed">1.00×</output><button type="button" class="btn btn--secondary" data-kvm="speed">保存速度</button></div>
-                        <p class="subtitle">保存会短暂重连；标准速度为 1.0×。</p>
+                    </details>
                     </div>
-                    <div id="kvmScrollSettings" class="kvm-pointer" hidden><h3>被控端滚轮速度</h3><p class="subtitle">调整被控电脑的滚动倍率，与指针速度分开保存。</p><div class="kvm-form-row"><label for="kvmScrollSpeed">滚动倍率</label><input id="kvmScrollSpeed" type="range" min="50" max="200" step="5" value="100"><output id="kvmScrollValue" for="kvmScrollSpeed">1.00×</output><button type="button" class="btn btn--secondary" data-kvm="scroll-speed">保存滚轮速度</button></div><p class="subtitle">保存会短暂重连，默认倍率为 1.0×。</p></div>
-                    <p id="kvmScrollHint" class="subtitle" hidden>正在读取被控端设置；若一直未出现，请将两端更新到同一版本。</p>
-</aside>                    <details class="kvm-layout-advanced"><summary>精确设置与连接说明</summary><div class="kvm-form-row"><label for="kvmSide">对端位于本机</label><select id="kvmSide"><option value="left">左侧</option><option value="right">右侧</option><option value="top">上方</option><option value="bottom">下方</option></select><button type="button" class="btn btn--primary btn--sm" data-kvm="layout" disabled>应用方位</button></div><p class="subtitle">在主控端修改后同步到对端，应用时会短暂重连。关闭流转会立即停止输入共享，但保留配对。</p></details>
+                    <div class="kvm-console">
+                        <div class="kvm-unsupported">
+                            <span class="kvm-unsupported-icon" aria-hidden="true"><svg class="icon"><use href="#i-monitor"></use></svg></span>
+                            <h3>当前客户端暂不支持流转</h3>
+                        </div>
+                        <div class="kvm-console-head">
+                            <span class="kvm-console-label">连接状态</span>
+                            <button type="button" class="btn btn--ghost btn--sm kvm-refresh" data-kvm="refresh"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-refresh-cw"></use></svg><span>重新检测</span></button>
+                        </div>
+                        <div class="kvm-console-state">
+                            <div id="kvmStatusBadge" class="kvm-status-badge">未开启</div>
+                            <p id="kvmMessage" role="status" aria-live="polite">打开此页后检测本机输入后端。</p>
+                            <p id="kvmError" class="kvm-error" role="alert" hidden></p>
+                        </div>
+                        <div class="kvm-hero-actions">
+                            <button type="button" class="btn btn--primary kvm-cta" data-kvm="start" disabled><svg class="icon icon--sm" aria-hidden="true"><use href="#i-play"></use></svg><span>开启键鼠流转</span></button>
+                            <button type="button" class="btn btn--secondary" data-kvm="stop" disabled><svg class="icon icon--sm" aria-hidden="true"><use href="#i-square"></use></svg><span>关闭流转</span></button>
+                            <button type="button" class="btn btn--secondary" data-kvm="release" disabled>收回并停止输入</button>
+                            <button type="button" class="btn btn--secondary" data-kvm="diagnostics" disabled><svg class="icon icon--sm" aria-hidden="true"><use href="#i-copy"></use></svg><span>复制诊断</span></button>
+                        </div>
+                    </div>
+                </section>
+                <section class="card kvm-pair-card" id="kvmPairingCard" hidden>
+                    <div class="kvm-card-head">
+                        <span class="kvm-card-icon" aria-hidden="true"><svg class="icon"><use href="#i-link"></use></svg></span>
+                        <div class="section-title"><h2>配对电脑</h2><span class="subtitle">只允许你确认的设备共享键鼠</span></div>
+                    </div>
+                    <div class="kvm-pair-grid">
+                        <div class="kvm-pair-setup">
+                            <div class="kvm-field"><label for="kvmRoleSelect">本机角色</label><div class="kvm-field-row"><select id="kvmRoleSelect"><option value="source">使用本机键鼠</option><option value="target">接收对端输入</option></select><button type="button" class="btn btn--secondary btn--sm" data-kvm="role" disabled>保存角色</button></div></div>
+                            <div class="kvm-pair-actions"><button type="button" class="btn btn--primary" data-kvm="pairing" disabled>允许新设备配对（2 分钟）</button><button type="button" class="btn btn--secondary" data-kvm="discover" disabled>刷新设备</button></div>
+                            <div class="kvm-field"><label for="kvmPeerIp">设备未出现？</label><div class="kvm-field-row"><input id="kvmPeerIp" type="text" inputmode="decimal" placeholder="对端局域网 IPv4 地址" autocomplete="off"><button type="button" class="btn btn--secondary" data-kvm="pair" disabled>连接配对</button></div></div>
+                        </div>
+                        <div class="kvm-pair-devices">
+                            <h3>附近的电脑</h3>
+                            <ul id="kvmCandidates" class="kvm-candidates"></ul>
+                        </div>
+                    </div>
+                    <p id="kvmPairingHint" class="subtitle kvm-hint">两端需要选择不同角色。</p>
+                    <div id="kvmPending" class="kvm-confirm" hidden>
+                        <div class="kvm-confirm-head"><span class="kvm-confirm-icon" aria-hidden="true"><svg class="icon"><use href="#i-shield"></use></svg></span><div><p id="kvmPendingName" class="kvm-confirm-name"></p><p id="kvmPairExpiry" class="subtitle"></p></div></div>
+                        <div class="kvm-code-wrap"><span class="kvm-code-label">两端验证码</span><p class="kvm-code" id="kvmPairCode"></p></div>
+                        <p class="kvm-confirm-tip">仅当两端验证码完全一致时确认。两端确认后，允许这台设备共享键鼠。</p>
+                        <div class="row row--wrap gap-2"><button type="button" class="btn btn--primary" data-kvm="confirm" disabled>验证码一致，确认授权</button><button type="button" class="btn btn--secondary" data-kvm="reject" disabled>取消配对</button></div>
+                    </div>
+                </section>
+                <section class="card kvm-layout-card" id="kvmLayoutCard" hidden>
+                    <div class="section-header"><div class="section-title"><h2>你的屏幕布局</h2><span id="kvmPeerLabel" class="subtitle"></span></div><button type="button" class="btn btn--secondary btn--sm" data-kvm="forget" disabled>解除配对</button></div>
+                    <p class="subtitle kvm-layout-tip">点击方向即可保存。把对端放到与你桌面一致的位置。</p>
+                    <div class="kvm-layout-body">
+                        <div class="kvm-layout" aria-label="两台电脑的相对位置">
+                            <div class="kvm-stage">
+                                <div id="kvmOwnScreen" class="kvm-screen kvm-own">本机</div>
+                                <div id="kvmPeerScreen" class="kvm-screen kvm-peer"></div>
+                            </div>
+                            <div class="kvm-direction-pad" role="group" aria-label="对端方位"><button type="button" data-kvm-side="top" class="kvm-direction kvm-top" aria-label="将对端放在上方" aria-pressed="false">↑ 上方</button><button type="button" data-kvm-side="left" class="kvm-direction kvm-left" aria-label="将对端放在左侧" aria-pressed="false">← 左侧</button><button type="button" data-kvm-side="right" class="kvm-direction kvm-right" aria-label="将对端放在右侧" aria-pressed="false">右侧 →</button><button type="button" data-kvm-side="bottom" class="kvm-direction kvm-bottom" aria-label="将对端放在下方" aria-pressed="false">↓ 下方</button></div>
+                        </div>
+                        <div class="kvm-settings-col">
+                            <div id="kvmPointerSettings" class="kvm-pointer" hidden>
+                                <div class="kvm-tuning-head"><h3>被控端鼠标速度</h3><p class="subtitle">只影响跨屏后的移动速度，主控电脑手感不变。</p></div>
+                                <div class="kvm-speed-presets"><button type="button" data-kvm-speed="75">慢 · 0.75×</button><button type="button" data-kvm-speed="100">标准 · 1.0×</button><button type="button" data-kvm-speed="150">快 · 1.5×</button></div>
+                                <div class="kvm-form-row kvm-slider-row"><label for="kvmPointerSpeed">速度倍率</label><input id="kvmPointerSpeed" type="range" min="50" max="200" step="5" value="100"><output id="kvmPointerValue" for="kvmPointerSpeed">1.00×</output><button type="button" class="btn btn--secondary btn--sm" data-kvm="speed">保存速度</button></div>
+                                <p class="subtitle">保存会短暂重连；标准速度为 1.0×。</p>
+                            </div>
+                            <div id="kvmScrollSettings" class="kvm-pointer" hidden>
+                                <div class="kvm-tuning-head"><h3>被控端滚轮速度</h3><p class="subtitle">调整被控电脑的滚动倍率，与指针速度分开保存。</p></div>
+                                <div class="kvm-form-row kvm-slider-row"><label for="kvmScrollSpeed">滚动倍率</label><input id="kvmScrollSpeed" type="range" min="50" max="200" step="5" value="100"><output id="kvmScrollValue" for="kvmScrollSpeed">1.00×</output><button type="button" class="btn btn--secondary btn--sm" data-kvm="scroll-speed">保存滚轮速度</button></div>
+                                <p class="subtitle">保存会短暂重连，默认倍率为 1.0×。</p>
+                            </div>
+                            <p id="kvmScrollHint" class="subtitle kvm-hint" hidden>正在读取被控端设置；若一直未出现，请将两端更新到同一版本。</p>
+                        </div>
+                    </div>
+                    <details class="kvm-layout-advanced"><summary>精确设置与连接说明</summary><div class="kvm-form-row"><label for="kvmSide">对端位于本机</label><select id="kvmSide"><option value="left">左侧</option><option value="right">右侧</option><option value="top">上方</option><option value="bottom">下方</option></select><button type="button" class="btn btn--primary btn--sm" data-kvm="layout" disabled>应用方位</button></div><p class="subtitle">在主控端修改后同步到对端，应用时会短暂重连。关闭流转会立即停止输入共享，但保留配对。</p></details>
                 </section>
                 <section class="card kvm-keyboard" id="kvmClipboardSettings" hidden>
                     <div class="section-header"><div class="section-title"><h2>文本剪贴板同步</h2><span class="subtitle">仅在这两台已授权的电脑之间同步。</span></div><button type="button" class="btn btn--secondary" data-kvm="clipboard">开启文本同步</button></div>
