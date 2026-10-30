@@ -13,9 +13,9 @@
   <a href="https://github.com/WendelYu/WenBox/releases"><img src="https://img.shields.io/github/v/release/WendelYu/WenBox?label=Release" alt="GitHub release"></a>
 </p>
 
-## 键鼠流转 M2（开发测试）
+## 键鼠流转与文本同步
 
-Mac + Windows 双机配对、记住设备自动连接、四方向布局及 Tauri 统一安装已接入。Mac 流转组件要求 macOS 14+；Windows 新后台服务与 UAC 集成仍待真机验收，文本剪贴板后续实现。安装、构建及验证步骤见 [M2 集成交接](docs/KVM_M2_INTEGRATION.md)。
+Mac + Windows 支持双机配对、记住设备自动连接、四方向布局、鼠标/滚轮速度、自定义修饰键，以及默认关闭的双向文本剪贴板。Mac 流转组件要求 macOS 14+；Windows 统一安装包包含输入服务，支持已登录桌面的管理员窗口和 UAC。聊天身份会跨重启保留；旧消息位置可在本机恢复。安装步骤见 [安装文档](docs/INSTALLATION.md)，故障恢复的验收边界见 [M3 集成说明](docs/KVM_M3_INTEGRATION.md)。
 
 ## 为什么做 WenBox
 

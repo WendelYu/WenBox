@@ -1,6 +1,6 @@
 {
   "name": "wenbox",
-  "version": "1.4.8",
+  "version": "1.4.9",
   "description": "WenBox - 工控现场与工程师百宝箱",
   "main": "main.js",
   "scripts": {

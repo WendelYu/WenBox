@@ -1,6 +1,6 @@
 # WenBox 安装、更新和流转设置
 
-正式版：[GitHub Releases](https://github.com/WendelYu/WenBox/releases/latest)。请在两台电脑安装同一版本。M3 的文本同步需要两端都使用包含该功能的 1.4.8 测试包；1.4.7 正式版提供修饰键映射、鼠标/滚轮速度和按需文件分享。
+正式版：[GitHub Releases](https://github.com/WendelYu/WenBox/releases/latest)。请在两台电脑安装同一版本。文本同步需要两端均更新到 1.4.9 或更新版本；修饰键映射、鼠标/滚轮速度和按需文件分享可在对应页面设置。
 
 ## Windows
 
