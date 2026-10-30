@@ -26,7 +26,7 @@
   },
   "windows": {
     "run": "https://github.com/WendelYu/WenBox/actions/runs/40997684344",
-    "status": "functional_checks_passed_cache_finalizing",
+    "status": "success",
     "defaultAndCustomInstallUpgradeUninstall": "passed",
     "serviceBoundary": "passed",
     "unsafeParentRejected": true,
