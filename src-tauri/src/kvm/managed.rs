@@ -285,6 +285,7 @@ impl Managed {
         let mut armed = false;
         let mut misses = 0;
         let mut last_tick = Instant::now();
+        let mut last_wall = std::time::SystemTime::now();
         loop {
             let Some(this) = weak.upgrade() else {
                 break;
@@ -292,11 +293,17 @@ impl Managed {
             if this.stopping.load(Ordering::SeqCst) {
                 break;
             }
-            if last_tick.elapsed() > Duration::from_secs(2) {
+            let wall = std::time::SystemTime::now();
+            if last_tick.elapsed() > Duration::from_secs(2)
+                || wall
+                    .duration_since(last_wall)
+                    .map_or(true, |gap| gap > Duration::from_secs(2))
+            {
                 armed = false;
                 misses = 0;
             }
             last_tick = Instant::now();
+            last_wall = wall;
             let target = lock(&this.engine).health_target();
             let current_pid = target.as_ref().map(|t| t.0);
             if current_pid != last_pid {
