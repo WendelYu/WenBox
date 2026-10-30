@@ -1,3 +1,12 @@
+## WenBox v1.4.10 · 键鼠流转界面优化
+
+- 更新键鼠流转页面的连接状态、设备配对和屏幕布局界面，优化深浅色及移动端显示。
+- 保留文本剪贴板同步、紧急停止、跨屏按键映射和现有连接操作。
+
+Windows 如缺少 WebView2，需先安装 [Microsoft WebView2 运行库](https://developer.microsoft.com/microsoft-edge/webview2/#download-section)。Mac 更新后可能需要重新添加辅助功能与输入监控权限，详见[安装说明](https://github.com/WendelYu/WenBox/blob/main/docs/INSTALLATION.md)。
+
+---
+
 ## WenBox v1.4.9 · 消息身份修复与文本同步
 
 - 修复退出重开后自己的历史消息显示到左侧：聊天身份持久保存，并迁移已有会话记录。已丢失旧身份的历史消息可点“这是我发的”恢复，支持撤销恢复，只影响本机显示。
