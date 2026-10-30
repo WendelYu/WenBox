@@ -437,7 +437,12 @@ async function main() {
         messages.push({ id: String(++serial), senderName: '旧图片', content: '[image:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGPgL8v7TwlmGDVg1IBRA4aLAQBrPvIQoRTfDQAAAABJRU5ErkJggg==]', timestamp: Date.now() + serial });
         await page.evaluate(() => { delete window.__TAURI__; WenBox.scheduler.runNow(); });
         await page.waitForFunction(() => document.querySelectorAll('.chat-img-thumb').length === 3);
-        await page.locator('.chat-img-thumb').last().click();
+        // Firefox defers an offscreen lazy image without intrinsic dimensions.
+        // Scroll its sized wrapper into view before waiting for the image to load.
+        const inlineImage = page.locator('.chat-img-thumb-wrapper').last();
+        await inlineImage.scrollIntoViewIfNeeded();
+        await page.waitForFunction(() => [...document.querySelectorAll('.chat-img-thumb')].at(-1)?.naturalWidth > 0);
+        await inlineImage.locator('.chat-img-thumb').click();
         await page.evaluate(() => {
             window.__TAURI__ = { dialog: { save: async () => '/tmp/inline.png' }, invoke: async (cmd, args) => { window.imageCalls.push({ cmd, args }); } };
         });
