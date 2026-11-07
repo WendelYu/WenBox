@@ -2417,6 +2417,12 @@
     }
     window.loadFiles = loadFiles;
 
+    function refreshDownloadSummary() {
+        const list=document.getElementById('downloadActivityList');
+        const button=document.getElementById('btnDownloadHistory');
+        const active=list.querySelectorAll('[data-state="running"]').length;
+        button.textContent=active ? `下载中 · ${active}` : list.querySelector('[data-state="failed"]') ? '下载记录 · 有失败' : list.querySelector('[data-state="complete"]') ? '下载记录 · 已完成' : '下载记录';
+    }
     function beginDownloadReceipt(name) {
         const panel = document.getElementById('downloadActivity');
         const list = document.getElementById('downloadActivityList');
@@ -2424,7 +2430,7 @@
         const row = document.createElement('div');row.className='download-receipt';row.dataset.state='running';
         const title=document.createElement('strong');title.textContent=name;
         const status=document.createElement('div');status.className='download-status';status.textContent='正在下载并保存，请等待完成…';
-        row.append(title,status);list.prepend(row);
+        row.append(title,status);list.prepend(row);refreshDownloadSummary();
         for (const old of [...list.children].slice(10)) if(old.dataset.state!=='running')old.remove();
         return {
             async complete(path) {
@@ -2441,10 +2447,10 @@
                     } catch(error){showToast(error.message||String(error));}
                 });
                 const copy=document.createElement('button');copy.className='btn btn--secondary btn--sm';copy.textContent='复制路径';copy.type='button';copy.addEventListener('click',()=>copyWithFeedback(path,'保存路径已复制'));
-                actions.append(open,copy);row.append(actions);showToast(`下载完成：${name}`);
+                actions.append(open,copy);row.append(actions);refreshDownloadSummary();showToast(`下载完成：${name}`);
             },
-            handedOff(){row.dataset.state='browser';status.textContent='文件已下载到浏览器，请在浏览器下载列表确认保存并打开目录';},
-            fail(error){row.dataset.state='failed';status.textContent=`下载失败：${error.message||error}`;}
+            handedOff(){row.dataset.state='browser';refreshDownloadSummary();status.textContent='文件已下载到浏览器，请在浏览器下载列表确认保存并打开目录';},
+            fail(error){row.dataset.state='failed';refreshDownloadSummary();status.textContent=`下载失败：${error.message||error}`;}
         };
     }
     document.addEventListener('keydown', event => {

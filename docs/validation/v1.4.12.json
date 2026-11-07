@@ -1,0 +1,29 @@
+{
+  "version": "1.4.12",
+  "local": {
+    "rust_passed": 102,
+    "rust_ignored_fixture": 1,
+    "node_passed": 58,
+    "browser": "Chromium workspace with pending-save and reveal assertions passed"
+  },
+  "windows_installer_smoke": {
+    "run": "https://github.com/WendelYu/WenBox/actions/runs/42386943737",
+    "source": "b63e1db",
+    "paths": [
+      "default Program Files",
+      "custom path with spaces",
+      "D:\\App\\WenBox"
+    ],
+    "checks": [
+      "service running",
+      "SYSTEM runtime ACL",
+      "GUI binding and trusted copy",
+      "wrong-image pipe rejection",
+      "upgrade",
+      "uninstall",
+      "unchanged D:\\App ACL"
+    ],
+    "steps": "passed"
+  },
+  "release_gate": "Final version repeats service installation matrix, native backend and three-browser regression before publication."
+}

@@ -33,27 +33,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify prepared resource integrity
         run: node scripts/prepare-kvm-backend.cjs --verify-only
-      - name: Disposable runner install / upgrade / service boundary / uninstall smoke test
+      - name: Disposable installation matrix including D:\App\WenBox
         shell: powershell
         run: |
           $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
-          & ./scripts/check-kvm-installation.ps1 -Installer $installer.FullName
-          $custom = Join-Path $env:ProgramFiles 'WenBox Custom Path'
-          & ./scripts/check-kvm-installation.ps1 -Installer $installer.FullName -InstallDirectory $custom
-      - name: Install on D drive under an ordinary application parent
-        shell: powershell
-        run: |
-          $parent = 'D:\App'
-          if (Test-Path -LiteralPath $parent) { throw 'Disposable D:\App already exists' }
-          New-Item -ItemType Directory -Path $parent | Out-Null
-          & icacls.exe $parent /setowner ('*' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) | Out-Null
-          & icacls.exe $parent /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
-          $before = (Get-Acl -LiteralPath $parent).Sddl
-          try {
-            $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
-            & ./scripts/check-kvm-installation.ps1 -Installer $installer.FullName -InstallDirectory 'D:\App\WenBox'
-            if ((Get-Acl -LiteralPath $parent).Sddl -ne $before) { throw 'Installer changed the shared app parent ACL' }
-          } finally { Remove-Item -LiteralPath $parent -Force -Recurse }
+          & ./scripts/check-kvm-paths.ps1 -Installer $installer.FullName
       - name: Collect installer diagnostics
         if: always()
         shell: powershell
