@@ -68,6 +68,19 @@ fn install_root() -> Result<PathBuf, String> {
         .map(|p| p.to_path_buf())
         .ok_or("服务安装位置无效".into())
 }
+// The GUI may be on any local drive. Only this descriptor and the trusted
+// executable copy live beside the SYSTEM service in protected Program Files.
+fn client_executable(root: &std::path::Path) -> Result<PathBuf, String> {
+    let bytes=std::fs::read(root.join("client.json")).map_err(|_|"缺少安装绑定，请重新安装 WenBox")?;
+    if bytes.len()>16384 {return Err("安装绑定过大".into());}
+    let value:serde_json::Value=serde_json::from_slice(bytes.strip_prefix(&[0xef,0xbb,0xbf]).unwrap_or(&bytes)).map_err(|_|"安装绑定无效")?;
+    let path=PathBuf::from(value["executable"].as_str().ok_or("缺少应用路径")?);
+    if std::fs::metadata(&path).map_err(|_|"应用不存在")?.len()!=std::fs::metadata(root.join("wenbox.exe")).map_err(|_|"缺少应用校验副本")?.len(){return Err("应用校验失败".into());}
+    let actual=std::fs::read(&path).map_err(|_|"已安装的 WenBox 不存在")?;
+    let trusted=std::fs::read(root.join("wenbox.exe")).map_err(|_|"缺少应用校验副本")?;
+    if fingerprint(&actual)!=fingerprint(&trusted){return Err("应用校验失败，请重新安装 WenBox".into());}
+    Ok(path)
+}
 fn unlocked(session: u32) -> bool {
     unsafe {
         let mut buffer = std::ptr::null_mut();
@@ -120,7 +133,7 @@ fn authorized(pipe: HANDLE, root: &std::path::Path) -> Result<(u32, Handle), Str
             return Err(fail());
         }
         let actual = PathBuf::from(String::from_utf16_lossy(&path[..length as usize]));
-        let expected = root.join("wenbox.exe");
+        let expected = client_executable(root)?;
         let a = std::fs::canonicalize(actual).map_err(|_| "请求程序不存在")?;
         let b = std::fs::canonicalize(expected).map_err(|_| "WenBox 安装位置无效")?;
         if a.to_string_lossy().to_lowercase() != b.to_string_lossy().to_lowercase() {
@@ -378,7 +391,7 @@ unsafe fn resume_user_app(root: &std::path::Path) {
     if CreateEnvironmentBlock(&mut environment, token.0, 0) == 0 {
         return;
     }
-    let executable = root.join("wenbox.exe");
+    let Ok(executable) = client_executable(root) else { return; };
     let Some(exe) = executable.to_str() else {
         DestroyEnvironmentBlock(environment);
         return;
@@ -515,5 +528,16 @@ pub fn run() {
             },
         ];
         StartServiceCtrlDispatcherW(entries.as_ptr());
+    }
+}
+
+#[cfg(test)] mod client_install_tests {
+    use super::*;
+    #[test] fn custom_app_location_requires_the_protected_executable_copy() {
+        let runtime=tempfile::tempdir().unwrap();let custom=tempfile::tempdir().unwrap();let app=custom.path().join("wenbox.exe");
+        std::fs::write(&app,b"installed-program").unwrap();std::fs::write(runtime.path().join("wenbox.exe"),b"installed-program").unwrap();
+        let descriptor=serde_json::json!({"executable":app}).to_string();let mut bytes=vec![0xef,0xbb,0xbf];bytes.extend_from_slice(descriptor.as_bytes());
+        std::fs::write(runtime.path().join("client.json"),bytes).unwrap();assert_eq!(client_executable(runtime.path()).unwrap(),app);
+        std::fs::write(&app,b"changed-program!!").unwrap();assert!(client_executable(runtime.path()).is_err());
     }
 }

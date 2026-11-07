@@ -5,6 +5,7 @@ param([Parameter(Mandatory=$true)][string]$Installer, [string]$InstallDirectory)
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $root=if($InstallDirectory){[IO.Path]::GetFullPath($InstallDirectory)}else{Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WenBox'}
+$runtime=Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WenBox Input'
 $state=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'WenBoxKvm'
 if (Get-Service -Name WenBoxKvm -ErrorAction SilentlyContinue) { throw 'This smoke test requires a clean disposable machine, not an existing WenBox installation.' }
 function Stop-TestApp { Get-Process -Name 'wenbox' -ErrorAction SilentlyContinue | Stop-Process -Force }
@@ -20,8 +21,17 @@ try {
  foreach($rule in $acl.Access){$sid=$rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value;if($sid -notin @('S-1-5-18','S-1-5-32-544')){throw ('Unexpected input-state ACL principal '+$sid)}}
  $registered=Get-CimInstance Win32_Service -Filter "Name='WenBoxKvm'"
  if($registered.StartName -ne 'LocalSystem'){throw 'Service must use the system account'}
- $expectedPath='"'+(Join-Path $root 'resources\kvm\wenbox-kvm-service.exe')+'"'
+ $expectedPath='"'+(Join-Path $runtime 'resources\kvm\wenbox-kvm-service.exe')+'"'
  if($registered.PathName -ine $expectedPath){throw 'Service executable path must be fixed and quoted'}
+ $client=Get-Content -LiteralPath (Join-Path $runtime 'client.json') -Raw | ConvertFrom-Json
+ if($client.executable -ine (Join-Path $root 'wenbox.exe')){throw 'GUI installation binding does not match selected path'}
+ if((Get-FileHash (Join-Path $root 'wenbox.exe')).Hash -ne (Get-FileHash (Join-Path $runtime 'wenbox.exe')).Hash){throw 'Trusted application copy mismatch'}
+ $runtimeAcl=Get-Acl -LiteralPath $runtime
+ if(-not $runtimeAcl.AreAccessRulesProtected){throw 'SYSTEM executable directory must be protected'}
+ $writeBits=[Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+ foreach($rule in $runtimeAcl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+   if($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544') -and ($rule.FileSystemRights -band $writeBits)){throw 'SYSTEM runtime is writable by a non-administrator'}
+ }
  # Even administrators using another executable must not receive an accepted service reply.
  $pipe=New-Object IO.Pipes.NamedPipeClientStream('.', 'WenBox.Kvm.v1', [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::Asynchronous)
  $connected=$false
@@ -51,6 +61,7 @@ try {
  if(Test-Path -LiteralPath $uninstaller){Run-Installer $uninstaller}
 }
 if(Get-Service -Name WenBoxKvm -ErrorAction SilentlyContinue){throw 'Service remained after uninstall'}
+if(Test-Path -LiteralPath $runtime){throw 'Privileged runtime remained after uninstall'}
 if(Test-Path -LiteralPath $state){throw 'Privileged input state remained after uninstall'}
 if(Get-NetFirewallRule -DisplayName 'WenBox KVM Control','WenBox KVM Input' -ErrorAction SilentlyContinue){throw 'KVM firewall rules remained after uninstall'}
 Write-Output 'PASS: unified uninstall removed service, protected input state, and dedicated firewall rules'

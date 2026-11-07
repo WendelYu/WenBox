@@ -131,7 +131,7 @@ async function main() {
             for (const name of ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll']) if (fs.existsSync(path.join(input, name))) fs.copyFileSync(path.join(input, name), path.join(stage, name));
             fs.copyFileSync(path.join(root, 'src-tauri/installer/install-service.ps1'), path.join(stage, 'install-service.ps1'));
             const helper = path.join(root, 'src-tauri/installer/install-service.ps1').replaceAll('$', () => '$$');
-            const template = fs.readFileSync(path.join(root, 'src-tauri/installer/windows.nsi'), 'utf8').replaceAll('@@WENBOX_SERVICE_HELPER@@', helper);
+            const template = fs.readFileSync(path.join(root, 'src-tauri/installer/windows.nsi'), 'utf8').replaceAll('@@WENBOX_SERVICE_HELPER@@', helper).replaceAll('@@WENBOX_RUNTIME_PAYLOAD@@', output.replaceAll('$', () => '$$'));
             fs.writeFileSync(path.join(stage, 'installer.nsi'), template);
             fs.rmSync(unpack, { recursive: true });
         }

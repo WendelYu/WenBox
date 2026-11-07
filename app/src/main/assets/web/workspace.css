@@ -222,3 +222,13 @@ body.room-switching [id="roomLobby"] { animation: room-switch-in .38s cubic-bezi
 .chat-identity-restore { border: 0; padding: 2px 4px; border-radius: 4px; background: transparent; color: var(--primary-fg); font: inherit; font-size: var(--fs-xs); align-self: flex-end; cursor: pointer; }
 .chat-identity-restore:hover { background: var(--primary-soft); }
 .chat-identity-restore:focus-visible { outline: 2px solid var(--primary-fg); outline-offset: 2px; }
+
+/* A persistent receipt appears only when saving has actually completed. */
+.download-activity { position: fixed; right: 18px; top: 84px; z-index: 45; width: min(420px, calc(100vw - 24px)); max-height: 45vh; overflow: auto; padding: 14px; background: var(--surface-1); color: var(--text-1); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow-pop); }
+.download-activity[hidden] { display: none; }
+.download-receipt { padding: 12px 0; border-top: 1px solid var(--border-strong); display: grid; gap: 6px; }
+.download-receipt strong, .download-receipt .download-path { overflow-wrap: anywhere; }
+.download-receipt[data-state="running"] .download-status { color: var(--primary-fg); }
+.download-receipt[data-state="complete"] .download-status { font-weight: 600; }
+.download-path { font-size: var(--fs-xs); color: var(--text-2); user-select: text; }
+@media (max-width: 600px) { .download-activity { right: 12px; top: 76px; } }

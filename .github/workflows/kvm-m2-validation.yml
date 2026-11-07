@@ -40,19 +40,19 @@ jobs:
           & ./scripts/check-kvm-installation.ps1 -Installer $installer.FullName
           $custom = Join-Path $env:ProgramFiles 'WenBox Custom Path'
           & ./scripts/check-kvm-installation.ps1 -Installer $installer.FullName -InstallDirectory $custom
-      - name: Reject a user-writable installation parent
+      - name: Install on D drive under an ordinary application parent
         shell: powershell
         run: |
-          $parent = Join-Path $env:ProgramFiles 'WenBox Unsafe Parent'
-          $target = Join-Path $parent 'WenBox'
-          New-Item -ItemType Directory -Path $parent -Force | Out-Null
-          & icacls.exe $parent /grant '*S-1-1-0:(OI)(CI)M' | Out-Null
+          $parent = 'D:\App'
+          if (Test-Path -LiteralPath $parent) { throw 'Disposable D:\App already exists' }
+          New-Item -ItemType Directory -Path $parent | Out-Null
+          & icacls.exe $parent /setowner ('*' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) | Out-Null
+          & icacls.exe $parent /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+          $before = (Get-Acl -LiteralPath $parent).Sddl
           try {
-            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./src-tauri/installer/install-service.ps1 -Action Prepare -InstallRoot $target
-            if ($LASTEXITCODE -eq 0) { throw 'Unsafe installation parent accepted' }
-            if (Test-Path -LiteralPath $target) { throw 'Unsafe target was created' }
-            Write-Output 'PASS: unsafe custom installation parent rejected'
-            $global:LASTEXITCODE = 0
+            $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+            & ./scripts/check-kvm-installation.ps1 -Installer $installer.FullName -InstallDirectory 'D:\App\WenBox'
+            if ((Get-Acl -LiteralPath $parent).Sddl -ne $before) { throw 'Installer changed the shared app parent ACL' }
           } finally { Remove-Item -LiteralPath $parent -Force -Recurse }
       - name: Collect installer diagnostics
         if: always()

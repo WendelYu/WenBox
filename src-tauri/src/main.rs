@@ -1595,13 +1595,9 @@ fn save_remote_file_to_directory_blocking(download_url: String, dir_path: String
         .unwrap_or(false);
 
     let safe_name = sanitize_file_name(&file_name);
-    // 不覆盖同名文件：File::create 会静默清空既有内容，改为冲突时追加序号
-    let file_path = unique_target_path(&target_dir, &safe_name);
-    let mut dest_file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&file_path)
-        .map_err(|e| format!("创建文件失败: {}", e))?;
+    // Keep the final filename absent until the stream and authentication finish.
+    let mut staged = tempfile::Builder::new().prefix(".wenbox-download-").suffix(".partial").tempfile_in(&target_dir).map_err(|e|format!("创建临时下载文件失败: {e}"))?;
+    let dest_file = staged.as_file_mut();
 
     let mut reader = resp.into_reader();
     let result = if encrypted {
@@ -1610,24 +1606,29 @@ fn save_remote_file_to_directory_blocking(download_url: String, dir_path: String
                 &key,
                 room_id.as_deref().unwrap_or(""),
                 &mut reader,
-                &mut dest_file,
+                dest_file,
             )
             .map(|_| ()),
             None => Err("接收端缺少房间密钥，无法解密下载文件".to_string()),
         }
     } else {
-        std::io::copy(&mut reader, &mut dest_file)
+        std::io::copy(&mut reader, &mut *dest_file)
             .map(|_| ())
             .map_err(|e| format!("写入文件失败: {}", e))
     };
-    if let Err(error) = result {
-        drop(dest_file);
-        // 清掉写了一半的文件，避免留下损坏的下载
-        let _ = std::fs::remove_file(&file_path);
-        return Err(error);
+    result?;
+    staged.as_file().sync_all().map_err(|e|format!("完成文件保存失败: {e}"))?;
+    // persist_noclobber atomically publishes the completed file and preserves
+    // concurrent downloads/existing same-name files.
+    for _ in 0..32 {
+        let path=unique_target_path(&target_dir,&safe_name);
+        match staged.persist_noclobber(&path) {
+            Ok(_) => return Ok(path.to_string_lossy().into_owned()),
+            Err(error) if error.error.kind()==std::io::ErrorKind::AlreadyExists => staged=error.file,
+            Err(error) => return Err(format!("完成文件保存失败: {}",error.error)),
+        }
     }
-    drop(dest_file);
-    Ok(file_path.to_string_lossy().to_string())
+    Err("同名文件较多，请更换文件名后重试".into())
 }
 
 #[tauri::command]
@@ -4474,6 +4475,30 @@ mod tests {
         let mut decrypted = Vec::new();
         content_crypto::stream_decrypt(&key, "room-uuid", &mut encrypted.as_slice(), &mut decrypted).unwrap();
         assert_eq!(decrypted, plain);
+    }
+
+    #[test]
+    fn downloads_publish_only_after_complete_and_preserve_existing_files() {
+        let dir=tempfile::tempdir().unwrap();std::fs::write(dir.path().join("file.txt"),b"previous").unwrap();
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let port=listener.local_addr().unwrap().port();
+        let (ready_tx,ready_rx)=std::sync::mpsc::channel();let (finish_tx,finish_rx)=std::sync::mpsc::channel();
+        let server=std::thread::spawn(move||{
+            let(mut socket,_)=listener.accept().unwrap();socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut header=Vec::new();let mut byte=[0u8;1];while !header.ends_with(b"\r\n\r\n"){socket.read_exact(&mut byte).unwrap();header.push(byte[0]);}
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhe").unwrap();ready_tx.send(()).unwrap();finish_rx.recv().unwrap();socket.write_all(b"llo").unwrap();
+        });
+        let target=dir.path().to_string_lossy().into_owned();let download=std::thread::spawn(move||save_remote_file_to_directory_blocking(format!("http://127.0.0.1:{port}/api/download/test"),target,String::new(),"file.txt".into(),None,None,None));
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();assert_eq!(std::fs::read(dir.path().join("file.txt")).unwrap(),b"previous");
+        assert!(std::fs::read_dir(dir.path()).unwrap().all(|f|{let name=f.unwrap().file_name().to_string_lossy().into_owned();name=="file.txt"||name.ends_with(".partial")}));
+        finish_tx.send(()).unwrap();let saved=download.join().unwrap().unwrap();server.join().unwrap();assert_eq!(std::fs::read(&saved).unwrap(),b"hello");
+        assert_ne!(PathBuf::from(saved),dir.path().join("file.txt"));assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(),2);
+    }
+
+    #[test]
+    fn failed_downloads_leave_no_final_or_partial_file() {
+        let dir=tempfile::tempdir().unwrap();let key=content_crypto::generate_key().unwrap();let mut wire=Vec::new();content_crypto::stream_encrypt(&key,"room",&mut &b"data"[..],&mut wire).unwrap();wire.truncate(wire.len()-20);
+        let server=tiny_http::Server::http("127.0.0.1:0").unwrap();let address=server.server_addr().to_string();let worker=std::thread::spawn(move||{let req=server.recv().unwrap();req.respond(Response::from_data(wire).with_header(Header::from_bytes("X-WenBox-Encryption","v1").unwrap())).unwrap();});
+        assert!(save_remote_file_to_directory_blocking(format!("http://{address}/api/download/test"),dir.path().to_string_lossy().into_owned(),String::new(),"bad.txt".into(),None,Some(key),Some("room".into())).is_err());worker.join().unwrap();assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(),0);
     }
 
     #[test]

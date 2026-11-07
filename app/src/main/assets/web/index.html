@@ -119,7 +119,7 @@
             <div class="workspace-heading"><h1 id="workspaceTitle">房间</h1><p id="workspaceSubtitle">发现、加入和管理局域网房间</p></div>
             <div class="device-status">
                 <span class="local-label" id="serviceHealth" role="status" aria-live="polite" data-state="checking"><span class="status-dot"></span><span id="clientVersion"></span><span id="serviceHealthText">正在检查服务…</span></span><button id="retryServiceHealth" class="btn btn--ghost btn--sm" type="button" hidden>重新检测</button><span id="phoneName" hidden></span>
-                <button id="btnThemeToggle" class="btn btn--ghost btn--icon" type="button" title="切换深色 / 浅色主题" aria-label="切换深色或浅色主题"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-sun"></use></svg></button>
+                <button id="btnDownloadHistory" type="button" class="btn btn--ghost btn--sm">下载记录</button><button id="btnThemeToggle" class="btn btn--ghost btn--icon" type="button" title="切换深色 / 浅色主题" aria-label="切换深色或浅色主题"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-sun"></use></svg></button>
                 <button id="btnChangeNicknameChat" class="btn btn--ghost btn--sm identity-button" type="button" aria-label="修改昵称"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-user"></use></svg><span id="chatMyNicknameDisplay">我的昵称</span></button>
             </div>
         </header>
@@ -784,6 +784,7 @@
     </dialog>
 
 
+    <aside id="downloadActivity" class="download-activity" aria-label="本机下载记录" hidden><div class="row row--between"><strong>文件下载</strong><button type="button" id="closeDownloadActivity" class="btn btn--ghost btn--sm">收起</button></div><div id="downloadActivityList" aria-live="polite"></div></aside>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <div id="chatDropOverlay" class="chat-drop-overlay" hidden>

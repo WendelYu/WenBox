@@ -18,7 +18,13 @@ trap {
     exit 1
 }
 if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell for service installation.' }
-$InstallRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+$appRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+if ($appRoot -notmatch '^[A-Za-z]:\\[^\\]') { throw '请选择本地磁盘上的专用应用文件夹。' }
+# SYSTEM executables are extracted directly by NSIS here, never copied from
+# the user-selected (possibly user-writable) application directory.
+$InstallRoot = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WenBox Input'
+if ($appRoot.StartsWith($InstallRoot, [StringComparison]::OrdinalIgnoreCase)) { throw '该文件夹由输入服务保留，请选择其他应用目录。' }
+
 if ($InstallRoot -notmatch '^[A-Za-z]:\\[^\\]') { throw '请选择本地磁盘上的专用安装文件夹。' }
 $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($InstallRoot))
 if ($drive.DriveType -ne [IO.DriveType]::Fixed -or $drive.DriveFormat -notin @('NTFS','ReFS')) { throw '输入服务需要支持 Windows 权限的本地固定磁盘（NTFS / ReFS）。' }
@@ -65,6 +71,15 @@ function Reject-Reparse([string]$Path) {
         }
     }
 }
+# Application parents may be user-owned, but must not traverse junctions.
+$appParent = New-Object IO.DirectoryInfo($appRoot)
+while ($null -ne $appParent) {
+    if (Test-Path -LiteralPath $appParent.FullName) {
+        if ((Get-Item -LiteralPath $appParent.FullName -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw '应用路径不能经过符号链接或目录联接。' }
+    }
+    $appParent = $appParent.Parent
+}
+Reject-Reparse $appRoot
 Reject-Reparse $InstallRoot
 Reject-Reparse $stateRoot
 $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
@@ -76,7 +91,7 @@ if ($Action -eq 'Prepare') {
     if (Test-Path -LiteralPath $InstallRoot) {
         $owner = (Get-Acl -LiteralPath $InstallRoot).GetOwner([Security.Principal.SecurityIdentifier]).Value
         if ($owner -notin $trustedOwners) { throw '请选择一个新的专用安装目录；现有目录由普通用户管理。' }
-        if (@(Get-ChildItem -LiteralPath $InstallRoot -Force).Count -gt 0 -and -not (Test-Path -LiteralPath (Join-Path $InstallRoot 'uninstall.exe'))) { throw '安装目录已有其他文件，请选择空文件夹。' }
+        if (@(Get-ChildItem -LiteralPath $InstallRoot -Force).Count -gt 0 -and -not (Test-Path -LiteralPath (Join-Path $InstallRoot 'runtime.marker')) -and -not (Test-Path -LiteralPath (Join-Path $InstallRoot 'client.json'))) { throw '安装目录已有其他文件，请选择空文件夹。' }
     }
     function Assert-ProtectedFolder([string]$Path) {
         $acl = Get-Acl -LiteralPath $Path
@@ -96,6 +111,7 @@ if ($Action -eq 'Prepare') {
         [void][IO.Directory]::CreateDirectory($InstallRoot, $initialAcl)
     }
     Assert-ProtectedFolder $InstallRoot
+    Set-Content -LiteralPath (Join-Path $InstallRoot 'runtime.marker') -Value 'WenBox Input runtime v1' -Encoding ASCII
     exit 0
 }
 $sc = Join-Path $env:WINDIR 'System32\sc.exe'
@@ -105,6 +121,12 @@ if ($Action -eq 'Uninstall') {
     & (Join-Path $env:WINDIR 'System32\netsh.exe') advfirewall firewall delete rule name='WenBox KVM Control' | Out-Null
     & (Join-Path $env:WINDIR 'System32\netsh.exe') advfirewall firewall delete rule name='WenBox KVM Input' | Out-Null
     if (Test-Path -LiteralPath $stateRoot) { Remove-Item -LiteralPath $stateRoot -Recurse -Force }
+    if (Test-Path -LiteralPath $InstallRoot) {
+        for ($attempt=0; $attempt -lt 20; $attempt++) {
+            try { Remove-Item -LiteralPath $InstallRoot -Recurse -Force; break }
+            catch { if ($attempt -eq 19) { throw }; Start-Sleep -Milliseconds 100 }
+        }
+    }
     exit 0
 }
 if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Input service executable is missing.' }
@@ -127,6 +149,11 @@ foreach ($folder in @($InstallRoot,$stateRoot)) {
     Set-Acl -LiteralPath $folder -AclObject $acl
     if (@(Get-ChildItem -LiteralPath $folder -Force).Count -gt 0) { Native $icacls @((Join-Path $folder '*'),'/reset','/T','/C') }
 }
+$clientExe = Join-Path $appRoot 'wenbox.exe'
+$trustedExe = Join-Path $InstallRoot 'wenbox.exe'
+if (-not (Test-Path -LiteralPath $trustedExe -PathType Leaf) -or -not (Test-Path -LiteralPath $clientExe -PathType Leaf)) { throw '缺少应用校验副本，请使用完整安装包。' }
+if ((Get-FileHash -LiteralPath $clientExe -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $trustedExe -Algorithm SHA256).Hash) { throw '应用文件在安装中发生变化，安装已停止。' }
+@{ executable = $clientExe } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $InstallRoot 'client.json') -Encoding UTF8
 $quotedBinary = '"' + $binary + '"'
 # Use structured service APIs so Windows PowerShell 5.1 native argument quoting
 # cannot strip the required quotes around a Program Files executable path.
@@ -142,7 +169,7 @@ Native $sc @('failure',$serviceName,'reset=','86400','actions=','restart/3000/re
 $netsh = Join-Path $env:WINDIR 'System32\netsh.exe'
 & $netsh advfirewall firewall delete rule name='WenBox KVM Control' | Out-Null
 & $netsh advfirewall firewall delete rule name='WenBox KVM Input' | Out-Null
-Native $netsh @('advfirewall','firewall','add','rule','name=WenBox KVM Control','dir=in','action=allow','protocol=TCP','localport=9530','remoteip=LocalSubnet','profile=any',('program=' + (Join-Path $InstallRoot 'wenbox.exe')))
+Native $netsh @('advfirewall','firewall','add','rule','name=WenBox KVM Control','dir=in','action=allow','protocol=TCP','localport=9530','remoteip=LocalSubnet','profile=any',('program=' + (Join-Path $appRoot 'wenbox.exe')))
 Native $netsh @('advfirewall','firewall','add','rule','name=WenBox KVM Input','dir=in','action=allow','protocol=TCP','localport=9531','remoteip=LocalSubnet','profile=any',('program=' + (Join-Path $InstallRoot 'resources\kvm\input\deskflow-core.exe')))
 if ($SkipLaunch) { Native $sc @('start',$serviceName) } else { Native $sc @('start',$serviceName,'resume-user-app') }
 (Get-Service -Name $serviceName).WaitForStatus('Running',[TimeSpan]::FromSeconds(15))

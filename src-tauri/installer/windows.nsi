@@ -299,7 +299,7 @@ FunctionEnd
 
 ; 5. Choose install directoy page
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
-!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择 WenBox 的专用安装文件夹。输入服务需要受保护的本地磁盘目录；建议使用默认位置或新建 D:\WenBox。不要选择桌面、下载目录或已有其他文件的文件夹。"
+!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择 WenBox 的专用安装文件夹。应用可安装到 D:\App\WenBox 等本地目录。输入服务单独安装在 Program Files 的 WenBox Input 中。不要选择桌面、下载目录或已有其他文件的文件夹。"
 !insertmacro MUI_PAGE_DIRECTORY
 
 ; 6. Start menu shortcut page
@@ -603,6 +603,13 @@ Section Install
     File /a "/oname={{this}}" "{{@key}}"
   {{/each}}
 
+  ; Extract trusted SYSTEM payloads directly from this installer into the
+  ; protected location prepared before any files are written.
+  SetOutPath "$PROGRAMFILES64\WenBox Input"
+  File "${MAINBINARYSRCPATH}"
+  SetOutPath "$PROGRAMFILES64\WenBox Input\resources\kvm"
+  File /r /x installer.nsi "@@WENBOX_RUNTIME_PAYLOAD@@\*.*"
+  SetOutPath $INSTDIR
   Push "Install"
   Call RunKvmInstaller
   ; Create uninstaller

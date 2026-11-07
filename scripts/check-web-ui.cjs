@@ -467,6 +467,31 @@ async function main() {
         await page.locator('#wenboxContextMenu button').filter({ hasText: '粘贴' }).click();
         await page.waitForFunction(() => document.getElementById('webChatMessageInput').value.includes('中文粘贴'));
         await page.evaluate(() => { delete window.__TAURI__; });
+        // The save receipt must wait for native completion, show the actual
+        // collision-resolved path, and reveal only the saved record's ID.
+        await page.evaluate(() => {
+            window.__revealedDownload = '';
+            window.__TAURI__ = { dialog: { save: async () => 'D:/Saved/report.txt' }, invoke: async (command, args) => {
+                if(command === 'save_remote_file_to_directory') return new Promise(resolve => { window.__finishDownload = resolve; });
+                if(command === 'get_received_files') return [{id:'saved-download-id',name:'report-1.txt',path:'D:/Saved/report-1.txt',size:5}];
+                if(command === 'reveal_received_file') { window.__revealedDownload = args.id; return; }
+                return [];
+            }};
+            window.__downloadUnderTest = window.downloadRemoteFile('sample-id','report.txt');
+        });
+        await page.waitForFunction(() => typeof window.__finishDownload === 'function');
+        assert.equal(await page.locator('.download-receipt[data-state="running"]').count(),1);
+        assert.equal(await page.locator('.download-receipt[data-state="running"] button').count(),0);
+        await page.evaluate(async () => { window.__finishDownload('D:/Saved/report-1.txt'); await window.__downloadUnderTest; });
+        const receipt=page.locator('.download-receipt[data-state="complete"]').first();
+        assert.equal(await receipt.locator('.download-path').textContent(),'D:/Saved/report-1.txt');
+        await receipt.getByRole('button',{name:'打开所在文件夹'}).click();
+        await page.waitForFunction(() => window.__revealedDownload === 'saved-download-id');
+        await page.locator('#closeDownloadActivity').click();await page.locator('#btnDownloadHistory').click();
+        assert.equal(await receipt.isVisible(),true);
+        await page.screenshot({path:path.join(screenshots,'download-complete-receipt.png')});
+        await page.evaluate(() => { delete window.__TAURI__; });
+        await page.locator('#closeDownloadActivity').click();
         await page.locator('#btnLeaveRoom').click(); await page.locator('#appConfirmOkBtn').click();
         await page.waitForFunction(() => document.body.dataset.roomMode === 'client');
         assert.deepEqual(browserErrors, []); assert.deepEqual(failures, []);

@@ -2417,6 +2417,38 @@
     }
     window.loadFiles = loadFiles;
 
+    function beginDownloadReceipt(name) {
+        const panel = document.getElementById('downloadActivity');
+        const list = document.getElementById('downloadActivityList');
+        panel.hidden = false;
+        const row = document.createElement('div');row.className='download-receipt';row.dataset.state='running';
+        const title=document.createElement('strong');title.textContent=name;
+        const status=document.createElement('div');status.className='download-status';status.textContent='正在下载并保存，请等待完成…';
+        row.append(title,status);list.prepend(row);
+        for (const old of [...list.children].slice(10)) if(old.dataset.state!=='running')old.remove();
+        return {
+            async complete(path) {
+                row.dataset.state='complete';status.textContent='下载完成 · 已保存';
+                const location=document.createElement('div');location.className='download-path';location.textContent=path;row.append(location);
+                const actions=document.createElement('div');actions.className='row row--wrap gap-2';
+                const open=document.createElement('button');open.className='btn btn--primary btn--sm';open.textContent='打开所在文件夹';open.type='button';
+                open.addEventListener('click',async()=>{
+                    try {
+                        const files=await getTauriInvoke()('get_received_files');const saved=files.find(file=>file.path===path);
+                        if(!saved)throw Error('找不到保存记录，请复制路径在文件管理器中打开');
+                        await revealReceivedFile(saved.id);
+                    } catch(error){showToast(error.message||String(error));}
+                });
+                const copy=document.createElement('button');copy.className='btn btn--secondary btn--sm';copy.textContent='复制路径';copy.type='button';copy.addEventListener('click',()=>copyWithFeedback(path,'保存路径已复制'));
+                actions.append(open,copy);row.append(actions);showToast(`下载完成：${name}`);
+            },
+            handedOff(){row.dataset.state='browser';status.textContent='文件已下载到浏览器，请在浏览器下载列表确认保存并打开目录';},
+            fail(error){row.dataset.state='failed';status.textContent=`下载失败：${error.message||error}`;}
+        };
+    }
+    document.getElementById('btnDownloadHistory')?.addEventListener('click',()=>{document.getElementById('downloadActivity').hidden=false;});
+    document.getElementById('closeDownloadActivity')?.addEventListener('click',()=>{document.getElementById('downloadActivity').hidden=true;});
+
     // 远程文件下载
     window.downloadRemoteFile = async function(fileId, fileName, context = captureAttachmentContext()) {
         const token = context.roomId === roomState.roomInfo?.roomId ? getEffectiveRoomToken() : context.token;
@@ -2435,6 +2467,8 @@
                 const dir = savePath.substring(0, Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')));
                 const name = savePath.substring(Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')) + 1);
 
+                const receipt = beginDownloadReceipt(fileName);
+                try {
                 const downloadUrl = downloadBase + `/api/download/${encodeURIComponent(fileId)}${tokenQuery}`;
                 const savedPath = await invoke('save_remote_file_to_directory', {
                     downloadUrl: downloadUrl,
@@ -2445,8 +2479,9 @@
                     contentKey: getRoomContentKey() || null,
                     roomId: roomIdForCrypto() || null
                 });
-                showToast(`已成功保存到: ${savedPath}`);
+                await receipt.complete(savedPath);
                 loadReceivedFiles();
+                } catch(error) {receipt.fail(error);throw error;}
                 return;
             } catch (e) {
                 showToast(`保存失败：${e.message || e}`);
@@ -2455,9 +2490,12 @@
         }
 
         const dlUrl = downloadBase + `/api/download/${encodeURIComponent(fileId)}${tokenQuery}`;
+        const receipt=beginDownloadReceipt(fileName);
         try {
             await downloadEncryptedFile(dlUrl, fileName, token ? { 'X-Room-Token': token } : {});
+            receipt.handedOff();
         } catch (e) {
+            receipt.fail(e);
             showToast(`下载失败：${e.message || e}`);
         }
     };
