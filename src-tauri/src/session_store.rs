@@ -17,6 +17,8 @@ struct Session {
     tokens: HashSet<String>,
     shared: HashMap<String, SharedFile>,
     received: Vec<SharedFile>,
+    #[serde(default)]
+    local_downloads: Vec<SharedFile>,
     messages: Vec<ChatMessage>,
 }
 fn collect(state: &AppState) -> Session {
@@ -72,6 +74,7 @@ fn collect(state: &AppState) -> Session {
         tokens,
         shared,
         received,
+        local_downloads: state.local_downloads.lock().unwrap_or_else(|e|e.into_inner()).clone(),
         messages,
     }
 }
@@ -147,6 +150,7 @@ fn restore_at(path: &Path, state: &AppState) -> Result<bool, String> {
         .collect();
     *state.received_files.lock().unwrap() =
         snapshot.received.into_iter().filter(available).collect();
+    *state.local_downloads.lock().unwrap() = snapshot.local_downloads.into_iter().filter(available).collect();
     if !snapshot.native_host || !snapshot.room.is_active {
         return Ok(false);
     }
@@ -207,6 +211,17 @@ pub fn restore(state: &AppState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn private_download_history_survives_restart_without_a_hosted_room() {
+        let dir=tempfile::tempdir().unwrap();let snapshot=dir.path().join("session.json");let binary=dir.path().join("private.txt");std::fs::write(&binary,b"local").unwrap();
+        let original=crate::tests::protected_state();original.room.lock().unwrap().is_active=false;
+        original.local_downloads.lock().unwrap().push(SharedFile{id:"private-id".into(),name:"private.txt".into(),size:5,path:binary.to_string_lossy().into_owned(),mime_type:"text/plain".into()});
+        write_at(&snapshot,&original).unwrap();let restarted=crate::tests::protected_state();
+        assert!(!restore_at(&snapshot,&restarted).unwrap());
+        assert_eq!(restarted.local_downloads.lock().unwrap()[0].id,"private-id");
+        assert!(restarted.received_files.lock().unwrap().is_empty());assert!(restarted.files.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn restart_keeps_room_messages_credentials_and_attachment_ids() {
         let dir = tempfile::tempdir().unwrap();

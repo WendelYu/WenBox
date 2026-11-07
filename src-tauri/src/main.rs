@@ -176,6 +176,8 @@ struct AppState {
     files: Mutex<HashMap<String, SharedFile>>,
     demand_files: Arc<demand_files::DemandFiles>,
     received_files: Mutex<Vec<SharedFile>>,
+    // Native-only download history: never included in room HTTP file indexes.
+    local_downloads: Mutex<Vec<SharedFile>>,
     messages: Mutex<Vec<ChatMessage>>,
     devices: Mutex<HashMap<String, LanDevice>>,
     // 房间制体系
@@ -398,12 +400,15 @@ fn clear_share_files(state: tauri::State<Arc<AppState>>) {
 
 #[tauri::command]
 fn get_received_files(state: tauri::State<Arc<AppState>>) -> Vec<SharedFile> {
-    state.received_files.lock().unwrap().clone()
+    let mut files=state.local_downloads.lock().unwrap_or_else(|e|e.into_inner()).clone();
+    files.extend(state.received_files.lock().unwrap_or_else(|e|e.into_inner()).clone());
+    files
 }
 
 #[tauri::command]
 fn reveal_received_file(id: String, state: tauri::State<Arc<AppState>>) -> Result<(), String> {
-    let path=state.received_files.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|f|f.id==id).map(|f|PathBuf::from(&f.path)).ok_or("找不到本机保存记录")?;
+    let native=state.local_downloads.lock().unwrap_or_else(|e|e.into_inner()).iter().find(|f|f.id==id).map(|f|PathBuf::from(&f.path));
+    let path=native.or_else(||state.received_files.lock().unwrap_or_else(|e|e.into_inner()).iter().find(|f|f.id==id).map(|f|PathBuf::from(&f.path))).ok_or("找不到本机保存记录")?;
     let path=path.canonicalize().map_err(|_|"文件已移动或删除".to_string())?;
     #[cfg(target_os="macos")]
     std::process::Command::new("open").arg("-R").arg(&path).spawn().map_err(|e|e.to_string())?;
@@ -1548,7 +1553,7 @@ async fn save_remote_file_to_directory(download_url: String, dir_path: String, f
         let path=save_remote_file_to_directory_blocking(download_url, dir_path, folder_name, file_name, token, content_key, room_id)?;
         let metadata=std::fs::metadata(&path).map_err(|e| e.to_string())?;
         let file=SharedFile { id:uuid::Uuid::new_v4().to_string(), name:PathBuf::from(&path).file_name().unwrap_or_default().to_string_lossy().into_owned(), size:metadata.len(), path:path.clone(), mime_type:mime_guess::from_path(&path).first_or_octet_stream().to_string() };
-        state.received_files.lock().unwrap_or_else(|e| e.into_inner()).insert(0,file);
+        { let mut saved=state.local_downloads.lock().unwrap_or_else(|e| e.into_inner());saved.insert(0,file);saved.truncate(500); }
         session_store::remember(&state);
         Ok(path)
     }).await.map_err(|e| format!("后台任务失败: {}", e))?
@@ -3602,7 +3607,7 @@ fn main() {
     if !windows_runtime::ensure_available() { return; }
     let state = Arc::new(AppState {
         files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
-        received_files: Mutex::new(Vec::new()),
+        received_files: Mutex::new(Vec::new()), local_downloads: Mutex::new(Vec::new()),
         messages: Mutex::new(Vec::new()),
         devices: Mutex::new(HashMap::new()),
         room: Mutex::new(RoomConfig::default()),
@@ -3944,7 +3949,7 @@ mod tests {
     pub(super) fn protected_state() -> Arc<AppState> {
         let state = Arc::new(AppState {
             files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
-            received_files: Mutex::new(Vec::new()),
+            received_files: Mutex::new(Vec::new()), local_downloads: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()),
             devices: Mutex::new(HashMap::new()),
             room: Mutex::new(RoomConfig {
@@ -4178,7 +4183,7 @@ mod tests {
         let path = dir.join("large.bin");
         File::create(&path).unwrap().set_len(16 * 1024 * 1024).unwrap();
         let state = Arc::new(AppState {
-            files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()), received_files: Mutex::new(Vec::new()),
+            files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()), received_files: Mutex::new(Vec::new()), local_downloads: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()), devices: Mutex::new(HashMap::new()),
             room: Mutex::new(RoomConfig::default()), members: Mutex::new(HashMap::new()),
             discovered_rooms: Mutex::new(HashMap::new()), auth_tokens: Mutex::new(HashSet::new()),
@@ -4300,7 +4305,7 @@ mod tests {
         // 否则会覆盖设备原生端的房间, 原房主解散时误伤新房间
         let state = Arc::new(AppState {
             files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
-            received_files: Mutex::new(Vec::new()),
+            received_files: Mutex::new(Vec::new()), local_downloads: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()),
             devices: Mutex::new(HashMap::new()),
             room: Mutex::new(RoomConfig::default()),
@@ -4368,7 +4373,7 @@ mod tests {
 
         let state = Arc::new(AppState {
             files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
-            received_files: Mutex::new(Vec::new()),
+            received_files: Mutex::new(Vec::new()), local_downloads: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()),
             devices: Mutex::new(HashMap::new()),
             room: Mutex::new(RoomConfig::default()),
@@ -4469,6 +4474,18 @@ mod tests {
         let mut decrypted = Vec::new();
         content_crypto::stream_decrypt(&key, "room-uuid", &mut encrypted.as_slice(), &mut decrypted).unwrap();
         assert_eq!(decrypted, plain);
+    }
+
+    #[test]
+    fn private_local_download_history_is_not_a_room_share() {
+        let state=protected_state();let dir=tempfile::tempdir().unwrap();let path=dir.path().join("private.txt");std::fs::write(&path,b"local-secret").unwrap();
+        state.local_downloads.lock().unwrap().push(SharedFile{id:"local-private-id".into(),name:"private.txt".into(),size:12,path:path.to_string_lossy().into_owned(),mime_type:"text/plain".into()});
+        let port=spawn_test_server(state);let base=format!("http://127.0.0.1:{port}");
+        for endpoint in ["/api/files","/api/received_files"] {
+            let body=get_http_client().get(&format!("{base}{endpoint}")).set("X-Room-Token","guest-token").call().unwrap().into_string().unwrap();
+            assert!(!body.contains("local-private-id"));assert!(!body.contains("private.txt"));
+        }
+        assert!(matches!(get_http_client().get(&format!("{base}/api/download/local-private-id")).set("X-Room-Token","guest-token").call(),Err(ureq::Error::Status(404,_))));
     }
 
     #[test]

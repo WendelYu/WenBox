@@ -5,7 +5,7 @@
       "passed": 58
     },
     "rust": {
-      "passed": 97,
+      "passed": 99,
       "ignored": 1,
       "ignored_fixture_run_separately": "passed"
     },
@@ -25,7 +25,8 @@
     "input_resources": {
       "verified_files": 69,
       "universal_tis_serializer": "present, signed, manifest verified"
-    }
+    },
+    "private_download_isolation": "HTTP lists/downloads deny local history; restart persistence verified"
   },
   "limitations": [
     "Real core smoke test launched from terminal was rejected by macOS Accessibility trust before keyboard initialization; actual two-device input remains a user acceptance test.",
