@@ -38,6 +38,11 @@ async function main() {
         const chunks = []; for await (const chunk of req) chunks.push(chunk);
         const body = Buffer.concat(chunks);
         const json = () => { try { return JSON.parse(body.toString()); } catch (_) { return {}; } };
+        if (url.pathname === '/api/events') {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });
+            res.write('retry: 60000\nevent: ready\ndata: {}\n\n');
+            return res.end();
+        }
         if (url.pathname === '/api/status') return send({ running: true, version: require('../package.json').version, ip: '192.168.1.8', all_ips: ['192.168.1.8', '192.168.2.8'], device: '测试电脑', port: 9527, platform: 'macOS' });
         if (url.pathname === '/api/room/status') return send({ ...room, isActive: active, isHost: req.headers['x-host-token'] === 'host-token' });
         if (url.pathname === '/api/discovered_rooms') { if (++discoveries === 1) await new Promise(resolve => setTimeout(resolve, 900)); return send({ rooms: [{ ...room, ip: '127.0.0.1', port: server.address().port, hostPlatform: 'macOS' }] }); }
@@ -232,9 +237,10 @@ async function main() {
 
         await page.locator('.chat-file-card').first().waitFor();
         const downloadEvent = page.waitForEvent('download');
+        const expectedDownloadName = (await page.locator('.chat-file-card .chat-file-name').first().textContent()).trim();
         await page.locator('.chat-file-download-btn').first().click();
         const download = await downloadEvent;
-        assert.equal(download.suggestedFilename(), 'fixture.txt');
+        assert.equal(download.suggestedFilename(), expectedDownloadName);
         await download.delete();
         await page.waitForTimeout(3200); // completed rows collapse into history
         for (const theme of ['dark', 'light']) for (const width of [1440, 1024, 768, 390]) await snapshot('host', theme, width);

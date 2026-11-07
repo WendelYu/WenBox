@@ -69,6 +69,7 @@ object FileManager {
         )
         files.add(file)
         onFilesChangedListener?.invoke()
+        SseHub.publish("files")
         return file
     }
 
@@ -76,18 +77,21 @@ object FileManager {
         files.removeAll { it.id == id }
         receivedFiles.removeAll { it.id == id }
         onFilesChangedListener?.invoke()
+        SseHub.publish("files")
     }
 
     fun clearAll() {
         files.clear()
         receivedFiles.clear()
         onFilesChangedListener?.invoke()
+        SseHub.publish("files")
     }
 
     /** 只清空"我要分享的"列表，保留已接收文件 (供 /api/files/clear 使用) */
     fun clearSharedOnly() {
         files.clear()
         onFilesChangedListener?.invoke()
+        SseHub.publish("files")
     }
 
     /**
@@ -153,6 +157,7 @@ object FileManager {
                         )
                         receivedFiles.add(0, sharedFile)
                         onFilesChangedListener?.invoke()
+        SseHub.publish("files")
                         sharedFile
                     } catch (e: Exception) {
                         // 写入失败时必须删掉 IS_PENDING 的残留条目，否则会留下不可见的半截文件
@@ -185,6 +190,7 @@ object FileManager {
                 )
                 receivedFiles.add(0, sharedFile)
                 onFilesChangedListener?.invoke()
+        SseHub.publish("files")
                 sharedFile
             }
         } catch (e: CancellationException) {

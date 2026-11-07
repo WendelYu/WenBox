@@ -156,6 +156,9 @@ fn restore_at(path: &Path, state: &AppState) -> Result<bool, String> {
         .as_secs();
     let mut room = snapshot.room;
     room.host_ip = super::get_primary_ip();
+    if room.content_key.is_empty() {
+        room.content_key = super::content_crypto::generate_key()?;
+    }
     *state.room.lock().unwrap() = room;
     *state.host_token.lock().unwrap() = snapshot.host_token;
     *state.is_tauri_host.lock().unwrap() = true;

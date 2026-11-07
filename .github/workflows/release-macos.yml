@@ -29,6 +29,12 @@ jobs:
           node --check app/src/main/assets/web/app.js
           npm test
           cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Verify macOS input-source concurrency fix
+        run: |
+          clang -O2 -dynamiclib -o /tmp/tis-serializer.dylib src-tauri/kvm-shim/tis_serializer.c -framework Carbon
+          codesign --force --sign - /tmp/tis-serializer.dylib
+          clang -fobjc-arc tests/macos/tis-concurrency.m -framework Cocoa -framework Carbon -o /tmp/wenbox-tis-check
+          DYLD_INSERT_LIBRARIES=/tmp/tis-serializer.dylib /tmp/wenbox-tis-check
       - name: Build Intel and Apple Silicon application
         run: npx --yes @tauri-apps/cli@1.5 build --target universal-apple-darwin --bundles app
       - name: Sign application and verify packaged input resources

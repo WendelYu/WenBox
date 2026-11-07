@@ -1,0 +1,36 @@
+{
+  "version": "1.4.11",
+  "local": {
+    "node": {
+      "passed": 58
+    },
+    "rust": {
+      "passed": 97,
+      "ignored": 1,
+      "ignored_fixture_run_separately": "passed"
+    },
+    "android": {
+      "tests": 41,
+      "failures": 0,
+      "lint": "passed",
+      "apk": "built"
+    },
+    "chromium_workspace": "passed",
+    "secure_origin_native_transport": "passed",
+    "macos_tis_concurrency": {
+      "seconds": 30,
+      "result": "exit 0",
+      "threads": "AppKit main loop + 2 TIS worker threads"
+    },
+    "input_resources": {
+      "verified_files": 69,
+      "universal_tis_serializer": "present, signed, manifest verified"
+    }
+  },
+  "limitations": [
+    "Real core smoke test launched from terminal was rejected by macOS Accessibility trust before keyboard initialization; actual two-device input remains a user acceptance test.",
+    "ECDH key wrapping protects against passive capture. HTTP page integrity and server identity are not authenticated; no claim of resistance to active MITM.",
+    "Browser file receiving/Blob upload can consume whole-file memory; native on-demand transport reads encrypted slices in bounded memory."
+  ],
+  "release_gate": "Android, Windows, macOS, Chromium/WebKit/Firefox CI must succeed before automatic publication."
+}

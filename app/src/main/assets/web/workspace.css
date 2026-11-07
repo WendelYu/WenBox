@@ -146,6 +146,12 @@ body { padding: var(--sp-4) var(--sp-6); align-items: flex-start; }
   .chat-composer { min-height: 110px; }
   .upload-queue { max-height: 20%; }
   [id="view-tools"] .card { padding: var(--sp-3); }
+  .chat-item_user { flex-wrap: wrap; gap: 3px 6px; }
+  .chat-item_user .user-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-item_time { order: 2; margin-left: auto; flex: 0 0 auto; }
+  .chat-item_ip { order: 3; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); padding: 0 5px; }
+  .chat-avatar { width: 24px; height: 24px; flex-basis: 24px; }
+  .toast { top: calc(8px + env(safe-area-inset-top, 0px)); max-width: calc(100vw - 24px); padding: 10px 16px; text-align: left; }
 }
 
 /* One real password input keeps paste, selection, autofill and screen readers native. */
@@ -198,6 +204,19 @@ body[data-discovery-open="true"] .room-mobile-tabs { display: none; }
 .wenbox-context-menu button:hover, .wenbox-context-menu button:focus-visible { background: var(--surface-2); outline: none; }
 .wenbox-context-menu button:disabled { opacity: .4; cursor: default; }
 
+/* Room-mode switch: a short surface hand-off rather than an abrupt replacement. */
+@keyframes room-switch-in {
+  from { opacity: .35; transform: translateY(7px) scale(.997); filter: blur(1.5px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+body.room-switching .room-status,
+body.room-switching .room-workspace,
+body.room-switching [id="roomLobby"] { animation: room-switch-in .38s cubic-bezier(.16, 1, .3, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  body.room-switching .room-status,
+  body.room-switching .room-workspace,
+  body.room-switching [id="roomLobby"] { animation: none; }
+}
 .file-drag-target { outline: 2px solid var(--color-primary, #318a81); outline-offset: -3px; }
 
 .chat-identity-restore { border: 0; padding: 2px 4px; border-radius: 4px; background: transparent; color: var(--primary-fg); font: inherit; font-size: var(--fs-xs); align-self: flex-end; cursor: pointer; }

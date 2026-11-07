@@ -2,6 +2,7 @@ package com.landrop.server
 
 import com.landrop.model.RoomConfig
 import com.landrop.model.RoomMember
+import com.landrop.security.ContentCrypto
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -27,7 +28,8 @@ object RoomManager {
         pin: String,
         hostDevice: String,
         hostIp: String,
-        hostPort: Int = 9527
+        hostPort: Int = 9527,
+        autoCreated: Boolean = false
     ): RoomConfig {
         val cleanPin = pin.trim()
         val needPassword = cleanPin.isNotEmpty()
@@ -47,7 +49,9 @@ object RoomManager {
             hostDevice = hostDevice,
             hostIp = hostIp,
             hostPort = hostPort,
-            createdAt = System.currentTimeMillis()
+            createdAt = System.currentTimeMillis(),
+            contentKey = ContentCrypto.generateKey(),
+            autoCreated = autoCreated
         )
 
         currentRoom = config
@@ -71,7 +75,9 @@ object RoomManager {
         )
 
         onRoomStateChangedListener?.invoke(config)
+        SseHub.publish("room")
         onMembersChangedListener?.invoke(getMembers())
+        SseHub.publish("members")
         return config
     }
 
@@ -92,7 +98,9 @@ object RoomManager {
             members[HOST_MEMBER_KEY] = hostMember
         }
         onRoomStateChangedListener?.invoke(updated)
+        SseHub.publish("room")
         onMembersChangedListener?.invoke(getMembers())
+        SseHub.publish("members")
     }
 
     fun closeRoom() {
@@ -106,7 +114,9 @@ object RoomManager {
             com.landrop.utils.UdpDiscoveryManager.broadcastRoomClosed(oldRoomId)
         }
         onRoomStateChangedListener?.invoke(null)
+        SseHub.publish("room")
         onMembersChangedListener?.invoke(emptyList())
+        SseHub.publish("members")
     }
 
     fun verifyAndJoin(
@@ -139,6 +149,7 @@ object RoomManager {
         )
         members[token] = member
         onMembersChangedListener?.invoke(getMembers())
+        SseHub.publish("members")
 
         return Triple(true, "加入成功", token)
     }
@@ -155,6 +166,7 @@ object RoomManager {
             if (!name.isNullOrBlank() && existing.name != name.trim()) {
                 existing.name = name.trim()
                 onMembersChangedListener?.invoke(getMembers())
+        SseHub.publish("members")
             }
         } else if (authTokens.contains(token)) {
             val displayName = name?.trim()?.ifBlank { null } ?: "访客设备"
@@ -169,6 +181,7 @@ object RoomManager {
             )
             members[token] = member
             onMembersChangedListener?.invoke(getMembers())
+        SseHub.publish("members")
         }
     }
 
@@ -178,6 +191,7 @@ object RoomManager {
         authTokens.remove(token)
         if (members.remove(token) != null) {
             onMembersChangedListener?.invoke(getMembers())
+        SseHub.publish("members")
         }
     }
 

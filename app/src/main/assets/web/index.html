@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
-    <meta name="wenbox-version" content="1.4.10">
+    <meta name="wenbox-version" content="1.4.11">
     <title>WenBox · 文件与消息直传</title>
     <script src="theme.js"></script>
     <link rel="icon" type="image/png" href="logo.png">
@@ -84,7 +84,7 @@
             <div class="connection-mark"><svg class="icon icon--lg" aria-hidden="true"><use href="#i-monitor"></use></svg></div>
             <div class="connection-summary">
                 <div class="connection-title"><strong id="roomName" class="truncate">发现附近的设备</strong><span id="roomRoleBadge" class="badge badge--neutral">未加入房间</span></div>
-                <div class="connection-meta"><span id="roomLock" class="only-in-room"></span><button id="chatOnlineMemberBadge" class="btn btn--ghost btn--sm only-in-room" type="button">查看成员</button><span id="roomConnectionNotice" role="status" hidden></span><span id="directConnectionStatus" role="status" hidden></span><span class="only-client">连接同一网络，或使用 USB 网卡加网线直连</span></div>
+                <div class="connection-meta"><span id="roomLock" class="only-in-room"></span><span id="roomEncryptionBadge" class="badge badge--success only-in-room" hidden>内容加密</span><span id="roomRealtimeBadge" class="badge badge--neutral only-in-room" hidden>实时同步</span><button id="chatOnlineMemberBadge" class="btn btn--ghost btn--sm only-in-room" type="button">查看成员</button><span id="roomConnectionNotice" role="status" hidden></span><span id="directConnectionStatus" role="status" hidden></span><span class="only-client">连接同一网络，或使用 USB 网卡加网线直连</span></div>
             </div>
             <div class="room-status-actions">
                 <button id="btnBrowseRooms" class="btn btn--secondary btn--sm" type="button">附近房间</button>
@@ -620,6 +620,7 @@
             </div>
             <div class="modal-body"><div class="room-preview"><span class="room-preview-icon"><svg class="icon"><use href="#i-link"></use></svg></span><div><strong id="joinRoomPreview">协作房间</strong><span id="joinRoomDevice">等待连接</span></div><span class="room-preview-tag">加入</span></div>
                 <p class="modal-tip" id="joinPinModalDesc">设置进入房间后展示的昵称，加入后将显示为「昵称 (IP)」</p>
+                <p class="modal-tip fs-xs text-2" id="joinDissolveHint">如果本机已自动创建默认接收房间，加入其他房间后会自动解散，避免同时作为两个房间的房主。</p>
                 <div class="form-group mt-3">
                     <label for="modalInputJoinNickname">你的昵称</label>
                     <input type="text" id="modalInputJoinNickname" class="converter-input" maxlength="20" placeholder="例如：现场工程师">
@@ -793,6 +794,9 @@
                     </div>
                 </div>
     <script src="runtime.js"></script>
+    <script src="stream-crypto.js"></script>
+    <script src="key-exchange.js"></script>
+    <script src="aes-gcm.js"></script>
     <script src="upload-queue.js"></script><script src="ui-state.js"></script>
     <script src="demand-files.js"></script><script src="app.js"></script>
     <script src="service-health.js"></script>

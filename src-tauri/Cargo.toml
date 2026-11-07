@@ -1,6 +1,6 @@
 [package]
 name = "wenbox"
-version = "1.4.10"
+version = "1.4.11"
 description = "WenBox - 局域网跨设备互传与多端百宝箱"
 authors = ["Wendel"]
 edition = "2021"
@@ -29,6 +29,7 @@ dirs-next = "2.0"
 tempfile = "=3.27.0"
 rcgen = "=0.13.2"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+ring = "0.17"
 sha2 = "=0.10.9"
 
 [target.'cfg(windows)'.dependencies]

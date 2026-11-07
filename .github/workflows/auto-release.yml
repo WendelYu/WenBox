@@ -115,9 +115,12 @@ jobs:
   build-macos:
     uses: ./.github/workflows/release-macos.yml
 
+  browser-checks:
+    uses: ./.github/workflows/web-compatibility.yml
+
   publish-release:
     name: Auto Publish to GitHub Release
-    needs: [build-android, build-windows, build-macos]
+    needs: [build-android, build-windows, build-macos, browser-checks]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code

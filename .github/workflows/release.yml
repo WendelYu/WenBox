@@ -89,6 +89,9 @@ jobs:
           npx playwright install chromium
           node scripts/check-native-transport.cjs
 
+      - name: Test desktop backend
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
       - name: Build Tauri Windows EXE
         run: npx --yes @tauri-apps/cli@1.5 build --bundles nsis
 

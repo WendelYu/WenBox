@@ -10,7 +10,7 @@ const output = path.join(root, 'src-tauri/resources/kvm');
 const cache = path.resolve(process.env.WENBOX_KVM_CACHE || path.join(os.tmpdir(), 'wenbox-kvm-downloads'));
 const dry = process.argv.includes('--verify-only');
 const preparationStamp = crypto.createHash('sha256');
-for (const relative of ['scripts/prepare-kvm-backend.cjs', 'scripts/kvm-backend-lock.json', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock', 'src-tauri/src/kvm/model.rs', 'src-tauri/src/kvm/identity.rs', 'src-tauri/src/kvm/broker_protocol.rs', 'src-tauri/src/kvm/broker_service.rs', 'src-tauri/kvm-service/src/main.rs', 'src-tauri/kvm-service/Cargo.toml', 'src-tauri/kvm-service/Cargo.lock', 'src-tauri/installer/windows.nsi', 'src-tauri/installer/install-service.ps1']) preparationStamp.update(fs.readFileSync(path.join(root, relative)));
+for (const relative of ['scripts/prepare-kvm-backend.cjs', 'scripts/kvm-backend-lock.json', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock', 'src-tauri/src/kvm/model.rs', 'src-tauri/src/kvm/identity.rs', 'src-tauri/src/kvm/broker_protocol.rs', 'src-tauri/src/kvm/broker_service.rs', 'src-tauri/kvm-service/src/main.rs', 'src-tauri/kvm-service/Cargo.toml', 'src-tauri/kvm-service/Cargo.lock', 'src-tauri/installer/windows.nsi', 'src-tauri/installer/install-service.ps1', 'src-tauri/kvm-shim/tis_serializer.c']) preparationStamp.update(fs.readFileSync(path.join(root, relative)));
 const stamp = preparationStamp.digest('hex');
 function run(bin, args, options = {}) { const result = cp.spawnSync(bin, args, { stdio: 'inherit', ...options }); if (result.status !== 0) throw new Error(`${bin} failed (${result.status})`); }
 const sha = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -99,6 +99,20 @@ async function main() {
             run('/usr/libexec/PlistBuddy', ['-c', 'Set :CFBundleName WenBox Input', plist]);
             run('/usr/libexec/PlistBuddy', ['-c', 'Add :CFBundleDisplayName string WenBox Input', plist]);
             fs.rmSync(path.join(app, 'Contents/MacOS/Deskflow'), { force: true });
+            // macOS 26 aborts deskflow-core when its input thread enters the TIS
+            // API while AppKit does the same on the main thread. The shim only
+            // serialises those calls; it does not alter the upstream binary.
+            const shim = path.join(stage, 'tis-serializer.dylib');
+            run('clang', [
+                '-O2', '-dynamiclib', '-arch', 'arm64', '-arch', 'x86_64',
+                '-mmacosx-version-min=12.0', '-o', shim,
+                path.join(root, 'src-tauri/kvm-shim/tis_serializer.c'), '-framework', 'Carbon'
+            ]);
+            const shimArchs = cp.execFileSync('/usr/bin/lipo', ['-archs', shim], { encoding: 'utf8' }).trim().split(/\s+/);
+            if (!(shimArchs.includes('arm64') && shimArchs.includes('x86_64'))) throw new Error('TIS compatibility shim is not universal');
+            run('/usr/bin/codesign', ['--force', '--sign', '-', shim]);
+            fs.chmodSync(shim, 0o755);
+
             fs.rmSync(path.join(app, 'Contents/_CodeSignature'), { recursive: true, force: true });
             run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', app]);
         } else {
@@ -115,8 +129,8 @@ async function main() {
             run('cargo', ['build', '--locked', '--release', '--manifest-path', path.join(root, 'src-tauri/kvm-service/Cargo.toml'), '--target-dir', path.join(root, 'src-tauri/target/kvm-service')]);
             fs.copyFileSync(path.join(root, 'src-tauri/target/kvm-service/release/wenbox-kvm-service.exe'), path.join(stage, 'wenbox-kvm-service.exe'));
             for (const name of ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll']) if (fs.existsSync(path.join(input, name))) fs.copyFileSync(path.join(input, name), path.join(stage, name));
-            fs.copyFileSync(path.join(root, 'src-tauri/installer/install-service.ps1'), path.join(stage, 'install-service.ps1'));
-            const helper = path.join(root, 'src-tauri/installer/install-service.ps1').replaceAll('$', () => '$$');
+            fs.copyFileSync(path.join(root, 'src-tauri/installer/install-service.ps1', 'src-tauri/kvm-shim/tis_serializer.c'), path.join(stage, 'install-service.ps1'));
+            const helper = path.join(root, 'src-tauri/installer/install-service.ps1', 'src-tauri/kvm-shim/tis_serializer.c').replaceAll('$', () => '$$');
             const template = fs.readFileSync(path.join(root, 'src-tauri/installer/windows.nsi'), 'utf8').replaceAll('@@WENBOX_SERVICE_HELPER@@', helper);
             fs.writeFileSync(path.join(stage, 'installer.nsi'), template);
             fs.rmSync(unpack, { recursive: true });

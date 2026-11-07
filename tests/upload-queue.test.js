@@ -3,13 +3,13 @@ const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const vm = require('node:vm');
 
-function setup({ sendNative } = {}) {
+function setup({ sendNative, prepareFile } = {}) {
     const requests = [], completed = [], timers = [];
     class XHR {
-        constructor() { this.handlers = {}; this.upload = { addEventListener() {} }; requests.push(this); }
+        constructor() { this.handlers = {}; this.headers = {}; this.upload = { addEventListener() {} }; requests.push(this); }
         addEventListener(type, handler) { this.handlers[type] = handler; }
         open(method, url) { this.url = url; }
-        setRequestHeader(key, value) { this.token = value; }
+        setRequestHeader(key, value) { this.headers[key] = value; this.token = value; }
         send(body) { this.body = body; }
         abort() { this.aborted = true; this.handlers.abort(); }
         finish(status = 200, data = { success: true, fileId: 'uploaded-id' }) {
@@ -18,7 +18,7 @@ function setup({ sendNative } = {}) {
     }
     const context = { FormData, AbortController, setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {} };
     vm.runInNewContext(readFileSync('app/src/main/assets/web/upload-queue.js', 'utf8'), context);
-    const queue = context.WenBox.createUploadQueue({ createXHR: () => new XHR(), concurrency: 2, sendNative, onComplete: (...args) => completed.push(args) });
+    const queue = context.WenBox.createUploadQueue({ createXHR: () => new XHR(), concurrency: 2, sendNative, prepareFile, onComplete: (...args) => completed.push(args) });
     const add = (name = '中文 | sample.txt', extra = {}) => {
         const file = new Blob(['hello']); file.name = name;
         return queue.enqueue(file, { url: '/api/upload', token: 'room-token', revision: 1, ...extra });
@@ -105,4 +105,28 @@ test('reconnecting refreshes retry credentials only for the same room revision',
     queue.retry(current); queue.retry(previous);
     assert.equal(requests[2].token, 'renewed-token');
     assert.equal(requests[3].token, 'room-token');
+});
+
+test('encrypted uploads send the prepared body as a raw encrypted stream', async () => {
+    const preparedBlob = new Blob(['encrypted-frame']);
+    const { queue, add, requests } = setup({ prepareFile: async file => ({ blob: preparedBlob, encrypted: true, size: preparedBlob.size }) });
+    add('机密资料.txt');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(requests[0].headers['Content-Type'], 'application/octet-stream');
+    assert.equal(requests[0].headers['X-WenBox-Encryption'], 'v1');
+    assert.equal(requests[0].headers['X-File-Name'], encodeURIComponent('机密资料.txt'));
+    assert.equal(await requests[0].body.text(), 'encrypted-frame');
+});
+
+test('native encrypted uploads keep the original filename and flag for the Rust transport', async () => {
+    const pending = [];
+    const { queue, add } = setup({
+        sendNative: (file, context) => new Promise(resolve => pending.push({ file, context, resolve })),
+        prepareFile: async () => ({ blob: new Blob(['sealed']), encrypted: true, size: 6 })
+    });
+    add('原生截图.png');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(pending[0].context.encrypted, true);
+    assert.equal(pending[0].context.name, '原生截图.png');
+    assert.equal(await pending[0].file.text(), 'sealed');
 });

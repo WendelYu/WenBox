@@ -39,6 +39,7 @@ object MessageManager {
             _messageFlow.value = messages.toList()
         }
         onMessageReceivedListener?.invoke(msg)
+        SseHub.publish("message")
     }
 
     fun addPhoneMessage(content: String, senderName: String = "本机", senderIp: String = "", clientId: String = ""): ChatMessage {
@@ -97,5 +98,6 @@ object MessageManager {
 
     fun clearAll() {
         synchronized(lock) { messages.clear(); _messageFlow.value = emptyList() }
+        SseHub.publish("messages")
     }
 }

@@ -1,6 +1,6 @@
 // Classic-script factory also works in Electron's file:// renderer and older Android WebViews.
 (function (root) {
-    function createUploadQueue({ container, history, count, onComplete, createXHR = () => new XMLHttpRequest(), now = () => Date.now(), concurrency = 3, sendNative = null }) {
+    function createUploadQueue({ container, history, count, onComplete, createXHR = () => new XMLHttpRequest(), now = () => Date.now(), concurrency = 3, sendNative = null, prepareFile = null }) {
         const items = new Map();
         let serial = 0, active = 0, generation = 0;
         const bytes = value => value >= 1048576 ? `${(value / 1048576).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
@@ -46,13 +46,23 @@
             }
             pump();
         }
-        function start(item) {
+        async function start(item) {
             item.state = 'uploading'; item.started = now(); active++;
             try {
+                if (prepareFile) {
+                    item.phase = 'preparing'; render(item);
+                    const prepared = await prepareFile(item.file);
+                    if (item.state !== 'uploading') return;
+                    item.uploadFile = prepared.blob;
+                    item.encrypted = !!prepared.encrypted;
+                    item.total = prepared.size || item.file.size;
+                    item.phase = null; render(item);
+                }
+                const uploadFile = item.uploadFile || item.file;
                 if (sendNative) {
                     const controller = new AbortController();
                     item.xhr = { abort: () => controller.abort() };
-                    sendNative(item.file, item.context, (loaded, total, phase) => {
+                    sendNative(uploadFile, { ...item.context, encrypted: item.encrypted, name: item.file.name }, (loaded, total, phase) => {
                         if (item.state !== 'uploading') return;
                         item.loaded = loaded; item.total = total; item.phase = phase; render(item);
                     }, controller.signal).then(result => {
@@ -81,8 +91,16 @@
                 xhr.addEventListener('timeout', () => settle(item, 'failed', '传输超时，请重试'));
                 xhr.open('POST', item.context.url);
                 if (item.context.token) xhr.setRequestHeader('X-Room-Token', item.context.token);
-                const form = new FormData(); form.append('file', item.file, item.file.name);
-                xhr.send(form); render(item);
+                if (item.encrypted) {
+                    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+                    xhr.setRequestHeader('X-WenBox-Encryption', 'v1');
+                    xhr.setRequestHeader('X-File-Name', encodeURIComponent(item.file.name));
+                    xhr.send(uploadFile);
+                } else {
+                    const form = new FormData(); form.append('file', item.file, item.file.name);
+                    xhr.send(form);
+                }
+                render(item);
             } catch (error) { settle(item, 'failed', String(error.message || error)); }
         }
         function pump() {

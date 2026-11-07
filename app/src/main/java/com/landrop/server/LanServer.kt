@@ -2,6 +2,7 @@ package com.landrop.server
 
 import android.content.Context
 import android.os.Build
+import com.landrop.security.ContentCrypto
 import com.landrop.utils.NetworkUtils
 import com.landrop.utils.UdpDiscoveryManager
 import fi.iki.elonen.NanoHTTPD
@@ -55,7 +56,7 @@ class LanServer(
 
         // 统一鉴权：密码保护房间的敏感接口要求有效房间令牌 (与桌面端行为一致)
         val isProtected = uri == "/api/files" || uri == "/api/files/clear" || uri == "/api/received_files"
-                || uri.startsWith("/api/download/") || uri.startsWith("/api/offers") || uri == "/api/upload" || uri.startsWith("/api/messages")
+                || uri.startsWith("/api/download/") || uri.startsWith("/api/offers") || uri == "/api/events" || uri == "/api/upload" || uri.startsWith("/api/messages")
         if (isProtected && !isRequestAuthorized(session)) {
             return cors(newFixedLengthResponse(
                 Response.Status.UNAUTHORIZED,
@@ -83,6 +84,9 @@ class LanServer(
                 uri == "/kvm.js" -> serveAsset("web/kvm.js", "application/javascript; charset=UTF-8")
                 uri == "/kvm.css" -> serveAsset("web/kvm.css", "text/css; charset=UTF-8")
                 uri == "/runtime.js" -> serveAsset("web/runtime.js", "application/javascript; charset=UTF-8")
+                uri == "/key-exchange.js" -> serveAsset("web/key-exchange.js", "application/javascript; charset=UTF-8")
+                uri == "/stream-crypto.js" -> serveAsset("web/stream-crypto.js", "application/javascript; charset=UTF-8")
+                uri == "/aes-gcm.js" -> serveAsset("web/aes-gcm.js", "application/javascript; charset=UTF-8")
                 uri == "/upload-queue.js" -> serveAsset("web/upload-queue.js", "application/javascript; charset=UTF-8")
                 uri == "/ui-state.js" -> serveAsset("web/ui-state.js", "application/javascript; charset=UTF-8")
                 uri == "/theme.js" -> serveAsset("web/theme.js", "application/javascript; charset=UTF-8")
@@ -91,6 +95,35 @@ class LanServer(
                 uri == "/icons.svg" -> serveAsset("web/icons.svg", "image/svg+xml; charset=UTF-8")
                 uri == "/logo.png" || uri == "/favicon.png" || uri == "/apple-touch-icon.png" ->
                     serveAsset("web/logo.png", "image/png")
+
+                // 1.35 实时事件流 (SSE)
+                method == Method.GET && uri == "/api/events" -> {
+                    val room = RoomManager.currentRoom
+                    val ready = buildString {
+                        append("retry: 3000\n")
+                        append("event: ready\n")
+                        append("data: ")
+                        append(JSONObject().apply {
+                            put("roomId", room?.roomId ?: "")
+                            put("isActive", room?.isActive == true)
+                            put("encrypted", !room?.contentKey.isNullOrBlank())
+                        }.toString())
+                        append("\n\n")
+                    }
+                    val (_, stream) = try {
+                        SseHub.register(ready)
+                    } catch (e: Exception) {
+                        return cors(newFixedLengthResponse(
+                            Response.Status.SERVICE_UNAVAILABLE,
+                            "application/json; charset=UTF-8",
+                            "{\"success\":false,\"message\":\"${e.message ?: "实时连接数已达上限"}\"}"
+                        ), session)
+                    }
+                    val response = newChunkedResponse(Response.Status.OK, "text/event-stream; charset=utf-8", stream)
+                    response.addHeader("Cache-Control", "no-cache, no-transform")
+                    response.addHeader("X-Accel-Buffering", "no")
+                    response
+                }
 
                 // 1.4 已发现房间列表
                 method == Method.GET && uri == "/api/discovered_rooms" -> {
@@ -149,6 +182,7 @@ class LanServer(
                             put("hostPort", serverPort)
                             put("memberCount", RoomManager.getMembers().size)
                             put("isHost", isHost)
+                            if (isHost) put("contentKey", room.contentKey)
                         }
                     } else {
                         JSONObject().apply {
@@ -207,10 +241,33 @@ class LanServer(
                             put("hostIp", cfg.hostIp)
                             put("hostPort", cfg.hostPort)
                             put("hostToken", RoomManager.currentHostToken)
+                            put("contentKey", cfg.contentKey)
                             // 成员 id 与房主 token 分离，公开接口不再泄露凭证 (S2)
                             put("memberId", RoomManager.getHostMemberId())
                         }
                         newFixedLengthResponse(Response.Status.OK, "application/json; charset=UTF-8", result.toString())
+                    }
+                }
+
+                // 1.425 本机页面加入远端后解散启动默认房间
+                method == Method.POST && uri == "/api/room/leave_local_default" -> {
+                    val ip = remoteIp(session)
+                    val loopback = ip == "127.0.0.1" || ip == "::1" || ip.startsWith("127.")
+                    if (!loopback || !isOriginAllowed(session)) {
+                        newFixedLengthResponse(
+                            Response.Status.FORBIDDEN,
+                            "application/json; charset=UTF-8",
+                            "{\"success\":false,\"message\":\"仅允许本机页面解散默认房间\"}"
+                        )
+                    } else {
+                        val room = RoomManager.currentRoom
+                        val closed = room != null && room.isActive && room.autoCreated
+                        if (closed) RoomManager.closeRoom()
+                        newFixedLengthResponse(
+                            Response.Status.OK,
+                            "application/json; charset=UTF-8",
+                            JSONObject().put("success", true).put("closed", closed).toString()
+                        )
                     }
                 }
 
@@ -287,6 +344,7 @@ class LanServer(
                                 put("hostDevice", room.hostDevice)
                                 put("hostIp", primaryIp)
                                 put("hostPort", serverPort)
+                                put("contentKey", room.contentKey)
                             }
                         } else JSONObject.NULL
 
@@ -294,6 +352,7 @@ class LanServer(
                             put("success", ok)
                             put("message", msg)
                             put("token", token)
+
                             put("memberId", RoomManager.getMemberIdByToken(token))
                             put("retryAfter", 0)
                             put("room", roomObj)
@@ -577,36 +636,71 @@ class LanServer(
                                 if (ch.code in 33..126 && ch != '"' && ch != '\\') ch else '_'
                             }.joinToString("").ifBlank { "file" }
                             val mime = file.mimeType.ifBlank { "application/octet-stream" }
-                            val resp = if (file.size > 0) {
-                                newFixedLengthResponse(Response.Status.OK, mime, inputStream, file.size)
+                            val key = currentContentKey()
+                            if (wantsContentEncryption(session) || !isTrustedLoopback(session)) {
+                                if (key == null) {
+                                    newFixedLengthResponse(
+                                        Response.Status.CONFLICT,
+                                        "application/json; charset=utf-8",
+                                        "{\"success\":false,\"message\":\"房间尚未生成内容密钥，请重新创建房间\"}"
+                                    )
+                                } else {
+                                    val roomId = RoomManager.currentRoom?.roomId ?: ""
+                                    val resp = newChunkedResponse(
+                                        Response.Status.OK,
+                                        "application/octet-stream",
+                                        ContentCrypto.encryptingStream(inputStream, key, roomId)
+                                    )
+                                    resp.addHeader("X-WenBox-Encryption", "v1")
+                                    resp.addHeader(
+                                        "Content-Disposition",
+                                        "attachment; filename=\"$asciiFallback\"; filename*=UTF-8''$encodedFilename"
+                                    )
+                                    resp
+                                }
                             } else {
-                                // 部分 ContentProvider 上报大小为 0，定长响应会把传输截断为 0 字节，退化为分块流式
-                                newChunkedResponse(Response.Status.OK, mime, inputStream)
+                                val resp = if (file.size > 0) {
+                                    newFixedLengthResponse(Response.Status.OK, mime, inputStream, file.size)
+                                } else {
+                                    // 部分 ContentProvider 上报大小为 0，定长响应会把传输截断为 0 字节，退化为分块流式
+                                    newChunkedResponse(Response.Status.OK, mime, inputStream)
+                                }
+                                resp.addHeader(
+                                    "Content-Disposition",
+                                    "attachment; filename=\"$asciiFallback\"; filename*=UTF-8''$encodedFilename"
+                                )
+                                resp
                             }
-                            resp.addHeader(
-                                "Content-Disposition",
-                                "attachment; filename=\"$asciiFallback\"; filename*=UTF-8''$encodedFilename"
-                            )
-                            resp
                         }
                     }
                 }
 
                 // 4. 电脑端文件上传到手机
                 method == Method.POST && uri == "/api/upload" -> {
-                    handleFileUpload(session)
+                    if (session.headers["x-wenbox-encryption"]?.trim()?.equals("v1", true) == true) {
+                        handleEncryptedUpload(session)
+                    } else {
+                        handleFileUpload(session)
+                    }
                 }
 
                 // 5. 局域网即时消息获取
                 method == Method.GET && uri == "/api/messages" -> {
                     val sinceParam = session.parameters["since"]?.firstOrNull()?.toLongOrNull() ?: 0L
                     val messages = MessageManager.getMessages(sinceParam)
+                    val roomId = RoomManager.currentRoom?.roomId ?: ""
+                    val key = currentContentKey()
+                    val encrypted = key != null && (wantsContentEncryption(session) || !isTrustedLoopback(session))
                     val jsonArray = JSONArray()
                     for (m in messages) {
                         val item = JSONObject().apply {
                             put("id", m.id)
                             put("senderName", m.senderName)
-                            put("content", m.content)
+                            put("content", if (encrypted) {
+                                runCatching {
+                                    ContentCrypto.encryptText(key!!, ContentCrypto.messageAad(roomId), m.content)
+                                }.getOrDefault("🔒 消息加密失败")
+                            } else m.content)
                             put("timestamp", m.timestamp)
                             put("isFromPhone", m.isFromPhone)
                             put("senderIp", m.senderIp)
@@ -616,7 +710,8 @@ class LanServer(
                     }
                     val result = JSONObject().apply {
                         put("messages", jsonArray)
-                        put("roomId", RoomManager.currentRoom?.roomId ?: "")
+                        put("encrypted", encrypted)
+                        put("roomId", roomId)
                         put("isActive", RoomManager.currentRoom != null)
                     }
                     val jsonBytes = result.toString().toByteArray(Charsets.UTF_8)
@@ -643,6 +738,15 @@ class LanServer(
             newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "500 Error: ${e.message}")
         }
 
+        if (uri in listOf("/api/room/join", "/api/room/create", "/api/room/status")) {
+            return try {
+                val json = response.data.bufferedReader(Charsets.UTF_8).use { JSONObject(it.readText()) }
+                val protected = com.landrop.security.KeyExchange.protect(json, session.headers["x-wenbox-key"])
+                cors(newFixedLengthResponse(response.status, "application/json; charset=UTF-8", protected.toString()), session)
+            } catch (_: Exception) {
+                cors(newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json", "{\"success\":false,\"message\":\"密钥协商失败，请升级两端后重试\"}"), session)
+            }
+        }
         return cors(response, session)
     }
 
@@ -695,6 +799,47 @@ class LanServer(
         )
     }
 
+    private fun handleEncryptedUpload(session: IHTTPSession): Response {
+        val key = currentContentKey()
+            ?: return newFixedLengthResponse(
+                Response.Status.CONFLICT,
+                "application/json; charset=utf-8",
+                "{\"success\":false,\"message\":\"房间尚未生成内容密钥，请重新创建房间\"}"
+            )
+        val roomId = RoomManager.currentRoom?.roomId ?: ""
+        val originalName = resolveUploadFileName(session, null)
+        return try {
+            val length = session.headers["content-length"]?.toLongOrNull() ?: throw IllegalArgumentException("缺少文件流长度")
+            val decrypted = ContentCrypto.decryptingStream(ContentCrypto.boundedInput(session.inputStream, length), key, roomId)
+            val sharedFile = FileManager.saveIncomingFile(context, originalName, decrypted)
+                ?: return newFixedLengthResponse(
+                    Response.Status.INTERNAL_ERROR,
+                    "application/json; charset=utf-8",
+                    "{\"success\":false,\"message\":\"保存文件失败\"}"
+                )
+            val resObj = JSONObject().apply {
+                put("success", true)
+                put("fileId", sharedFile.id)
+                put("name", originalName)
+                put("size", sharedFile.size)
+                put("message", "File saved to Download/WenBox")
+            }
+            val resBytes = resObj.toString().toByteArray(Charsets.UTF_8)
+            newFixedLengthResponse(
+                Response.Status.OK,
+                "application/json; charset=utf-8",
+                ByteArrayInputStream(resBytes),
+                resBytes.size.toLong()
+            )
+        } catch (e: Exception) {
+            newFixedLengthResponse(
+                Response.Status.BAD_REQUEST,
+                "application/json; charset=utf-8",
+                "{\"success\":false,\"message\":\"加密文件接收失败：${e.message ?: "格式无效"}\"}"
+            )
+        }
+    }
+
     /**
      * 还原上传文件的真实名称：
      * 1. 优先使用 X-File-Name 头 (Android/桌面客户端始终携带，URL 编码无字符集歧义)；
@@ -743,6 +888,14 @@ class LanServer(
             ?: queryToken?.trim()?.takeIf { it.isNotEmpty() }
         return RoomManager.isAuthorized(token)
     }
+
+    private fun wantsContentEncryption(session: IHTTPSession): Boolean {
+        if (session.headers["x-wenbox-encryption"]?.trim()?.equals("v1", true) == true) return true
+        return session.parameters["enc"]?.firstOrNull() == "1"
+    }
+
+    private fun currentContentKey(): String? =
+        RoomManager.currentRoom?.contentKey?.takeIf { it.isNotBlank() }
 
     private fun remoteIp(session: IHTTPSession): String {
         return session.headers["http-client-ip"]
@@ -874,6 +1027,19 @@ class LanServer(
             }
         }
 
+        val room = RoomManager.currentRoom
+        if (room != null && content.startsWith(ContentCrypto.TEXT_PREFIX) && room.contentKey.isNotBlank()) {
+            content = try {
+                ContentCrypto.decryptText(room.contentKey, ContentCrypto.messageAad(room.roomId), content)
+            } catch (_: Exception) {
+                return newFixedLengthResponse(
+                    Response.Status.BAD_REQUEST,
+                    "application/json; charset=utf-8",
+                    "{\"success\":false,\"message\":\"消息解密失败，可能不是本房间的内容\"}"
+                )
+            }
+        }
+
         if (content.isNotBlank()) {
             val msg = MessageManager.addClientMessage(content, senderName, senderIp, clientId)
             val respBytes = "{\"success\": true, \"id\": \"${msg.id}\"}".toByteArray(Charsets.UTF_8)
@@ -966,7 +1132,8 @@ class LanServer(
             response.addHeader("Vary", "Origin")
         }
         response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
-        response.addHeader("Access-Control-Allow-Headers", "Content-Type, X-File-Name, Range, Authorization, X-Room-Token, X-Host-Token, X-Share-Key, X-Share-File")
+        response.addHeader("Access-Control-Expose-Headers", "X-WenBox-Encryption, Content-Disposition, Retry-After")
+        response.addHeader("Access-Control-Allow-Headers", "Content-Type, X-File-Name, Range, Authorization, X-Room-Token, X-Host-Token, X-WenBox-Key, X-WenBox-Encryption, X-Share-Key, X-Share-File")
         return response
     }
 }

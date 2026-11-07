@@ -24,6 +24,8 @@ object HttpHelper {
             conn.readTimeout = 6000
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+            val exchange = if (url.path in listOf("/api/room/join", "/api/room/create", "/api/room/status")) com.landrop.security.KeyExchange() else null
+            exchange?.let { conn.setRequestProperty("X-WenBox-Key", it.publicKey) }
             headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
 
             OutputStreamWriter(conn.outputStream, "UTF-8").use {
@@ -34,7 +36,7 @@ object HttpHelper {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else (conn.errorStream ?: conn.inputStream)
             val response = BufferedReader(InputStreamReader(stream, "UTF-8")).use { it.readText() }
-            Pair(code, response)
+            Pair(code, if (exchange != null && code in 200..299) exchange.open(JSONObject(response)).toString() else response)
         } finally {
             conn.disconnect()
         }
@@ -50,12 +52,52 @@ object HttpHelper {
             conn.requestMethod = "GET"
             conn.connectTimeout = 6000
             conn.readTimeout = 6000
+            val exchange = if (url.path in listOf("/api/room/join", "/api/room/create", "/api/room/status")) com.landrop.security.KeyExchange() else null
+            exchange?.let { conn.setRequestProperty("X-WenBox-Key", it.publicKey) }
             headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
 
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else (conn.errorStream ?: conn.inputStream)
             val response = BufferedReader(InputStreamReader(stream, "UTF-8")).use { it.readText() }
-            Pair(code, response)
+            Pair(code, if (exchange != null && code in 200..299) exchange.open(JSONObject(response)).toString() else response)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    suspend fun uploadEncryptedFile(
+        urlStr: String,
+        fileName: String,
+        inputStream: java.io.InputStream,
+        plainSize: Long,
+        contentKey: String,
+        roomId: String,
+        headers: Map<String, String> = emptyMap()
+    ): Pair<Int, String> = withContext(Dispatchers.IO) {
+        val url = URL(urlStr)
+        val conn = url.openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 15000
+            conn.readTimeout = 120000
+            conn.doOutput = true
+            conn.doInput = true
+            conn.useCaches = false
+            conn.setRequestProperty("Content-Type", "application/octet-stream")
+            conn.setRequestProperty("X-File-Name", java.net.URLEncoder.encode(fileName, "UTF-8"))
+            conn.setRequestProperty("X-WenBox-Encryption", "v1")
+            val exchange = if (url.path in listOf("/api/room/join", "/api/room/create", "/api/room/status")) com.landrop.security.KeyExchange() else null
+            exchange?.let { conn.setRequestProperty("X-WenBox-Key", it.publicKey) }
+            headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
+            conn.setFixedLengthStreamingMode(com.landrop.security.ContentCrypto.encryptedLength(plainSize))
+            conn.outputStream.use { out ->
+                com.landrop.security.ContentCrypto.encryptTo(inputStream, out, contentKey, roomId)
+                out.flush()
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else (conn.errorStream ?: conn.inputStream)
+            val response = BufferedReader(InputStreamReader(stream, "UTF-8")).use { it.readText() }
+            Pair(code, if (exchange != null && code in 200..299) exchange.open(JSONObject(response)).toString() else response)
         } finally {
             conn.disconnect()
         }
@@ -82,6 +124,8 @@ object HttpHelper {
             // 声明 UTF-8 编码，服务端 (NanoHTTPD) 据此以 UTF-8 解析 multipart 头部中的文件名
             conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary; charset=UTF-8")
             conn.setRequestProperty("X-File-Name", java.net.URLEncoder.encode(fileName, "UTF-8"))
+            val exchange = if (url.path in listOf("/api/room/join", "/api/room/create", "/api/room/status")) com.landrop.security.KeyExchange() else null
+            exchange?.let { conn.setRequestProperty("X-WenBox-Key", it.publicKey) }
             headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
 
             conn.outputStream.use { out ->
@@ -107,7 +151,7 @@ object HttpHelper {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else (conn.errorStream ?: conn.inputStream)
             val response = BufferedReader(InputStreamReader(stream, "UTF-8")).use { it.readText() }
-            Pair(code, response)
+            Pair(code, if (exchange != null && code in 200..299) exchange.open(JSONObject(response)).toString() else response)
         } finally {
             conn.disconnect()
         }

@@ -11,8 +11,8 @@ android {
         applicationId 'com.landrop'
         minSdk 26
         targetSdk 34
-        versionCode 16
-        versionName "1.4.10"
+        versionCode 17
+        versionName "1.4.11"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -55,6 +55,7 @@ dependencies {
 
     // 单元测试（转换逻辑等纯函数）
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20231013'
 
     // ViewModel / StateFlow：状态从 Fragment 字段迁出，重建后不丢失
     implementation 'androidx.activity:activity-ktx:1.8.2'

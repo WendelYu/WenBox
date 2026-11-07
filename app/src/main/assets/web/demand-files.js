@@ -15,9 +15,17 @@
             if (!response.ok) throw new Error(response.status === 404 ? '房主版本不支持按需分享，请更新房主客户端' : `分享请求失败 (${response.status})`);
             return response.json();
         }
-        function rawUpload(file, ctx, job, controller) {
+        async function rawUpload(file, ctx, job, controller) {
             const context = { url: ctx.base + '/api/offers/transfer/' + job.requestId + '/' + job.secret, token: ctx.token };
             if (options.nativeUpload) return options.nativeUpload(file, context, () => {}, controller.signal);
+            if (file.virtualEncrypted) {
+                const parts = [];
+                for (let offset=0; offset<file.size; offset+=1024*1024) {
+                    if (controller.signal.aborted) throw new DOMException('已取消','AbortError');
+                    parts.push(await file.slice(offset,offset+1024*1024).arrayBuffer());
+                }
+                file = new Blob(parts, {type:'application/octet-stream'});
+            }
             return new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
                 xhr.open('POST', context.url);
@@ -65,10 +73,10 @@
                 if (!session) session = { ...ctx, key: key() };
                 session.token = ctx.token;
                 const current = generation, active = session;
-                const entries = Array.from(list, file => ({ file, clientId: uuid() }));
+                const entries = Array.from(list, file => ({ file: options.prepare ? options.prepare(file, ctx) : file, original: file, clientId: uuid() }));
                 if (!entries.length) return [];
                 if (entries.length > 32) throw new Error('每次最多分享 32 个文件');
-                const response = await request(active, '/api/offers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ownerKey: active.key, senderName: options.sender(), scope, files: entries.map(e => ({ clientId: e.clientId, name: e.file.name, size: e.file.size, mimeType: e.file.type || 'application/octet-stream' })) }) });
+                const response = await request(active, '/api/offers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ownerKey: active.key, senderName: options.sender(), scope, files: entries.map(e => ({ clientId: e.clientId, name: e.file.name, size: e.file.size, plainSize: e.original.size, encrypted: !!e.file.virtualEncrypted, mimeType: e.original.type || 'application/octet-stream' })) }) });
                 if (current !== generation) { await request(active, '/api/offers/revoke', { method: 'POST' }); return []; }
                 for (const offer of response.files || []) {
                     const entry = entries.find(e => e.clientId === offer.clientId);

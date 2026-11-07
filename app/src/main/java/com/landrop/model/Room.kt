@@ -9,7 +9,11 @@ data class RoomConfig(
     var hostDevice: String = "",
     var hostIp: String = "",
     var hostPort: Int = 9527,
-    var createdAt: Long = 0L
+    var createdAt: Long = 0L,
+    /** AES-256-GCM key for messages and files; only exposed after join. */
+    var contentKey: String = "",
+    /** True only for the startup convenience room; joining a peer dissolves it. */
+    var autoCreated: Boolean = false
 )
 
 data class DiscoveredRoom(

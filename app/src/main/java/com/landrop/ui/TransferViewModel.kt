@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import com.landrop.R
 import com.landrop.server.FileManager
+import com.landrop.security.ContentCrypto
 import com.landrop.security.RoomProfileStore
 import com.landrop.security.RoomDownloadClient
 import kotlinx.coroutines.currentCoroutineContext
@@ -57,7 +58,9 @@ data class TransferUiState(
     val serviceRunning: Boolean = false,
     val sending: Boolean = false,
     /** 加入他人房间后拿到的房间令牌，随 state 一起在 View 重建后恢复 */
-    val joinedToken: String = ""
+    val joinedToken: String = "",
+    /** AES-256-GCM key for the joined room; memory only. */
+    val joinedContentKey: String = ""
 )
 
 class TransferViewModel(application: Application) : AndroidViewModel(application) {
@@ -99,12 +102,14 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
             RoomMode.CLIENT -> return
         }
         val token = if (snapshot.mode == RoomMode.HOST) RoomManager.currentHostToken else snapshot.joinedToken
+        val contentKey = if (snapshot.mode == RoomMode.HOST) RoomManager.currentRoom?.contentKey else snapshot.joinedContentKey
+        val roomId = if (snapshot.mode == RoomMode.HOST) snapshot.room?.roomId.orEmpty() else snapshot.joinedRoom?.roomId.orEmpty()
         viewModelScope.launch(Dispatchers.IO) {
             val app = getApplication<Application>()
             try {
                 val coroutine = currentCoroutineContext()
                 toast(app.getString(R.string.attachment_downloading, fileName))
-                val saved = RoomDownloadClient.download(origin, resource, token.orEmpty()) { input ->
+                val saved = RoomDownloadClient.download(origin, resource, token.orEmpty(), contentKey, roomId) { input ->
                     val stream = object : FilterInputStream(input) {
                         override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
                             coroutine.ensureActive()
@@ -206,7 +211,8 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
             joinedRoom = null,
             joinedMessages = emptyList(),
             myMemberId = "",
-            joinedToken = ""
+            joinedToken = "",
+            joinedContentKey = ""
         )
     }
 
@@ -236,16 +242,29 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                         val json = JSONObject(resText)
                         if (json.optBoolean("success", false)) {
                             val token = json.optString("token", "")
+                            val contentKey = json.optJSONObject("room")?.optString("contentKey", "")
+                                ?: json.optString("contentKey", "")
+                            val dissolvedDefault = RoomManager.currentRoom?.let { it.isActive && it.autoCreated } == true
+                            if (dissolvedDefault) {
+                                // A device should present one room at a time.  The
+                                // startup room is only a convenience receiver.
+                                RoomManager.closeRoom()
+                            }
                             _state.value = _state.value.copy(
                                 mode = RoomMode.JOINED,
                                 joinedRoom = room,
                                 myMemberId = json.optString("memberId", ""),
                                 joinedMessages = emptyList(),
                                 sending = false,
-                                joinedToken = token
+                                joinedToken = token,
+                                joinedContentKey = contentKey,
+                                room = if (dissolvedDefault) null else _state.value.room
                             )
                             startJoinedPolling(room)
-                            _toasts.tryEmit("已加入房间「${room.roomName}」")
+                            _toasts.tryEmit(
+                                if (dissolvedDefault) getApplication<Application>().getString(R.string.toast_room_joined_dissolved, room.roomName)
+                                else getApplication<Application>().getString(R.string.toast_room_joined, room.roomName)
+                            )
                         } else {
                             _toasts.tryEmit("加入失败: ${json.optString("message", "入房密码不正确")}")
                         }
@@ -271,7 +290,8 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
             joinedRoom = null,
             joinedMessages = emptyList(),
             myMemberId = "",
-            joinedToken = ""
+            joinedToken = "",
+            joinedContentKey = ""
         )
         if (room != null && !token.isNullOrBlank()) {
             viewModelScope.launch {
@@ -299,7 +319,11 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                 var cycleSuccess = false
                 try {
                     val token = _state.value.joinedToken
-                    val headers = if (!token.isNullOrBlank()) mapOf("X-Room-Token" to token) else emptyMap()
+                    val contentKey = _state.value.joinedContentKey
+                    val headers = buildMap {
+                        if (!token.isNullOrBlank()) put("X-Room-Token", token)
+                        if (contentKey.isNotBlank()) put("X-WenBox-Encryption", "v1")
+                    }
 
                     // 1. 心跳：向房主注册身份，同时同步房间状态
                     val hbBody = JSONObject().apply {
@@ -349,7 +373,10 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                     // 3. 增量拉取消息。解析放到 Default 线程，避免首轮大图 base64 卡主线程 (P2)
                     val msgUrl = buildString {
                         append("http://${room.ip}:${room.port}/api/messages")
-                        if (lastMsgTs > 0) append("?since=${lastMsgTs - 1}")
+                        val params = mutableListOf<String>()
+                        if (lastMsgTs > 0) params.add("since=${lastMsgTs - 1}")
+                        if (contentKey.isNotBlank()) params.add("enc=1")
+                        if (params.isNotEmpty()) append("?").append(params.joinToString("&"))
                     }
                     val (code, res) = HttpHelper.getJson(msgUrl, headers)
                     if (code == 200) {
@@ -358,10 +385,16 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                             val arr = JSONObject(res).optJSONArray("messages") ?: return@withContext emptyList()
                             (0 until arr.length()).mapNotNull { index ->
                                 val item = arr.optJSONObject(index) ?: return@mapNotNull null
+                                val rawContent = item.optString("content", "")
+                                val content = if (contentKey.isNotBlank()) {
+                                    runCatching {
+                                        ContentCrypto.decryptText(contentKey, ContentCrypto.messageAad(room.roomId), rawContent)
+                                    }.getOrDefault("🔒 无法解密此消息")
+                                } else rawContent
                                 ChatMessage(
                                     id = item.optString("id", ""),
                                     senderName = item.optString("senderName", "成员"),
-                                    content = item.optString("content", ""),
+                                    content = content,
                                     timestamp = item.optLong("timestamp", System.currentTimeMillis()),
                                     isFromPhone = false,
                                     senderIp = item.optString("senderIp", ""),
@@ -427,15 +460,22 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
 
         val room = _state.value.joinedRoom ?: return
         val token = _state.value.joinedToken
+        val contentKey = _state.value.joinedContentKey
         viewModelScope.launch {
             try {
+                val wireText = if (contentKey.isNotBlank()) {
+                    ContentCrypto.encryptText(contentKey, ContentCrypto.messageAad(room.roomId), text)
+                } else text
                 val body = JSONObject().apply {
-                    put("content", text)
+                    put("content", wireText)
                     put("senderName", nick)
                     put("senderIp", myIp)
                     put("clientId", phoneClientId)
                 }
-                val headers = mapOf("X-Room-Token" to token)
+                val headers = buildMap {
+                    put("X-Room-Token", token)
+                    if (contentKey.isNotBlank()) put("X-WenBox-Encryption", "v1")
+                }
                 val (code, _) = HttpHelper.postJson("http://${room.ip}:${room.port}/api/messages", body, headers)
                 if (code !in 200..299) throw IllegalStateException("HTTP $code")
                 if (!isCurrentJoinedRoom(room, token)) return@launch
@@ -481,9 +521,22 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                     target
                 }
                 val headers = mapOf("X-Room-Token" to token)
+                val contentKey = _state.value.joinedContentKey
                 val (code, res) = withContext(Dispatchers.IO) {
                     buffer.inputStream().use { stream ->
-                        HttpHelper.uploadFile("http://${room.ip}:${room.port}/api/upload", fileName, stream, headers)
+                        if (contentKey.isNotBlank()) {
+                            HttpHelper.uploadEncryptedFile(
+                                "http://${room.ip}:${room.port}/api/upload",
+                                fileName,
+                                stream,
+                                buffer.length(),
+                                contentKey,
+                                room.roomId,
+                                headers
+                            )
+                        } else {
+                            HttpHelper.uploadFile("http://${room.ip}:${room.port}/api/upload", fileName, stream, headers)
+                        }
                     }
                 }
                 if (code !in 200..299) {
@@ -495,8 +548,11 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
                 val encoded = java.net.URLEncoder.encode(fileName, "UTF-8")
                 val dlUrl = if (fileId.isNotBlank()) "/api/download/$fileId" else "/api/download/$encoded"
                 val msg = "[file:$fileName|$sizeLabel|$dlUrl]"
+                val wireMsg = if (contentKey.isNotBlank()) {
+                    ContentCrypto.encryptText(contentKey, ContentCrypto.messageAad(room.roomId), msg)
+                } else msg
                 val body = JSONObject().apply {
-                    put("content", msg)
+                    put("content", wireMsg)
                     put("senderName", nickname())
                     put("senderIp", NetworkUtils.getAllLocalIpAddresses(getApplication()).firstOrNull()?.ip ?: "")
                     put("clientId", phoneClientId)

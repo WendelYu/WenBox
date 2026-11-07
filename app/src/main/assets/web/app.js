@@ -60,6 +60,7 @@
             close.addEventListener('click', () => toast.classList.remove('show'));
             toast.append(copy, close);
         }
+        toast.classList.toggle('toast--actionable', error);
         toast.classList.add('show');
         clearTimeout(toastTimer);
         if (!error) toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
@@ -220,6 +221,7 @@
             'delete-profile': () => window.deleteRoomProfile(Number(value)),
             'copy-ip': () => window.copyMemberIp(value),
             'download-file': () => window.downloadRemoteFile(value, button.dataset.name),
+            'open-received-folder': () => revealReceivedFile(value),
             'remove-file': () => window.removeLocalSharedFile(value),
             'copy-code': () => window.copyChatCode(button),
             'refresh-files': () => loadFiles(),
@@ -246,10 +248,292 @@
         // 判断"哪条消息/哪个成员是我"必须用 memberId，绝不能用 token。
         memberId: localStorage.getItem('wenbox_member_id') || '',
         roomInfo: null, // 当前房间详情
+        // AES-256-GCM key handed to authenticated members after joining.
+        // It is kept in memory only and is never written to localStorage.
+        contentKey: '',
         discoveredRooms: []
     };
 
+    // ---------------- 房间内容加密 (AES-256-GCM) ----------------
+    const FILE_MAGIC = new Uint8Array([0x57, 0x42, 0x58, 0x46, 0x31]); // WBXF1
+    const FILE_CHUNK = 1024 * 1024;
+    const FILE_HEADER_LEN = FILE_MAGIC.length + 12 + 4;
+    let aesKeyCache = { raw: '', key: null };
+    const textEncoder = new TextEncoder();
+    const textDecoder = new TextDecoder();
+
+    function bytesToBase64(bytes) {
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 8192) {
+            binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+        }
+        return btoa(binary);
+    }
+
+    function base64ToBytes(value) {
+        const binary = atob(String(value || ''));
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+    }
+
+    function roomIdForCrypto() {
+        return roomState.roomInfo?.roomId || roomState.roomInfo?.roomName || '';
+    }
+
+    function getRoomContentKey() {
+        return roomState.contentKey || '';
+    }
+
+    function getRoomKeyBytes() {
+        const raw = getRoomContentKey();
+        if (!raw) return null;
+        try {
+            const bytes = base64ToBytes(raw);
+            return bytes.length === 32 ? bytes : null;
+        } catch (_) { return null; }
+    }
+
+    async function getRoomAesKey() {
+        const raw = getRoomContentKey();
+        const bytes = getRoomKeyBytes();
+        if (!bytes) return null;
+        if (aesKeyCache.raw === raw && aesKeyCache.key) return aesKeyCache.key;
+        if (window.crypto?.subtle) {
+            try {
+                aesKeyCache.key = await window.crypto.subtle.importKey('raw', bytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+                aesKeyCache.raw = raw;
+                return aesKeyCache.key;
+            } catch (_) { /* fall back to the bundled implementation */ }
+        }
+        return null;
+    }
+
+    async function aesEncryptBytes(keyBytes, nonce, aad, plaintext) {
+        const key = await getRoomAesKey();
+        if (key) {
+            const encrypted = await window.crypto.subtle.encrypt(
+                { name: 'AES-GCM', iv: nonce, additionalData: aad, tagLength: 128 }, key, plaintext
+            );
+            return new Uint8Array(encrypted);
+        }
+        if (window.WenBoxCipher?.gcm) {
+            return window.WenBoxCipher.gcm(keyBytes, nonce, aad).encrypt(plaintext);
+        }
+        throw new Error('当前浏览器不支持内容加密');
+    }
+
+    async function aesDecryptBytes(keyBytes, nonce, aad, ciphertext) {
+        const key = await getRoomAesKey();
+        if (key) {
+            const decrypted = await window.crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv: nonce, additionalData: aad, tagLength: 128 }, key, ciphertext
+            );
+            return new Uint8Array(decrypted);
+        }
+        if (window.WenBoxCipher?.gcm) {
+            return window.WenBoxCipher.gcm(keyBytes, nonce, aad).decrypt(ciphertext);
+        }
+        throw new Error('当前浏览器不支持内容解密');
+    }
+
+    async function encryptMessageText(text) {
+        const keyBytes = getRoomKeyBytes();
+        if (!keyBytes || !text || String(text).startsWith('wbx1:')) return text;
+        const nonce = window.crypto.getRandomValues(new Uint8Array(12));
+        const aad = textEncoder.encode(`wenbox-message:v1:${roomIdForCrypto()}`);
+        const cipher = await aesEncryptBytes(keyBytes, nonce, aad, textEncoder.encode(String(text)));
+        const envelope = new Uint8Array(nonce.length + cipher.length);
+        envelope.set(nonce, 0);
+        envelope.set(cipher, nonce.length);
+        return 'wbx1:' + bytesToBase64(envelope);
+    }
+
+    async function decryptMessageText(text) {
+        const value = String(text ?? '');
+        if (!value.startsWith('wbx1:')) return value;
+        const keyBytes = getRoomKeyBytes();
+        if (!keyBytes) return '🔒 无法解密此消息（缺少房间密钥）';
+        try {
+            const envelope = base64ToBytes(value.slice(5));
+            if (envelope.length < 28) throw new Error('消息密文过短');
+            const nonce = envelope.subarray(0, 12);
+            const cipher = envelope.subarray(12);
+            const aad = textEncoder.encode(`wenbox-message:v1:${roomIdForCrypto()}`);
+            const plain = await aesDecryptBytes(keyBytes, nonce, aad, cipher);
+            return textDecoder.decode(plain);
+        } catch (_) {
+            return '🔒 无法解密此消息（密钥或房间不匹配）';
+        }
+    }
+
+    function chunkNonce(base, index) {
+        const nonce = base.slice();
+        const view = new DataView(nonce.buffer, nonce.byteOffset, nonce.byteLength);
+        const counter = view.getBigUint64(4);
+        view.setBigUint64(4, counter + BigInt(index));
+        return nonce;
+    }
+
+    function encryptedFileSize(size) {
+        const chunks = Math.ceil(size / FILE_CHUNK);
+        return FILE_HEADER_LEN + chunks * 4 + size + chunks * 16 + 20;
+    }
+
+    async function encryptFileToBlob(file) {
+        const keyBytes = getRoomKeyBytes();
+        if (!keyBytes) return { blob: file, encrypted: false };
+        const base = window.crypto.getRandomValues(new Uint8Array(12));
+        const header = new Uint8Array(FILE_HEADER_LEN);
+        header.set(FILE_MAGIC, 0);
+        header.set(base, FILE_MAGIC.length);
+        new DataView(header.buffer).setUint32(FILE_MAGIC.length + 12, FILE_CHUNK, false);
+        const parts = [header];
+        let index = 0;
+        for (let offset = 0; offset < file.size; offset += FILE_CHUNK) {
+            const plain = new Uint8Array(await file.slice(offset, offset + FILE_CHUNK).arrayBuffer());
+            const nonce = chunkNonce(base, index);
+            const aad = textEncoder.encode(`wenbox-file:v1:${roomIdForCrypto()}:${index}`);
+            const cipher = await aesEncryptBytes(keyBytes, nonce, aad, plain);
+            const length = new Uint8Array(4);
+            new DataView(length.buffer).setUint32(0, cipher.length, false);
+            parts.push(length, cipher);
+            index++;
+        }
+        const final = await aesEncryptBytes(keyBytes, chunkNonce(base, index), textEncoder.encode(`wenbox-file:v1:${roomIdForCrypto()}:${index}`), new Uint8Array());
+        const finalLength = new Uint8Array(4);new DataView(finalLength.buffer).setUint32(0,16);parts.push(finalLength,final);
+        return { blob: new Blob(parts, { type: 'application/octet-stream' }), encrypted: true };
+    }
+
+    function concatBytes(left, right) {
+        if (!left.length) return right.slice();
+        const out = new Uint8Array(left.length + right.length);
+        out.set(left, 0);
+        out.set(right, left.length);
+        return out;
+    }
+
+    async function decryptFileResponse(response) {
+        const keyBytes = getRoomKeyBytes();
+        if (!keyBytes) throw new Error('缺少房间密钥，无法解密文件');
+        if (!response.body) {
+            const raw = new Uint8Array(await response.arrayBuffer());
+            let offset = 0;
+            const read = n => { if (offset + n > raw.length) throw new Error('加密文件不完整'); const out = raw.slice(offset, offset + n); offset += n; return out; };
+            return decryptFrames(read, raw.length, keyBytes);
+        }
+        const reader = response.body.getReader();
+        let buffered = new Uint8Array(0);
+        const readN = async n => {
+            while (buffered.length < n) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    if (buffered.length === 0) return null;
+                    throw new Error('加密文件不完整');
+                }
+                buffered = concatBytes(buffered, value);
+            }
+            const out = buffered.slice(0, n);
+            buffered = buffered.slice(n);
+            return out;
+        };
+        const header = await readN(FILE_HEADER_LEN);
+        if (!header) throw new Error('加密文件为空');
+        if (header[0] !== 0x57 || header[1] !== 0x42 || header[2] !== 0x58 || header[3] !== 0x46 || header[4] !== 0x31) {
+            throw new Error('文件未使用受支持的加密格式');
+        }
+        const base = header.slice(FILE_MAGIC.length, FILE_MAGIC.length + 12);
+        const chunkSize = new DataView(header.buffer, header.byteOffset + FILE_MAGIC.length + 12, 4).getUint32(0, false);
+        if (chunkSize < 1024 || chunkSize > 8 * 1024 * 1024) throw new Error('加密文件块大小无效');
+        const parts = [];
+        let index = 0;
+        for (;;) {
+            const lengthBytes = await readN(4);
+            if (!lengthBytes) throw new Error("加密文件缺少结束校验");
+            const length = new DataView(lengthBytes.buffer, lengthBytes.byteOffset, 4).getUint32(0, false);
+            if (length < 16 || length > chunkSize + 16) throw new Error('加密文件分块长度无效');
+            const cipher = await readN(length);
+            const aad = textEncoder.encode(`wenbox-file:v1:${roomIdForCrypto()}:${index}`);
+            const plain = await aesDecryptBytes(keyBytes, chunkNonce(base, index), aad, cipher);
+            if (!plain.length) {
+                if (await readN(1)) throw new Error('加密文件结束后包含额外数据');
+                return new Blob(parts);
+            }
+            parts.push(plain);
+            index++;
+        }
+        return new Blob(parts);
+    }
+
+    async function decryptFrames(read, total, keyBytes) {
+        const header = read(FILE_HEADER_LEN);
+        if (header[0] !== 0x57 || header[1] !== 0x42 || header[2] !== 0x58 || header[3] !== 0x46 || header[4] !== 0x31) {
+            throw new Error('文件未使用受支持的加密格式');
+        }
+        const base = header.slice(FILE_MAGIC.length, FILE_MAGIC.length + 12);
+        const chunkSize = new DataView(header.buffer, header.byteOffset + FILE_MAGIC.length + 12, 4).getUint32(0, false);
+        const parts = [];
+        let index = 0;
+        let consumed = FILE_HEADER_LEN;
+        while (consumed < total) {
+            const lengthBytes = read(4);
+            consumed += 4;
+            const length = new DataView(lengthBytes.buffer, lengthBytes.byteOffset, 4).getUint32(0, false);
+            if (length < 16 || length > chunkSize + 16) throw new Error('加密文件分块长度无效');
+            const cipher = read(length);
+            consumed += length;
+            const aad = textEncoder.encode(`wenbox-file:v1:${roomIdForCrypto()}:${index}`);
+            const plain = await aesDecryptBytes(keyBytes, chunkNonce(base, index), aad, cipher);
+            if (!plain.length) {
+                if (consumed !== total) throw new Error('加密文件结束后包含额外数据');
+                return new Blob(parts);
+            }
+            parts.push(plain);
+            index++;
+        }
+        throw new Error("加密文件缺少结束校验");
+    }
+
+    async function fetchEncryptedFile(url, headers = {}, image = false) {
+        const requestHeaders = { ...headers, 'X-WenBox-Encryption': 'v1' };
+        const response = isTauriDesktop()
+            ? await fetchWithTimeout(url, { headers: requestHeaders, image }, 120000, 0)
+            : await window.fetch(url, { headers: requestHeaders });
+        if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）`);
+        if ((response.headers.get('x-wenbox-encryption') || '').toLowerCase() !== 'v1') {
+            return response.blob();
+        }
+        return decryptFileResponse(response);
+    }
+
+    async function downloadEncryptedFile(url, fileName, headers = {}) {
+        const blob = await fetchEncryptedFile(url, headers);
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = fileName || 'download';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
+    }
+
+    async function resolveChatImageSource(url) {
+        if (!getRoomKeyBytes() || !/\/api\/download\//.test(String(url))) {
+            return window.WenBox.resolveRequestUrl(url);
+        }
+        const blob = await fetchEncryptedFile(url, authHeaders(), true);
+        return URL.createObjectURL(blob);
+    }
+
+    async function prepareUploadFile(file) {
+        if (!getRoomKeyBytes()) return { blob: file, encrypted: false, size: file.size };
+        const encrypted = await encryptFileToBlob(file);
+        return { blob: encrypted.blob, encrypted: encrypted.encrypted, size: encrypted.blob.size };
+    }
+
     let roomRevision = 0;
+    let roomSwitchTimer = 0;
     let currentTargetBaseUrl = ''; // 默认为本端，joined 模式时为房主地址，如 "http://192.168.1.120:9527"
     let currentTargetDeviceName = '本端直连';
     let joinedPin = '', joinedResumeAt = 0;
@@ -275,9 +559,17 @@
         const result = await response.json();
         if (revision !== roomRevision || !result.success || result.room?.roomId !== roomState.roomInfo?.roomId) return;
         roomState.token = result.token || ''; roomState.memberId = result.memberId || '';
+        const resumedKey = result.room?.contentKey || result.contentKey || '';
+        if (resumedKey && resumedKey !== roomState.contentKey) {
+            roomState.contentKey = resumedKey;
+            aesKeyCache = { raw: '', key: null };
+        }
         uploadQueue?.updateToken(revision, roomState.token);
         localStorage.setItem('wenbox_room_token', roomState.token);
         localStorage.setItem('wenbox_member_id', roomState.memberId);
+        // Let the "retrying" state be visible before reconnecting the stream
+        // with the refreshed token; polling already confirms recovery.
+        setTimeout(syncRealtimeConnection, 1200);
     });
 
     // UI 容器与元素绑定
@@ -928,6 +1220,7 @@
     };
     let selfLanIps = [];
     let latestRoomMembers = [];
+    let selfServerRoomId = '';
 
     function getReachableHostAddress(port) {
         let ip = userSelectedIp || selfDeviceInfo.ip;
@@ -1015,7 +1308,9 @@
                     if (roomState.mode === 'client') {
                         setRoomMode('host', rStatus);
                     }
-                } else if (rStatus && !rStatus.isActive && roomState.mode === 'host') {
+                } else if (rStatus && !rStatus.isActive && roomState.mode === 'host' && !isJoiningRoom) {
+                    // A join command closes the startup room before it returns;
+                    // keep the old surface until setRoomMode('joined') takes over.
                     setRoomMode('client');
                 }
 
@@ -1056,6 +1351,7 @@
             const res = await fetch(getApiOrigin() + '/api/status?t=' + Date.now());
             if (res.ok) {
                 const data = await res.json();
+                selfServerRoomId = data.room?.roomId || '';
                 if (roomState.mode === 'host') {
                     selfLanIps = data.all_ips || [data.ip];
 
@@ -1137,18 +1433,26 @@
         updateRemoteConnection('ready');
         if (mode !== 'joined') joinedPin = '';
         const changed = roomState.mode !== mode || roomState.roomInfo?.roomId !== data?.roomId;
-        if (changed) { resetChatRoomHistory(); uploadQueue?.clear(); demandFiles?.reset(); outbox.clear(); }
+        if (changed) { resetChatRoomHistory(); uploadQueue?.clear(); demandFiles?.reset(); outbox.clear(); roomState.contentKey = ''; aesKeyCache = { raw: '', key: null }; }
         if (mode === 'client') discoveryStartedAt = Date.now();
         discoveryOpen = currentActiveTab === 'view-rooms';
         document.body.dataset.discoveryOpen = String(discoveryOpen);
         document.getElementById('btnBrowseRooms').textContent = '附近房间';
         roomRevision++; scheduler.bump();
+        if (changed) {
+            document.body.classList.remove('room-switching');
+            void document.body.offsetWidth;
+            document.body.classList.add('room-switching');
+            clearTimeout(roomSwitchTimer);
+            roomSwitchTimer = setTimeout(() => document.body.classList.remove('room-switching'), 420);
+        }
         latestRoomMembers = [];
         roomState.mode = mode;
         if (changed && (mode === 'host' || mode === 'joined')) selectView('view-room');
         else if (changed && mode === 'client' && currentActiveTab === 'view-room') selectView('view-rooms');
         if (!directAutoConnectEnabled) directConnectionStatus.hidden = true;
         roomState.roomInfo = mode === 'client' ? null : data;
+        roomState.contentKey = mode === 'client' ? '' : (data?.contentKey || roomState.contentKey || '');
         currentTargetBaseUrl = mode === 'joined' ? (data.hostUrl || window.location.origin).replace(/\/+$/, '') : '';
         currentTargetDeviceName = mode === 'joined' ? data.hostDevice || '房主' : '本机房间';
         document.body.dataset.roomMode = mode;
@@ -1165,8 +1469,27 @@
         else { currentFiles = []; pollDiscoveredRooms(); }
         updateChatStatusBar(mode, data); updateMyNicknameDisplay();
         if (mode !== 'client') pollChatMessages();
+        syncRealtimeConnection();
+    }
+    function updateRoomFeatureBadges() {
+        const inRoom = roomState.mode !== 'client';
+        const encryption = document.getElementById('roomEncryptionBadge');
+        if (encryption) {
+            const encrypted = inRoom && !!getRoomKeyBytes();
+            encryption.hidden = !encrypted;
+            encryption.title = encrypted ? '消息和文件使用 AES-256-GCM 房间密钥传输' : '';
+        }
+        const realtime = document.getElementById('roomRealtimeBadge');
+        if (realtime) {
+            realtime.hidden = !inRoom;
+            realtime.textContent = realtime.connected ? '实时同步' : '同步中';
+            realtime.classList.toggle('badge--success', realtime.connected);
+            realtime.classList.toggle('badge--neutral', !realtime.connected);
+            realtime.title = realtime.connected ? '消息、成员和文件变化由服务器即时推送' : '正在建立实时连接；消息仍会定时同步';
+        }
     }
     function updateChatStatusBar(mode, data) {
+        updateRoomFeatureBadges();
         setText(document.getElementById('roomRoleBadge'), ({ host: '房主', joined: '成员', client: '未加入房间' })[mode]);
         setText(document.getElementById('roomName'), data?.roomName?.replace(/^WenBox[·・]/, '') || data?.roomId || '发现附近的设备');
         setText(document.getElementById('roomLock'), data?.needPassword || data?.pin ? '密码房' : '公开房间');
@@ -1178,6 +1501,74 @@
             copyWithFeedback(url, '房间地址已复制');
         };
     }
+
+    // ---------------- 实时事件流 (SSE) ----------------
+    const realtime = { source: null, connected: false, revision: -1 };
+    function realtimeBaseUrl() {
+        if (roomState.mode === 'joined') return (currentTargetBaseUrl || '').replace(/\/+$/, '');
+        if (isTauriDesktop()) return getApiOrigin();
+        return window.location.origin;
+    }
+    function realtimeUrl() {
+        const base = realtimeBaseUrl();
+        if (!base) return '';
+        const token = roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
+        return base + '/api/events?enc=1' + (token ? '&token=' + encodeURIComponent(token) : '');
+    }
+    function closeRealtimeConnection() {
+        if (realtime.source) {
+            try { realtime.source.close(); } catch (_) {}
+            realtime.source = null;
+        }
+        realtime.connected = false;
+        realtime.revision = -1;
+        updateRoomFeatureBadges();
+    }
+    function syncRealtimeConnection() {
+        closeRealtimeConnection();
+        if (roomState.mode === 'client' || typeof EventSource === 'undefined') return;
+        const url = realtimeUrl();
+        if (!url) return;
+        const revision = roomRevision;
+        try {
+            const source = new EventSource(url);
+            realtime.source = source;
+            realtime.revision = revision;
+            source.addEventListener('ready', () => {
+                if (revision !== roomRevision) return;
+                realtime.connected = true;
+                updateRoomFeatureBadges();
+                pollChatMessages();
+                if (roomState.mode === 'host') { pollRoomMembers(); loadLocalSharedFiles(); loadReceivedFiles(); }
+                else pollJoinedMembers();
+            });
+            source.addEventListener('message', () => { if (revision === roomRevision) pollChatMessages(); });
+            source.addEventListener('members', () => {
+                if (revision !== roomRevision) return;
+                if (roomState.mode === 'host') pollRoomMembers(); else pollJoinedMembers();
+            });
+            source.addEventListener('files', () => {
+                if (revision !== roomRevision) return;
+                if (roomState.mode === 'host') { loadLocalSharedFiles(); loadReceivedFiles(); }
+                else loadFiles();
+            });
+            source.addEventListener('room', () => {
+                if (revision !== roomRevision) return;
+                if (roomState.mode === 'host') checkSelfServerStatus();
+                else pollJoinedMembers();
+            });
+            source.addEventListener('error', () => {
+                if (revision === roomRevision) {
+                    realtime.connected = false;
+                    updateRoomFeatureBadges();
+                }
+            });
+        } catch (_) {
+            realtime.connected = false;
+        }
+    }
+    window.addEventListener('beforeunload', closeRealtimeConnection);
+    window.addEventListener('pagehide', closeRealtimeConnection);
 
     // ---------------- 通用 Promise 模态确认弹窗 (替代 window.confirm) ----------------
     window._appConfirmResolver = null;
@@ -1540,6 +1931,32 @@
         });
     }
     let isJoiningRoom = false;
+
+    // Browser pages served by this device's own backend have no Tauri command
+    // to close the startup room.  Compare the page server's room id with the
+    // loopback backend first, so a guest viewing another host's page can never
+    // close that host's room.
+    async function dissolveLocalDefaultRoomForBrowser() {
+        if (isTauriDesktop()) return false;
+        // WenBox's embedded HTTP server always uses 9527; fixture pages and
+        // unrelated web servers must not be probed.
+        if (window.location.port && window.location.port !== '9527') return false;
+        const pageRoomId = selfServerRoomId || roomState.roomInfo?.roomId || '';
+        if (!pageRoomId) return false;
+        try {
+            const statusResponse = await fetchWithTimeout('http://127.0.0.1:9527/api/room/status?t=' + Date.now(), {}, 900);
+            if (!statusResponse.ok) return false;
+            const local = await statusResponse.json();
+            if (!local?.isActive || local.roomId !== pageRoomId) return false;
+            const response = await fetchWithTimeout('http://127.0.0.1:9527/api/room/leave_local_default', { method: 'POST' }, 1200);
+            if (!response.ok) return false;
+            const result = await response.json().catch(() => ({}));
+            return result.closed === true;
+        } catch (_) {
+            return false;
+        }
+    }
+
     async function executeJoinRoom(hostUrl, pin, roomName, hostDevice, roomId, nickname, automatic = false) {
         if (isJoiningRoom || cooldown.remaining(joinHostKey(hostUrl))) return;
         if (!automatic) directAutoConnectEnabled = false;
@@ -1591,15 +2008,25 @@
                 window.closeJoinPinModal();
                 window.closeManualJoinModal();
                 joinedPin = pin; joinedResumeAt = 0;
+                const browserClosed = invoke ? false : await dissolveLocalDefaultRoomForBrowser();
                 setRoomMode('joined', {
                     hostUrl: effectiveHostUrl,
                     roomName: joinRes.room ? joinRes.room.roomName : (roomName || '已加入房间'),
                     roomId: joinRes.room ? joinRes.room.roomId : roomId,
                     hostDevice: joinRes.room ? joinRes.room.hostDevice : hostDevice,
-                    needPassword: !!joinRes.room?.needPassword
+                    needPassword: !!joinRes.room?.needPassword,
+                    contentKey: joinRes.room?.contentKey || ''
                 });
-                if (automatic) setText(directConnectionStatus, '网线直连 · 已自动连接');
-                showToast(` 成功加入房间！已与「${hostDevice || '房主'}」建立直连`);
+                const dissolvedDefault = joinRes.localRoomClosed === true || browserClosed;
+                const peerName = joinRes.room?.hostDevice || hostDevice || '房主';
+                if (automatic) {
+                    setText(directConnectionStatus, dissolvedDefault
+                        ? '网线直连 · 已连接（本机默认房间已解散）'
+                        : '网线直连 · 已自动连接');
+                }
+                showToast(dissolvedDefault
+                    ? `已加入「${peerName}」；本机默认房间已解散，其他设备不会继续加入本机`
+                    : `成功加入房间！已与「${peerName}」建立直连`);
                 updateMyNicknameDisplay(myNick);
             } else {
                 if (joinRes?.retryAfter > 0) cooldown.start(joinHostKey(effectiveHostUrl), joinRes.retryAfter);
@@ -2009,14 +2436,17 @@
                 const name = savePath.substring(Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')) + 1);
 
                 const downloadUrl = downloadBase + `/api/download/${encodeURIComponent(fileId)}${tokenQuery}`;
-                await invoke('save_remote_file_to_directory', {
+                const savedPath = await invoke('save_remote_file_to_directory', {
                     downloadUrl: downloadUrl,
                     dirPath: dir,
                     folderName: '',
                     fileName: name,
-                    token: token || null
+                    token: token || null,
+                    contentKey: getRoomContentKey() || null,
+                    roomId: roomIdForCrypto() || null
                 });
-                showToast(`已成功保存到: ${savePath}`);
+                showToast(`已成功保存到: ${savedPath}`);
+                loadReceivedFiles();
                 return;
             } catch (e) {
                 showToast(`保存失败：${e.message || e}`);
@@ -2025,12 +2455,11 @@
         }
 
         const dlUrl = downloadBase + `/api/download/${encodeURIComponent(fileId)}${tokenQuery}`;
-        const a = document.createElement('a');
-        a.href = dlUrl;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        try {
+            await downloadEncryptedFile(dlUrl, fileName, token ? { 'X-Room-Token': token } : {});
+        } catch (e) {
+            showToast(`下载失败：${e.message || e}`);
+        }
     };
 
     function renderFiles() {
@@ -2133,7 +2562,6 @@
         localSharedFileListContainer.innerHTML = files.map(file => {
             const icon = getFileIcon(file.name, file.mimeType || '');
             const size = formatBytes(file.size);
-            const dlUrl = `${getApiOrigin()}/api/download/${file.id}`;
 
             return `
                 <div class="file-item">
@@ -2212,20 +2640,20 @@
         receivedFileListContainer.innerHTML = files.map(file => {
             const icon = getFileIcon(file.name, file.mimeType || '');
             const size = formatBytes(file.size);
-            const dlUrl = `${getApiOrigin()}/api/download/${file.id}`;
 
             return `
-                <div class="file-item">
+                <div class="file-item" data-received-file="${escapeHtml(file.id)}">
                     <div class="file-info">
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
                             <div class="file-name" title="${escapeHtml(formatDisplayPath(file.path || 'Downloads/WenBox'))}">${escapeHtml(file.name)}</div>
-                            <div class="file-size">${size} · 已保存到下载目录</div>
+                            <div class="file-size">${size} · ${escapeHtml(formatDisplayPath(file.path || "已保存在房主设备"))}</div>
                         </div>
                     </div>
-                    <a href="${dlUrl}" class="btn btn--secondary btn--sm" download="${escapeHtml(file.name)}">
+                    ${getTauriInvoke() ? '<button type="button" data-action="open-received-folder" data-value="' + escapeHtml(file.id) + '" class="btn btn--secondary btn--sm">打开所在文件夹</button>' : ''}
+                    <button data-action="download-file" data-value="${escapeHtml(file.id)}" data-name="${escapeHtml(file.name)}" class="btn btn--secondary btn--sm">
                         下载
-                    </a>
+                    </button>
                 </div>
             `;
         }).join('');
@@ -2269,20 +2697,25 @@
         });
     }
 
-    if (btnOpenDownloadFolder) {
-        btnOpenDownloadFolder.addEventListener('click', async () => {
-            const invoke = getTauriInvoke();
-            if (invoke) {
-                try {
-                    const p = await invoke('open_download_folder');
-                    showToast(`已打开保存目录: ${p}`);
-                } catch (e) {
-                    showToast(`打开目录失败: ${e.message || e}`);
-                }
-            } else {
-                showToast('文件已保存在系统“下载/WenBox”文件夹，请在电脑文件管理器中打开');
+    async function revealReceivedFile(id) {
+        try { await getTauriInvoke()('reveal_received_file', { id }); }
+        catch (e) { showToast(`打开目录失败：${e.message || e}`); }
+    }
+    async function openReceivedFolder() {
+        const invoke = getTauriInvoke();
+        if (invoke) {
+            try {
+                const p = await invoke('open_download_folder');
+                showToast(`已打开保存目录: ${p}`);
+            } catch (e) {
+                showToast(`打开目录失败: ${e.message || e}`);
             }
-        });
+        } else {
+            showToast('文件已保存在系统“下载/WenBox”文件夹，请在电脑文件管理器中打开');
+        }
+    }
+    if (btnOpenDownloadFolder) {
+        btnOpenDownloadFolder.addEventListener('click', openReceivedFolder);
     }
 
     if (btnRefreshReceivedFiles) {
@@ -2389,16 +2822,15 @@
                 try {
                     const url = resolveChatUrl('/api/download/' + encodeURIComponent(file.id), file.context);
                     if (directory) {
-                        await invoke('save_remote_file_to_directory', { downloadUrl: url, dirPath: directory, folderName: folder, fileName: file.name, token: new URL(url).searchParams.get('token') });
+                        await invoke('save_remote_file_to_directory', { downloadUrl: url, dirPath: directory, folderName: folder, fileName: file.name, token: new URL(url).searchParams.get('token'), contentKey: getRoomContentKey() || null, roomId: roomIdForCrypto() || null });
                     } else {
-                        const response = await fetchWithTimeout(url);
-                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        const blob = await fetchEncryptedFile(url, authHeaders());
                         const safe = file.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
                         let name = safe, index = 0;
                         while (true) { try { await handle.getFileHandle(name); name = `${++index}_${safe}`; } catch (e) { if (e.name === 'NotFoundError') break; throw e; } }
                         const target = await handle.getFileHandle(name, { create: true });
                         const writer = await target.createWritable();
-                        try { await writer.write(await response.blob()); await writer.close(); } catch (e) { await writer.abort(); throw e; }
+                        try { await writer.write(blob); await writer.close(); } catch (e) { await writer.abort(); throw e; }
                     }
                     saved++; archiveSelection.delete(file.id);
                 } catch (error) { failures.push(`${file.name}：${error.message || error}`); }
@@ -2654,8 +3086,10 @@
             const effectiveToken = roomState.token || sessionStorage.getItem('wenbox_host_token') || '';
             const tokenParam = effectiveToken ? `&token=${encodeURIComponent(effectiveToken)}` : '';
             const sinceParam = lastKnownMessageTimestamp > 0 ? `&since=${lastKnownMessageTimestamp - 1}` : '';
-            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/messages?t=' + Date.now() + tokenParam + sinceParam;
+            const encryptParam = getRoomKeyBytes() ? '&enc=1' : '';
+            const api = (currentTargetBaseUrl ? currentTargetBaseUrl : getApiOrigin()) + '/api/messages?t=' + Date.now() + tokenParam + sinceParam + encryptParam;
             const headers = { 'Accept': 'application/json' };
+            if (getRoomKeyBytes()) headers['X-WenBox-Encryption'] = 'v1';
             if (effectiveToken) {
                 headers['X-Room-Token'] = effectiveToken;
                 headers['X-Host-Token'] = effectiveToken;
@@ -2681,6 +3115,13 @@
                 return;
             }
             messages = data.messages || [];
+            if (data.encrypted) {
+                messages = await Promise.all(messages.map(async message => ({
+                    ...message,
+                    content: await decryptMessageText(message.content)
+                })));
+                if (revision !== roomRevision) return;
+            }
 
             if (revision !== roomRevision) return;
             updateRemoteConnection('ready');
@@ -2887,7 +3328,7 @@
                 imgSrc = resolveChatUrl(rawImageUrl, attachmentContext);
                 thumbWrap.dataset.state = 'loading';
                 imageFailed = false; overlay.textContent = '加载中…';
-                try { img.src = await resolveRequestUrl(imgSrc); }
+                try { img.src = await resolveChatImageSource(imgSrc); }
                 catch (error) { imageFailed = true; thumbWrap.dataset.state = 'error'; overlay.textContent = '加载失败，点击重试'; thumbWrap.title = String(error.message || error); if (manual) showToast(`图片加载失败：${error.message || error}`); }
             };
             img.addEventListener('load', () => { thumbWrap.dataset.state = 'ready'; imageFailed = false; overlay.textContent = '查看原图'; thumbWrap.title = '点击查看大图'; });
@@ -2949,19 +3390,18 @@
 
             const downloadLink = document.createElement('a');
             downloadLink.className = 'chat-file-download-btn';
-            downloadLink.href = downloadUrl || '#';
+            downloadLink.href = '#';
             downloadLink.download = fileName;
-            downloadLink.target = '_blank';
             downloadLink.rel = 'noopener noreferrer';
             downloadLink.referrerPolicy = 'no-referrer';
             downloadLink.innerHTML = '⬇ 下载';
             downloadLink.addEventListener('click', (e) => {
+                e.preventDefault();
                 e.stopPropagation();
-                downloadLink.href = resolveChatUrl(rawUrl, attachmentContext) || '#';
-                if (!downloadUrl) { e.preventDefault(); showToast('文件地址无效或不属于当前房间'); return; }
-                if (getTauriInvoke() && isSafeChatImageUrl(rawUrl) && new URL(downloadUrl).pathname.startsWith('/api/download/')) {
-                    e.preventDefault();
-                    window.downloadRemoteFile(decodeURIComponent(new URL(downloadUrl).pathname.slice('/api/download/'.length)), fileName, attachmentContext);
+                if (!downloadUrl || !isSafeChatImageUrl(rawUrl)) { showToast('文件地址无效或不属于当前房间'); return; }
+                const path = new URL(downloadUrl).pathname;
+                if (path.startsWith('/api/download/')) {
+                    window.downloadRemoteFile(decodeURIComponent(path.slice('/api/download/'.length)), fileName, attachmentContext);
                 }
             });
 
@@ -3088,19 +3528,21 @@
         if (entry.revision !== roomRevision || !outbox.get(entry.id)) return;
         entry.status = 'sending'; renderDelivery(entry);
         try {
+            const wireContent = await encryptMessageText(entry.content);
             const invoke = getTauriInvoke();
             if (invoke) {
                 await invoke('send_node_message', {
-                    baseUrl: entry.baseUrl, senderName: entry.senderName, content: entry.content,
+                    baseUrl: entry.baseUrl, senderName: entry.senderName, content: wireContent,
                     token: entry.token || null, clientId: entry.clientId, senderIp: entry.senderIp
                 });
             } else {
                 const headers = { 'Content-Type': 'application/json; charset=utf-8' };
+                if (getRoomKeyBytes()) headers['X-WenBox-Encryption'] = 'v1';
                 if (entry.token) { headers['X-Room-Token'] = entry.token; headers['X-Host-Token'] = entry.token; }
                 const resp = await fetchWithTimeout((entry.baseUrl || getApiOrigin()) + '/api/messages', {
                     method: 'POST', headers,
                     signal: typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(5000) : undefined,
-                    body: JSON.stringify({ content: entry.content, senderName: entry.senderName, clientId: entry.clientId, senderIp: entry.senderIp || undefined })
+                    body: JSON.stringify({ content: wireContent, senderName: entry.senderName, clientId: entry.clientId, senderIp: entry.senderIp || undefined })
                 });
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const result = await resp.json();
@@ -3284,7 +3726,10 @@
             });
             contextMenu.appendChild(button);
         }
-        if (image) {
+        const receivedFile = target.closest('[data-received-file]');
+        if (receivedFile && getTauriInvoke()) {
+            action('打开所在文件夹', () => revealReceivedFile(receivedFile.dataset.receivedFile));
+        } else if (image) {
             action('复制图片', () => copyImage(image.src));
             action('保存原图', () => {
                 if (image.id === 'chatModalImage') chatModalDownloadBtn.click();
@@ -3416,6 +3861,7 @@
     uploadQueue = window.WenBox.createUploadQueue({
         container: document.getElementById('uploadQueue'), history: document.getElementById('sentUploadList'), count: document.getElementById('sentUploadCount'),
         sendNative: window.WenBox.needsNativeTransport() ? window.WenBox.nativeUpload : null,
+        prepareFile: prepareUploadFile,
         onComplete: async (result, file, context) => {
             if (context.revision !== roomRevision) return;
             const url = `/api/download/${encodeURIComponent(result.fileId || result.id)}`;
@@ -3426,7 +3872,7 @@
             if (roomState.mode === 'host') loadReceivedFiles();
         }
     });
-    demandFiles = window.WenBoxDemandFiles.create({ fetch: fetchWithTimeout, context: captureAttachmentContext, sender: getClientSenderName, nativeUpload: window.WenBox.needsNativeTransport() ? window.WenBox.nativeUpload : null, error: e => showToast(e.message) });
+    demandFiles = window.WenBoxDemandFiles.create({ fetch: fetchWithTimeout, context: captureAttachmentContext, sender: getClientSenderName, prepare: file => getRoomKeyBytes() ? window.WenBoxStreamCrypto.encryptedFile(file, getRoomKeyBytes(), roomIdForCrypto()) : file, nativeUpload: window.WenBox.needsNativeTransport() ? window.WenBox.nativeUpload : null, error: e => showToast(e.message) });
     function dropScope(target) {
         if (currentActiveTab !== 'view-room' || roomState.mode === 'client') return null;
         if (target.closest('#filePanel, #dropZone')) return 'room';

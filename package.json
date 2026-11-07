@@ -1,6 +1,6 @@
 {
   "name": "wenbox",
-  "version": "1.4.10",
+  "version": "1.4.11",
   "description": "WenBox - 工控现场与工程师百宝箱",
   "main": "main.js",
   "scripts": {
@@ -13,8 +13,11 @@
   "author": "Wendel",
   "license": "MIT",
   "devDependencies": {
+    "@noble/curves": "1.9.7",
+    "@noble/hashes": "1.8.0",
     "electron": "=44.8.0",
     "electron-builder": "=26.15.3",
+    "esbuild": "0.25.12",
     "stylelint": "=16.11.0",
     "stylelint-config-standard": "=36.0.1"
   },

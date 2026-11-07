@@ -1,6 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod content_crypto;
+mod key_exchange;
 mod kvm;
 mod demand_files;
 mod network;
@@ -14,9 +16,11 @@ mod windows_runtime;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::net::UdpSocket;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -108,6 +112,10 @@ pub struct RoomConfig {
     /// Only untouched startup rooms participate in automatic wired pairing.
     #[serde(rename = "autoConnect", default)]
     pub auto_connect: bool,
+    /// AES-256-GCM key for message/file payloads.  Never included in public
+    /// room discovery responses; only the host and authenticated members get it.
+    #[serde(rename = "contentKey", default, skip_serializing_if = "String::is_empty")]
+    pub content_key: String,
 }
 
 impl Default for RoomConfig {
@@ -123,6 +131,7 @@ impl Default for RoomConfig {
             host_port: 9527,
             created_at: 0,
             auto_connect: false,
+            content_key: String::new(),
         }
     }
 }
@@ -181,6 +190,10 @@ struct AppState {
     host_last_seen: Mutex<u64>,
     /// PIN 失败计数: 客户端 IP -> (最近一次失败时间戳秒, 连续失败次数) (S8)
     pin_failures: Mutex<HashMap<String, (u64, u32)>>,
+    /// Server-sent event subscribers.  Slow clients are dropped instead of
+    /// blocking message delivery for everyone else.
+    event_clients: Mutex<HashMap<u64, SyncSender<String>>>,
+    next_event_client: AtomicU64,
 }
 
 /// 请求的 PIN 频控状态
@@ -360,6 +373,7 @@ fn add_share_file_blocking(path_str: String, state: Arc<AppState>) -> Result<Sha
 
     state.files.lock().unwrap().insert(id, shared.clone());
     session_store::save(&state)?;
+    publish_event(&state, "files", r#"{"action":"added"}"#);
     Ok(shared)
 }
 
@@ -369,6 +383,9 @@ fn remove_share_file(id: String, state: tauri::State<Arc<AppState>>) -> Result<b
     let removed = files.remove(&id).is_some();
     drop(files);
     session_store::save(&state)?;
+    if removed {
+        publish_event(&state, "files", r#"{"action":"removed"}"#);
+    }
     Ok(removed)
 }
 
@@ -376,6 +393,7 @@ fn remove_share_file(id: String, state: tauri::State<Arc<AppState>>) -> Result<b
 fn clear_share_files(state: tauri::State<Arc<AppState>>) {
     state.files.lock().unwrap().clear();
     session_store::remember(&state);
+    publish_event(&state, "files", r#"{"action":"cleared"}"#);
 }
 
 #[tauri::command]
@@ -384,24 +402,37 @@ fn get_received_files(state: tauri::State<Arc<AppState>>) -> Vec<SharedFile> {
 }
 
 #[tauri::command]
+fn reveal_received_file(id: String, state: tauri::State<Arc<AppState>>) -> Result<(), String> {
+    let path=state.received_files.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|f|f.id==id).map(|f|PathBuf::from(&f.path)).ok_or("找不到本机保存记录")?;
+    let path=path.canonicalize().map_err(|_|"文件已移动或删除".to_string())?;
+    #[cfg(target_os="macos")]
+    std::process::Command::new("open").arg("-R").arg(&path).spawn().map_err(|e|e.to_string())?;
+    #[cfg(windows)]
+    std::process::Command::new("explorer").arg(format!("/select,{}",path.display())).spawn().map_err(|e|e.to_string())?;
+    #[cfg(target_os="linux")]
+    std::process::Command::new("xdg-open").arg(path.parent().ok_or("目录无效")?).spawn().map_err(|e|e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn open_download_folder() -> Result<String, String> {
     let dir = get_download_dir();
     if !dir.exists() {
-        let _ = std::fs::create_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败: {e}"))?;
     }
     let p_str = dir.to_string_lossy().to_string();
 
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("explorer").arg(&p_str).spawn();
+        std::process::Command::new("explorer").arg(&p_str).spawn().map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg(&p_str).spawn();
+        std::process::Command::new("open").arg(&p_str).spawn().map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("xdg-open").arg(&p_str).spawn();
+        std::process::Command::new("xdg-open").arg(&p_str).spawn().map_err(|e| e.to_string())?;
     }
 
     Ok(p_str)
@@ -510,6 +541,7 @@ fn create_room_cmd(
         host_port: 9527,
         created_at: now,
         auto_connect: false,
+        content_key: content_crypto::generate_key()?,
     };
 
     *state.room.lock().unwrap_or_else(|e| e.into_inner()) = cfg.clone();
@@ -536,6 +568,8 @@ fn create_room_cmd(
     state.members.lock().unwrap_or_else(|e| e.into_inner()).insert("host".into(), host_member);
 
     session_store::save(&state)?;
+    publish_event(&state, "room", r#"{"action":"created"}"#);
+    publish_event(&state, "members", "{}");
     Ok(cfg)
 }
 
@@ -559,6 +593,8 @@ fn close_room_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
     state.demand_files.clear();
     broadcast_room_closed(old_room_id);
     session_store::save(&state)?;
+    publish_event(&state, "room", r#"{"action":"closed"}"#);
+    publish_event(&state, "members", "{}");
 
     Ok(true)
 }
@@ -580,6 +616,7 @@ fn get_room_status_cmd(state: tauri::State<Arc<AppState>>) -> serde_json::Value 
         "isTauriHost": is_tauri_host,
         "autoConnect": room.auto_connect,
         "canAutoConnect": can_auto_connect(&state),
+        "contentKey": room.content_key,
     })
 }
 
@@ -682,7 +719,34 @@ fn desktop_platform() -> &'static str {
 fn clear_chat_messages_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, String> {
     state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
     session_store::save(&state)?;
+    publish_event(&state, "messages", r#"{"action":"cleared"}"#);
     Ok(true)
+}
+
+/// The startup room is a convenience host, not a permanent second room.
+/// Joining another device must dissolve it so the peer's LAN scan can no
+/// longer offer this device as a second host.
+fn close_default_room_if_active(state: &Arc<AppState>) -> Option<String> {
+    let old_room_id = {
+        let mut room = state.room.lock().unwrap_or_else(|e| e.into_inner());
+        if !room.is_active || !room.auto_connect {
+            return None;
+        }
+        let id = room.room_id.clone();
+        *room = RoomConfig::default();
+        id
+    };
+    *state.host_token.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+    *state.is_tauri_host.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    *state.host_last_seen.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+    state.members.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    state.auth_tokens.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    broadcast_room_closed(old_room_id.clone());
+    session_store::remember(state);
+    publish_event(state, "room", r#"{"action":"closed"}"#);
+    publish_event(state, "members", "{}");
+    Some(old_room_id)
 }
 
 #[tauri::command]
@@ -719,8 +783,10 @@ fn join_remote_room_expected(host_url: String, pin: String, my_name: String, sta
         "expectedRoomId": expected,
     });
 
+    let exchange = key_exchange::Exchange::new()?;
     let client = get_http_client();
     let resp = client.post(&url)
+        .set("X-WenBox-Key", &exchange.public)
         .set("Content-Type", "application/json; charset=utf-8")
         .send_string(&body.to_string());
     let resp = match resp {
@@ -728,9 +794,18 @@ fn join_remote_room_expected(host_url: String, pin: String, my_name: String, sta
         Err(error) => return Err(format!("无法连接 {}。请确认对端 WenBox 已打开、该地址属于当前网卡，且 Windows 防火墙允许 WenBox 的 TCP 9527 / UDP 9528（包括网线直连使用的公用网络）。详细原因: {}", clean, error)),
     };
 
-    let val: serde_json::Value = resp.into_json().map_err(|e| format!("解析房间响应失败: {}", e))?;
-    if expected.is_none() && val["success"].as_bool() == Some(true) {
-        state.room.lock().unwrap_or_else(|e| e.into_inner()).auto_connect = false;
+    let mut val: serde_json::Value = resp.into_json().map_err(|e| format!("解析房间响应失败: {}", e))?;
+    if val["success"].as_bool() == Some(true) {
+        exchange.open(&mut val)?;
+        // Joining another device means this device is no longer a host.  Close
+        // the automatic startup room so it disappears from LAN discovery and
+        // cannot accept a second set of guests.
+        if let Some(closed_room_id) = close_default_room_if_active(&state) {
+            if let Some(object) = val.as_object_mut() {
+                object.insert("localRoomClosed".into(), serde_json::Value::Bool(true));
+                object.insert("localRoomId".into(), serde_json::Value::String(closed_room_id));
+            }
+        }
     }
     // Preserve structured PIN lockout metadata; joining another room does not clear our hosted history.
     Ok(val)
@@ -1043,6 +1118,95 @@ fn push_message_bounded(messages: &Mutex<Vec<ChatMessage>>, msg: ChatMessage) {
     }
 }
 
+const MAX_EVENT_CLIENTS: usize = 32;
+
+fn register_event_client(state: &AppState) -> Result<(u64, Receiver<String>), String> {
+    let (sender, receiver) = mpsc::sync_channel(64);
+    let id = state.next_event_client.fetch_add(1, Ordering::Relaxed);
+    let mut clients = state
+        .event_clients
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if clients.len() >= MAX_EVENT_CLIENTS {
+        return Err("实时连接数已达上限，请稍后重试".into());
+    }
+    clients.insert(id, sender);
+    Ok((id, receiver))
+}
+
+/// Notify every connected SSE client.  A client that has not consumed its
+/// queue is dropped rather than delaying the HTTP request that produced the event.
+/// tiny_http's chunked encoder buffers 8 KiB before writing.  Padding each SSE
+/// message past that boundary makes the encoder flush it immediately while the
+/// extra lines remain valid (ignored) SSE comments.
+const SSE_FLUSH_BYTES: usize = 8 * 1024 + 32;
+
+fn sse_payload(event: &str, data: &str) -> String {
+    let mut payload = format!("event: {event}\ndata: {data}\n\n");
+    while payload.len() < SSE_FLUSH_BYTES {
+        payload.push_str(": keep-alive\n");
+    }
+    payload
+}
+
+fn sse_heartbeat() -> String {
+    let mut payload = String::from(": keep-alive\n");
+    while payload.len() < SSE_FLUSH_BYTES {
+        payload.push_str(": keep-alive\n");
+    }
+    payload
+}
+
+fn publish_event(state: &AppState, event: &str, data: &str) {
+    let payload = sse_payload(event, data);
+    let mut clients = state
+        .event_clients
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    clients.retain(|_, sender| sender.try_send(payload.clone()).is_ok());
+}
+
+struct SseReader {
+    receiver: Receiver<String>,
+    pending: Cursor<Vec<u8>>,
+    closed: bool,
+}
+
+impl SseReader {
+    fn new(receiver: Receiver<String>, ready: String) -> Self {
+        Self {
+            receiver,
+            pending: Cursor::new(ready.into_bytes()),
+            closed: false,
+        }
+    }
+}
+
+impl Read for SseReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let position = self.pending.position() as usize;
+            let available = self.pending.get_ref().len().saturating_sub(position);
+            if available > 0 {
+                return self.pending.read(buf);
+            }
+            if self.closed || buf.is_empty() {
+                return Ok(0);
+            }
+            match self.receiver.recv_timeout(Duration::from_secs(15)) {
+                Ok(payload) => self.pending = Cursor::new(payload.into_bytes()),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    self.pending = Cursor::new(sse_heartbeat().into_bytes())
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.closed = true;
+                    return Ok(0);
+                }
+            }
+        }
+    }
+}
+
 
 // 严格百分号解码 (不把 '+' 还原为空格)，用于路径中的文件 id
 // 按字节解析十六进制，避免对 `&input[i+1..i+3]` 做字符串切片时遇到非 ASCII 边界 panic。
@@ -1157,6 +1321,78 @@ fn is_authorized(req: &tiny_http::Request, state: &AppState) -> bool {
         }
     }
     false
+}
+
+fn wants_content_encryption(req: &tiny_http::Request) -> bool {
+    if req
+        .headers()
+        .iter()
+        .any(|h| h.field.equiv("X-WenBox-Encryption") && h.value.as_str().trim().eq_ignore_ascii_case("v1"))
+    {
+        return true;
+    }
+    let raw = req.url();
+    raw.split_once('?')
+        .map(|(_, query)| {
+            query.split('&').any(|pair| {
+                let mut parts = pair.splitn(2, '=');
+                matches!((parts.next(), parts.next()), (Some("enc"), Some("1")))
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn room_content_key(state: &AppState) -> Option<String> {
+    let key = state
+        .room
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .content_key
+        .clone();
+    (!key.is_empty()).then_some(key)
+}
+
+/// Encrypt one message for the wire.  `None` means the room has no key yet
+/// (for example a snapshot restored from an older build).
+fn encrypt_outgoing_content(key: Option<&str>, room_id: &str, content: &str) -> String {
+    match key {
+        Some(key) if !key.is_empty() && !content.starts_with(content_crypto::TEXT_PREFIX) => {
+            content_crypto::encrypt_text(key, &content_crypto::message_aad(room_id), content)
+                .unwrap_or_else(|_| "🔒 消息加密失败".to_string())
+        }
+        _ => content.to_string(),
+    }
+}
+
+fn decrypt_incoming_content(key: Option<&str>, room_id: &str, content: &str) -> Result<String, String> {
+    match key {
+        Some(key) if !key.is_empty() && content.starts_with(content_crypto::TEXT_PREFIX) => {
+            content_crypto::decrypt_text(key, &content_crypto::message_aad(room_id), content)
+        }
+        _ => Ok(content.to_string()),
+    }
+}
+
+fn message_json(messages: &[ChatMessage], encrypted: bool, key: Option<&str>, room_id: &str) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .map(|message| {
+            let content = if encrypted {
+                encrypt_outgoing_content(key, room_id, &message.content)
+            } else {
+                message.content.clone()
+            };
+            serde_json::json!({
+                "id": message.id,
+                "senderName": message.sender_name,
+                "content": content,
+                "timestamp": message.timestamp,
+                "isFromPhone": message.is_from_phone,
+                "senderIp": message.sender_ip,
+                "clientId": message.client_id
+            })
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -1306,13 +1542,19 @@ fn fetch_node_files_blocking(base_url: String, token: Option<String>, state: Arc
 }
 
 #[tauri::command]
-async fn save_remote_file_to_directory(download_url: String, dir_path: String, folder_name: String, file_name: String, token: Option<String>) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || save_remote_file_to_directory_blocking(download_url, dir_path, folder_name, file_name, token))
-        .await
-        .map_err(|e| format!("后台任务失败: {}", e))?
+async fn save_remote_file_to_directory(download_url: String, dir_path: String, folder_name: String, file_name: String, token: Option<String>, content_key: Option<String>, room_id: Option<String>, state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
+    let state=state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path=save_remote_file_to_directory_blocking(download_url, dir_path, folder_name, file_name, token, content_key, room_id)?;
+        let metadata=std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        let file=SharedFile { id:uuid::Uuid::new_v4().to_string(), name:PathBuf::from(&path).file_name().unwrap_or_default().to_string_lossy().into_owned(), size:metadata.len(), path:path.clone(), mime_type:mime_guess::from_path(&path).first_or_octet_stream().to_string() };
+        state.received_files.lock().unwrap_or_else(|e| e.into_inner()).insert(0,file);
+        session_store::remember(&state);
+        Ok(path)
+    }).await.map_err(|e| format!("后台任务失败: {}", e))?
 }
 
-fn save_remote_file_to_directory_blocking(download_url: String, dir_path: String, folder_name: String, file_name: String, token: Option<String>) -> Result<String, String> {
+fn save_remote_file_to_directory_blocking(download_url: String, dir_path: String, folder_name: String, file_name: String, token: Option<String>, content_key: Option<String>, room_id: Option<String>) -> Result<String, String> {
     validate_archive_folder(&folder_name)?;
     let base_dir = PathBuf::from(&dir_path);
     let target_dir = if folder_name.trim().is_empty() {
@@ -1324,8 +1566,16 @@ fn save_remote_file_to_directory_blocking(download_url: String, dir_path: String
         std::fs::create_dir_all(&target_dir).map_err(|e| format!("创建目标目录失败: {}", e))?;
     }
 
+    // 请求加密文件流；旧握手服务端会忽略该头并返回明文。
+    let mut download_url = download_url;
+    if !download_url.contains("enc=1") {
+        download_url.push(if download_url.contains('?') { '&' } else { '?' });
+        download_url.push_str("enc=1");
+    }
     // 携带房间令牌，否则受密码保护房间的下载会被 401 拒绝
-    let mut request = get_stream_client().get(&download_url);
+    let mut request = get_stream_client()
+        .get(&download_url)
+        .set("X-WenBox-Encryption", "v1");
     if let Some(ref t) = token {
         if !t.is_empty() {
             request = request
@@ -1334,6 +1584,10 @@ fn save_remote_file_to_directory_blocking(download_url: String, dir_path: String
         }
     }
     let resp = request.call().map_err(|e| format!("下载远端文件流失败: {}", e))?;
+    let encrypted = resp
+        .header("X-WenBox-Encryption")
+        .map(|value| value.eq_ignore_ascii_case("v1"))
+        .unwrap_or(false);
 
     let safe_name = sanitize_file_name(&file_name);
     // 不覆盖同名文件：File::create 会静默清空既有内容，改为冲突时追加序号
@@ -1345,11 +1599,27 @@ fn save_remote_file_to_directory_blocking(download_url: String, dir_path: String
         .map_err(|e| format!("创建文件失败: {}", e))?;
 
     let mut reader = resp.into_reader();
-    if let Err(e) = std::io::copy(&mut reader, &mut dest_file) {
+    let result = if encrypted {
+        match content_key.filter(|key| !key.is_empty()) {
+            Some(key) => content_crypto::stream_decrypt(
+                &key,
+                room_id.as_deref().unwrap_or(""),
+                &mut reader,
+                &mut dest_file,
+            )
+            .map(|_| ()),
+            None => Err("接收端缺少房间密钥，无法解密下载文件".to_string()),
+        }
+    } else {
+        std::io::copy(&mut reader, &mut dest_file)
+            .map(|_| ())
+            .map_err(|e| format!("写入文件失败: {}", e))
+    };
+    if let Err(error) = result {
         drop(dest_file);
         // 清掉写了一半的文件，避免留下损坏的下载
         let _ = std::fs::remove_file(&file_path);
-        return Err(format!("写入文件失败: {}", e));
+        return Err(error);
     }
     drop(dest_file);
     Ok(file_path.to_string_lossy().to_string())
@@ -1437,6 +1707,12 @@ fn send_node_message_blocking(base_url: String, sender_name: String, content: St
         });
 
     if clean.is_empty() || clean.contains("localhost") || clean.contains("127.0.0.1") {
+        let (room_id, key) = {
+            let room = state.room.lock().unwrap_or_else(|e| e.into_inner());
+            let key = (!room.content_key.is_empty()).then(|| room.content_key.clone());
+            (room.room_id.clone(), key)
+        };
+        let content = decrypt_incoming_content(key.as_deref(), &room_id, &content)?;
         let msg = ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
             sender_name,
@@ -1448,6 +1724,7 @@ fn send_node_message_blocking(base_url: String, sender_name: String, content: St
         };
         push_message_bounded(&state.messages, msg);
         session_store::save(&state)?;
+        publish_event(&state, "message", "{}");
         return Ok(true);
     }
 
@@ -1622,6 +1899,62 @@ fn copy_upload_body(reader: &mut dyn Read, writer: &mut dyn Write, boundary: &st
     }
 }
 
+fn reserve_upload_target(download_dir: &std::path::Path, raw_name: &str) -> Result<(String, PathBuf), String> {
+    let safe_name = raw_name.rsplit(['/', '\\']).next().filter(|s| !s.is_empty() && *s != "." && *s != "..")
+        .unwrap_or("uploaded_file.bin").chars().map(|c| {
+            if c.is_control() || "<>:\"|?*".contains(c) { '_' } else { c }
+        }).collect::<String>();
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut target_path = download_dir.join(&safe_name);
+    if target_path.exists() {
+        let name = std::path::Path::new(&safe_name);
+        let stem = name.file_stem().unwrap_or_default().to_string_lossy();
+        let extension = name.extension().map(|ext| format!(".{}", ext.to_string_lossy())).unwrap_or_default();
+        target_path = download_dir.join(format!("{}-{}{}", stem, &id[..8], extension));
+    }
+    Ok((id, target_path))
+}
+
+fn receive_encrypted_upload(
+    req: &mut tiny_http::Request,
+    download_dir: &std::path::Path,
+    supplied_name: Option<String>,
+    key: &str,
+    room_id: &str,
+) -> Result<SharedFile, String> {
+    std::fs::create_dir_all(download_dir).map_err(|e| format!("创建下载目录失败: {e}"))?;
+    let raw_name = supplied_name.unwrap_or_else(|| "uploaded_file.bin".into());
+    let (id, target_path) = reserve_upload_target(download_dir, &raw_name)?;
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target_path)
+        .map_err(|e| format!("创建文件失败: {e}"))?;
+    let mut writer = std::io::BufWriter::with_capacity(64 * 1024, file);
+    let mut reader = std::io::BufReader::with_capacity(64 * 1024, req.as_reader());
+    let result = content_crypto::stream_decrypt(key, room_id, &mut reader, &mut writer);
+    let flush = writer.flush();
+    drop(writer);
+    let size = match result {
+        Ok(size) if flush.is_ok() => size,
+        Ok(_) => {
+            let _ = std::fs::remove_file(&target_path);
+            return Err("写入解密文件失败".into());
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(&target_path);
+            return Err(error);
+        }
+    };
+    Ok(SharedFile {
+        id,
+        name: target_path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+        size,
+        path: target_path.to_string_lossy().into_owned(),
+        mime_type: mime_guess::from_path(&target_path).first_or_octet_stream().to_string(),
+    })
+}
+
 fn receive_upload(req: &mut tiny_http::Request, download_dir: &std::path::Path,
     content_type: &str, supplied_name: Option<String>) -> Result<SharedFile, String> {
     std::fs::create_dir_all(download_dir).map_err(|e| format!("创建下载目录失败: {}", e))?;
@@ -1713,7 +2046,25 @@ fn serve_http_requests(server: Arc<Server>, state: Arc<AppState>, port: u16) {
             }));
         }
     }
+    let live_streams = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     for request in server.incoming_requests() {
+        // A live event stream intentionally occupies its connection.  Give it a
+        // dedicated thread so it can never consume a control worker.
+        if request.method() == &Method::Get && request.url().split('?').next() == Some("/api/events") {
+            use std::sync::atomic::Ordering;
+            if live_streams.fetch_add(1, Ordering::SeqCst) >= 32 {
+                live_streams.fetch_sub(1, Ordering::SeqCst);
+                let _ = request.respond(Response::from_string("Too many event streams").with_status_code(503));
+                continue;
+            }
+            let state = state.clone();let active=live_streams.clone();
+            thread::spawn(move || {
+                struct Slot(Arc<std::sync::atomic::AtomicUsize>);
+                impl Drop for Slot {fn drop(&mut self){self.0.fetch_sub(1,Ordering::SeqCst);}}
+                let _slot=Slot(active);handle_http_request(request, state, port);
+            });
+            continue;
+        }
         let transfer = if request.method() == &Method::Options { 0 } else if request.url().starts_with("/api/download/") { 1 } else if request.url().split('?').next()==Some("/api/upload") || request.url().starts_with("/api/offers/transfer/") { 2 } else { 0 };
         if let Err(TrySendError::Full(request) | TrySendError::Disconnected(request)) = queues[transfer].try_send(request) {
             // 队列已满：回显已校验的 Origin，并提示前端退避重试
@@ -1737,7 +2088,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
     // CORS: 只回显已通过校验的 Origin，不再使用 `*` (S1)
     let (cors_origin, cors_vary) = cors_headers_for(&req);
     let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS, PUT, DELETE"[..]).unwrap();
-    let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization, X-Room-Token, X-Host-Token, X-Share-Key, X-Share-File"[..]).unwrap();
+    let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization, X-Room-Token, X-Host-Token, X-WenBox-Key, X-WenBox-Encryption, X-Share-Key, X-Share-File"[..]).unwrap();
 
     // 统一拦截：Origin 不属于本机/局域网的浏览器请求，以及 Host 指向外部域名的
     // 请求 (DNS rebinding)，全部 403。非浏览器客户端 (Android 原生、Rust 客户端、
@@ -1787,11 +2138,59 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
     macro_rules! with_cors {
         ($resp:expr) => {{
             let mut resp = $resp;
+            resp.add_header(Header::from_bytes("Access-Control-Expose-Headers", "X-WenBox-Encryption, Content-Disposition, Retry-After").unwrap());
             if let Some(h) = cors_origin.clone() { resp.add_header(h); }
             if let Some(h) = cors_vary.clone() { resp.add_header(h); }
             resp
         }};
     }
+
+            // 0. 实时事件流 (SSE)：消息、成员、文件变化与房间状态都立即推送；
+            //    前端保留低频轮询作为断线时的兜底。
+            if url == "/api/events" && method == Method::Get {
+                if !is_authorized(&req, &state) {
+                    let mut resp = Response::from_string(
+                        "{\"success\":false,\"unauthorized\":true,\"message\":\"未授权：请先加入房间\"}"
+                    ).with_status_code(401);
+                    resp = with_cors!(resp);
+                    let _ = req.respond(resp);
+                    return;
+                }
+                let room = state.room.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let ready = format!(
+                    "retry: 3000\n{}",
+                    sse_payload("ready", &serde_json::json!({
+                        "roomId": room.room_id,
+                        "isActive": room.is_active,
+                        "encrypted": !room.content_key.is_empty()
+                    }).to_string())
+                );
+                let (_client_id, receiver) = match register_event_client(&state) {
+                    Ok(client) => client,
+                    Err(error) => {
+                        let mut resp = Response::from_string(
+                            serde_json::json!({ "success": false, "message": error }).to_string()
+                        ).with_status_code(503);
+                        resp = with_cors!(resp);
+                        let _ = req.respond(resp);
+                        return;
+                    }
+                };
+                let headers = vec![
+                    Header::from_bytes(&b"Content-Type"[..], &b"text/event-stream; charset=utf-8"[..]).unwrap(),
+                    Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-transform"[..]).unwrap(),
+                    Header::from_bytes(&b"X-Accel-Buffering"[..], &b"no"[..]).unwrap(),
+                ];
+                let response = Response::new(
+                    tiny_http::StatusCode(200),
+                    headers,
+                    SseReader::new(receiver, ready),
+                    None,
+                    None,
+                );
+                let _ = req.respond(with_cors!(response));
+                return;
+            }
 
             // 0. 房间系统接口 (公开接口：查看状态、加入房间、心跳、成员与已发现房间)
             if (url == "/api/room/status" || url == "/api/room/info") && method == Method::Get {
@@ -1812,8 +2211,10 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     "hostIp": primary_ip,
                     "hostPort": port,
                     "memberCount": members_count,
-                    "isHost": is_host
-                }).to_string();
+                    "isHost": is_host,
+                    "contentKey": if is_host { room.content_key.clone() } else { String::new() }
+                });
+                let json = key_exchange::wire(&req, json);
                 let mut resp = Response::from_string(json);
                 resp = with_cors!(resp);
                 let _ = req.respond(resp);
@@ -1884,6 +2285,16 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 let host_token = uuid::Uuid::new_v4().to_string();
                 let host_member_id = uuid::Uuid::new_v4().to_string();
 
+                let content_key = match content_crypto::generate_key() {
+                    Ok(key) => key,
+                    Err(error) => {
+                        let mut resp = Response::from_string(serde_json::json!({ "success": false, "message": error }).to_string())
+                            .with_status_code(500);
+                        resp = with_cors!(resp);
+                        let _ = req.respond(resp);
+                        return;
+                    }
+                };
                 let cfg = RoomConfig {
                     is_active: true,
                     room_id,
@@ -1895,6 +2306,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     host_port: port,
                     created_at: now,
                     auto_connect: false,
+                    content_key,
                 };
 
                 // 建房检查与写入必须在同一个 room 锁作用域内完成，否则两个并发请求
@@ -1937,15 +2349,39 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 state.members.lock().unwrap_or_else(|e| e.into_inner()).insert("host".into(), host_member);
 
                 session_store::remember(&state);
+                publish_event(&state, "room", r#"{"action":"created"}"#);
+                publish_event(&state, "members", "{}");
                 let mut cfg_val = serde_json::to_value(&cfg).unwrap_or_default();
                 if let Some(obj) = cfg_val.as_object_mut() {
                     obj.insert("hostToken".into(), serde_json::Value::String(host_token));
                     obj.insert("memberId".into(), serde_json::Value::String(host_member_id));
                 }
-                let json = cfg_val.to_string();
+                let json = key_exchange::wire(&req, cfg_val);
                 let mut resp = Response::from_string(json);
                 resp = with_cors!(resp);
                 resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap());
+                let _ = req.respond(resp);
+                return;
+            }
+
+            // Browser pages served by this device may join another host without
+            // going through the Tauri command.  A loopback-only request can
+            // dissolve this device's automatic startup room, but never a
+            // remote guest's room.
+            if url == "/api/room/leave_local_default" && method == Method::Post {
+                if !is_loopback_ip(&get_clean_remote_ip(&req)) || !origin_allowed(&req) {
+                    let mut resp = Response::from_string(
+                        "{\"success\":false,\"message\":\"仅允许本机页面解散默认房间\"}"
+                    ).with_status_code(403);
+                    resp = with_cors!(resp);
+                    let _ = req.respond(resp);
+                    return;
+                }
+                let closed = close_default_room_if_active(&state).is_some();
+                let mut resp = Response::from_string(
+                    serde_json::json!({ "success": true, "closed": closed }).to_string()
+                );
+                resp = with_cors!(resp);
                 let _ = req.respond(resp);
                 return;
             }
@@ -1990,6 +2426,8 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 state.demand_files.clear();
     broadcast_room_closed(old_room_id);
                 session_store::remember(&state);
+                publish_event(&state, "room", r#"{"action":"closed"}"#);
+                publish_event(&state, "members", "{}");
 
                 let mut resp = Response::from_string("{\"success\":true}");
                 resp = with_cors!(resp);
@@ -2108,13 +2546,17 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                                     "hostPort": port,
                                     "autoConnect": room.auto_connect,
                                     "needPassword": room.need_password,
+                                    "contentKey": room.content_key,
                                 });
                             }
                         }
                     }
                 }
 
-                if success { session_store::remember(&state); }
+                if success {
+                    session_store::remember(&state);
+                    publish_event(&state, "members", "{}");
+                }
                 let status = if locked_secs > 0 { 429 } else { 200 };
                 let json = serde_json::json!({
                     "success": success,
@@ -2124,7 +2566,8 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     "memberId": member_id,
                     "retryAfter": locked_secs,
                     "room": room_info
-                }).to_string();
+                });
+                let json = key_exchange::wire(&req, json);
                 let mut resp = Response::from_string(json).with_status_code(status);
                 resp = with_cors!(resp);
                 let _ = req.respond(resp);
@@ -2234,14 +2677,18 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     .ok()
                     .and_then(|v| v["token"].as_str().map(|s| s.to_string()))
                     .or(token_header);
+                let mut left = false;
                 if let Some(t) = token {
                     // "host" 是房主的保留键：未鉴权的请求不得借此把房主踢出成员列表 (S3)
                     if t != "host" && !t.trim().is_empty() {
-                        state.members.lock().unwrap_or_else(|e| e.into_inner()).remove(&t);
+                        left = state.members.lock().unwrap_or_else(|e| e.into_inner()).remove(&t).is_some();
                         state.auth_tokens.lock().unwrap_or_else(|e| e.into_inner()).remove(&t);
                     }
                 }
                 session_store::remember(&state);
+                if left {
+                    publish_event(&state, "members", "{}");
+                }
                 let mut resp = Response::from_string("{\"success\":true}");
                 resp = with_cors!(resp);
                 let _ = req.respond(resp);
@@ -2437,6 +2884,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 || url.starts_with("/api/offers")
                 || url == "/api/upload"
                 || url == "/api/received_files"
+                || url == "/api/events"
                 || url.starts_with("/api/messages");
 
             if is_protected && !is_authorized(&req, &state) {
@@ -2509,8 +2957,43 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 };
 
                 if let Some(info) = file_info {
-                    if let Ok(f) = File::open(&info.path) {
-                        let mut resp = Response::from_file(f);
+                    let (room_id, key) = {
+                        let room = state.room.lock().unwrap_or_else(|e| e.into_inner());
+                        let key = (!room.content_key.is_empty()).then(|| room.content_key.clone());
+                        (room.room_id.clone(), key)
+                    };
+                    if let Ok(file) = File::open(&info.path) {
+                        if wants_content_encryption(&req) || !is_trusted_loopback(&req) {
+                            if let Some(key) = key {
+                                let encrypted_reader = File::open(&info.path)
+                                    .ok()
+                                    .and_then(|file| content_crypto::EncryptReader::new(file, &key, &room_id).ok());
+                                if let Some(reader) = encrypted_reader {
+                                    let headers = vec![
+                                        build_content_disposition(&info.name),
+                                        Header::from_bytes(&b"Content-Type"[..], &b"application/octet-stream"[..]).unwrap(),
+                                        Header::from_bytes(&b"X-WenBox-Encryption"[..], &b"v1"[..]).unwrap(),
+                                    ];
+                                    let resp = Response::new(
+                                        tiny_http::StatusCode(200),
+                                        headers,
+                                        reader,
+                                        None,
+                                        None,
+                                    );
+                                    let _ = req.respond(with_cors!(resp));
+                                    return;
+                                }
+                            } else {
+                                let mut resp = Response::from_string(
+                                    "{\"success\":false,\"message\":\"房间尚未生成内容密钥，请重新创建房间\"}"
+                                ).with_status_code(409);
+                                resp = with_cors!(resp);
+                                let _ = req.respond(resp);
+                                return;
+                            }
+                        }
+                        let mut resp = Response::from_file(file);
                         resp.add_header(build_content_disposition(&info.name));
                         if let Ok(ct) = Header::from_bytes(&b"Content-Type"[..], info.mime_type.as_bytes()) {
                             resp.add_header(ct);
@@ -2542,8 +3025,24 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 let x_filename = headers.iter()
                     .find(|h| h.field.equiv("X-File-Name"))
                     .map(|h| form_urldecode(h.value.as_str()));
+                let encrypted = headers.iter().any(|h| {
+                    h.field.equiv("X-WenBox-Encryption") && h.value.as_str().trim().eq_ignore_ascii_case("v1")
+                });
+                let upload_result = if encrypted {
+                    let (key, room_id) = {
+                        let room = state.room.lock().unwrap_or_else(|e| e.into_inner());
+                        let key = (!room.content_key.is_empty()).then(|| room.content_key.clone());
+                        (key, room.room_id.clone())
+                    };
+                    match key {
+                        Some(key) => receive_encrypted_upload(&mut req, &download_dir, x_filename, &key, &room_id),
+                        None => Err("房间尚未生成内容密钥，请重新创建房间".into()),
+                    }
+                } else {
+                    receive_upload(&mut req, &download_dir, &content_type, x_filename)
+                };
 
-                match receive_upload(&mut req, &download_dir, &content_type, x_filename) {
+                match upload_result {
                     Ok(file) => {
                         // 不再自动把刚收到的文件放进"共享给全房间"的列表：
                         // 否则访客发给房主的私密文件会对所有成员公开 (Rust 其它)。
@@ -2554,6 +3053,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                             let _ = req.respond(with_cors!(response));
                             return;
                         }
+                        publish_event(&state, "files", r#"{"action":"received"}"#);
                         let json = serde_json::json!({
                             "success": true, "message": format!("文件已保存: {}", file.name),
                             "fileId": file.id, "name": file.name, "size": file.size
@@ -2591,8 +3091,12 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     }).unwrap_or(0);
                     let msgs: Vec<ChatMessage> = state.messages.lock().unwrap_or_else(|e| e.into_inner())
                         .iter().filter(|m| since_ts == 0 || m.timestamp > since_ts).cloned().collect();
+                    let key = room_content_key(&state);
+                    let encrypted = key.is_some() && (wants_content_encryption(&req) || !is_trusted_loopback(&req));
+                    let messages = message_json(&msgs, encrypted, key.as_deref(), &room_id);
                     let json = serde_json::json!({
-                        "messages": msgs,
+                        "messages": messages,
+                        "encrypted": encrypted,
                         "roomId": room_id,
                         "isActive": is_active
                     }).to_string();
@@ -2603,8 +3107,25 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     return;
                 } else if method == Method::Post {
                     let body = read_body!(MSG_MAX);
+                    let (room_id, key) = {
+                        let room = state.room.lock().unwrap_or_else(|e| e.into_inner());
+                        let key = (!room.content_key.is_empty()).then(|| room.content_key.clone());
+                        (room.room_id.clone(), key)
+                    };
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
-                        let content = val["content"].as_str().unwrap_or("").to_string();
+                        let raw_content = val["content"].as_str().unwrap_or("").to_string();
+                        let content = match decrypt_incoming_content(key.as_deref(), &room_id, &raw_content) {
+                            Ok(content) => content,
+                            Err(error) => {
+                                let mut resp = Response::from_string(serde_json::json!({
+                                    "success": false,
+                                    "message": error
+                                }).to_string()).with_status_code(400);
+                                resp = with_cors!(resp);
+                                let _ = req.respond(resp);
+                                return;
+                            }
+                        };
                         let sender_name = val["senderName"].as_str().unwrap_or("未知用户").to_string();
                         let sender_ip_field = val["senderIp"].as_str().unwrap_or("").trim().to_string();
                         let remote_ip = get_clean_remote_ip(&req);
@@ -2637,6 +3158,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         // 只保留最近 MAX_MESSAGES 条，避免消息历史无界增长打爆内存 (S4)
                         push_message_bounded(&state.messages, msg);
                         session_store::remember(&state);
+                        publish_event(&state, "message", "{}");
 
                         if let Some(t) = header_val(&req, "X-Room-Token") {
                             let mut members = state.members.lock().unwrap_or_else(|e| e.into_inner());
@@ -3047,6 +3569,7 @@ fn start_default_open_room(state: &Arc<AppState>) {
         host_port: 9527,
         created_at: now,
         auto_connect: true,
+        content_key: content_crypto::generate_key().unwrap_or_default(),
     };
 
     *state.room.lock().unwrap_or_else(|e| e.into_inner()) = cfg.clone();
@@ -3091,6 +3614,8 @@ fn main() {
         selected_ip: Mutex::new(None),
         host_last_seen: Mutex::new(0),
         pin_failures: Mutex::new(HashMap::new()),
+        event_clients: Mutex::new(HashMap::new()),
+        next_event_client: AtomicU64::new(1),
     });
 
     let restored = session_store::restore(&state);
@@ -3099,6 +3624,14 @@ fn main() {
 
     // 启动 HTTP 服务端 (默认 9527)
     start_embedded_http_server(state.clone(), 9527);
+
+    // Periodically touch every SSE subscriber so dead connections are removed
+    // from the client table even when the room stays quiet.
+    let heartbeat_state = state.clone();
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_secs(20));
+        publish_event(&heartbeat_state, "heartbeat", "{}");
+    });
 
     // 启动 UDP 自动发现与设备节点探测 (9528)
     start_udp_discovery(state.clone(), 9527);
@@ -3160,6 +3693,7 @@ fn main() {
             clear_share_files,
             get_received_files,
             open_download_folder,
+            reveal_received_file,
             fetch_node_files,
             save_remote_file_to_directory,
             save_file_to_directory,
@@ -3424,6 +3958,7 @@ mod tests {
                 host_port: 9527,
                 created_at: 0,
                 auto_connect: false,
+                content_key: content_crypto::generate_key().unwrap_or_default(),
             }),
             members: Mutex::new(HashMap::new()),
             discovered_rooms: Mutex::new(HashMap::new()),
@@ -3433,6 +3968,8 @@ mod tests {
             selected_ip: Mutex::new(Some("192.168.1.8".into())),
             host_last_seen: Mutex::new(0),
             pin_failures: Mutex::new(HashMap::new()),
+            event_clients: Mutex::new(HashMap::new()),
+            next_event_client: AtomicU64::new(1),
         });
         state.files.lock().unwrap().insert("secret".into(), SharedFile {
             id: "secret".into(), name: "机密.txt".into(), size: 2,
@@ -3647,6 +4184,8 @@ mod tests {
             discovered_rooms: Mutex::new(HashMap::new()), auth_tokens: Mutex::new(HashSet::new()),
             host_token: Mutex::new(String::new()), is_tauri_host: Mutex::new(false), selected_ip: Mutex::new(None),
             host_last_seen: Mutex::new(0), pin_failures: Mutex::new(HashMap::new()),
+            event_clients: Mutex::new(HashMap::new()),
+            next_event_client: AtomicU64::new(1),
         });
         state.files.lock().unwrap().insert("large".into(), SharedFile {
             id: "large".into(), name: "large.bin".into(), size: 16 * 1024 * 1024,
@@ -3773,6 +4312,8 @@ mod tests {
             selected_ip: Mutex::new(None),
             host_last_seen: Mutex::new(0),
             pin_failures: Mutex::new(HashMap::new()),
+            event_clients: Mutex::new(HashMap::new()),
+            next_event_client: AtomicU64::new(1),
         });
 
         let port = 39528;
@@ -3839,6 +4380,8 @@ mod tests {
             selected_ip: Mutex::new(None),
             host_last_seen: Mutex::new(0),
             pin_failures: Mutex::new(HashMap::new()),
+            event_clients: Mutex::new(HashMap::new()),
+            next_event_client: AtomicU64::new(1),
         });
         let file_id = "test-file-id".to_string();
         state.files.lock().unwrap().insert(file_id.clone(), SharedFile {
@@ -3868,5 +4411,190 @@ mod tests {
         let body: Vec<u8> = std::io::Read::bytes(resp.into_reader()).collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(body, content);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn encrypted_message_and_file_payloads_roundtrip_over_http() {
+        let state = protected_state();
+        let key = state.room.lock().unwrap().content_key.clone();
+        assert_eq!(key.len(), 44);
+        let aad = content_crypto::message_aad("room-uuid");
+        let wire = content_crypto::encrypt_text(&key, &aad, "端到端测试消息").unwrap();
+        let port = spawn_test_server(state.clone());
+
+        let response = get_stream_client()
+            .post(&format!("http://127.0.0.1:{}/api/messages", port))
+            .set("Content-Type", "application/json; charset=utf-8")
+            .send_string(&serde_json::json!({
+                "content": wire,
+                "senderName": "测试设备",
+                "clientId": "cid-test"
+            }).to_string())
+            .unwrap();
+        assert_eq!(response.status(), 200);
+
+        let response = get_stream_client()
+            .get(&format!("http://127.0.0.1:{}/api/messages?enc=1", port))
+            .set("X-WenBox-Encryption", "v1")
+            .call()
+            .unwrap();
+        let value: serde_json::Value = response.into_json().unwrap();
+        assert_eq!(value["encrypted"], true);
+        let message = value["messages"].as_array().unwrap().iter()
+            .find(|item| item["clientId"] == "cid-test").unwrap();
+        let payload = message["content"].as_str().unwrap();
+        assert!(payload.starts_with(content_crypto::TEXT_PREFIX));
+        assert_eq!(content_crypto::decrypt_text(&key, &aad, payload).unwrap(), "端到端测试消息");
+
+        let dir = tempfile::tempdir().unwrap();
+        let plain = b"encrypted file transfer fixture".repeat(4000);
+        let path = dir.path().join("secret.bin");
+        std::fs::write(&path, &plain).unwrap();
+        state.files.lock().unwrap().insert("encrypted-file".into(), SharedFile {
+            id: "encrypted-file".into(),
+            name: "secret.bin".into(),
+            size: plain.len() as u64,
+            path: path.to_string_lossy().to_string(),
+            mime_type: "application/octet-stream".into(),
+        });
+        let response = get_stream_client()
+            .get(&format!("http://127.0.0.1:{}/api/download/encrypted-file?enc=1", port))
+            .set("X-WenBox-Encryption", "v1")
+            .call()
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.header("X-WenBox-Encryption"), Some("v1"));
+        let mut encrypted = Vec::new();
+        response.into_reader().read_to_end(&mut encrypted).unwrap();
+        let mut decrypted = Vec::new();
+        content_crypto::stream_decrypt(&key, "room-uuid", &mut encrypted.as_slice(), &mut decrypted).unwrap();
+        assert_eq!(decrypted, plain);
+    }
+
+    #[test]
+    fn http_join_and_status_never_expose_the_room_key() {
+        let state=protected_state(); let secret=state.room.lock().unwrap().content_key.clone();
+        let port=spawn_test_server(state);
+        let base=format!("http://127.0.0.1:{port}");
+        let legacy=get_http_client().post(&format!("{base}/api/room/join")).send_json(serde_json::json!({"pin":"246810"})).unwrap().into_string().unwrap();
+        assert!(!legacy.contains(&secret));assert!(!legacy.contains("\"contentKey\""));
+        let exchange=key_exchange::Exchange::new().unwrap();
+        let wire=get_http_client().post(&format!("{base}/api/room/join")).set("X-WenBox-Key",&exchange.public).send_json(serde_json::json!({"pin":"246810"})).unwrap().into_string().unwrap();
+        assert!(!wire.contains(&secret));let mut value:serde_json::Value=serde_json::from_str(&wire).unwrap();
+        exchange.open(&mut value).unwrap();assert_eq!(value["room"]["contentKey"],secret);
+        let status=get_http_client().get(&format!("{base}/api/room/status")).set("X-Host-Token","host-token-secret").call().unwrap().into_string().unwrap();
+        assert!(!status.contains(&secret));
+    }
+
+    #[test]
+    fn sse_pushes_ready_and_room_events_promptly() {
+        let state = protected_state();
+        let port = spawn_test_server(state.clone());
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        stream.write_all(format!(
+            "GET /api/events?token=host-token-secret HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            port
+        ).as_bytes()).unwrap();
+        let mut buffer = [0u8; 16 * 1024];
+        let mut received = String::new();
+        while !received.contains("event: ready") && received.len() < 256 * 1024 {
+            let count = stream.read(&mut buffer).unwrap();
+            received.push_str(&String::from_utf8_lossy(&buffer[..count]));
+        }
+        assert!(received.contains("event: ready"), "missing ready event, received {} bytes: {:?}", received.len(), &received[..received.len().min(300)]);
+        publish_event(&state, "message", "{}");
+        received.clear();
+        while !received.contains("event: message") && received.len() < 256 * 1024 {
+            let count = stream.read(&mut buffer).unwrap();
+            received.push_str(&String::from_utf8_lossy(&buffer[..count]));
+        }
+        assert!(received.contains("event: message"), "missing pushed event, received {} bytes", received.len());
+    }
+
+    #[test]
+    fn joining_another_room_dissolves_the_startup_room() {
+        let host = protected_state();
+        let host_port = spawn_test_server(host.clone());
+        let local = protected_state();
+        {
+            let mut room = local.room.lock().unwrap();
+            room.room_id = "startup-room".into();
+            room.room_name = "启动房间".into();
+            room.pin.clear();
+            room.need_password = false;
+            room.auto_connect = true;
+        }
+        *local.host_token.lock().unwrap() = "startup-host-token".into();
+        local.members.lock().unwrap().insert("host".into(), RoomMember {
+            id: "startup-host".into(), name: "本机 (房主)".into(), ip: "192.168.1.20".into(),
+            platform: "macOS".into(), access_ip: "192.168.1.20:9527".into(),
+            joined_at: 1, last_seen: 1,
+        });
+        local.messages.lock().unwrap().push(ChatMessage {
+            id: "startup-message".into(), sender_name: "本机".into(), content: "旧房间消息".into(),
+            timestamp: 1, is_from_phone: false, sender_ip: String::new(), client_id: None,
+        });
+
+        let response = join_remote_room_expected(
+            format!("http://127.0.0.1:{}", host_port),
+            "246810".into(),
+            "访客".into(),
+            local.clone(),
+            None,
+        ).unwrap();
+        assert_eq!(response["success"], true);
+        assert_eq!(response["localRoomClosed"], true);
+        assert_eq!(response["localRoomId"], "startup-room");
+        assert!(!local.room.lock().unwrap().is_active);
+        assert!(local.room.lock().unwrap().room_id.is_empty());
+        assert!(local.host_token.lock().unwrap().is_empty());
+        assert!(local.members.lock().unwrap().is_empty());
+        assert!(local.messages.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn joining_another_room_preserves_a_manual_hosted_room() {
+        let host = protected_state();
+        let host_port = spawn_test_server(host);
+        let local = protected_state();
+        {
+            let mut room = local.room.lock().unwrap();
+            room.room_id = "manual-room".into();
+            room.pin.clear();
+            room.need_password = false;
+            room.auto_connect = false;
+        }
+        let response = join_remote_room_expected(
+            format!("http://127.0.0.1:{}", host_port),
+            "246810".into(),
+            "访客".into(),
+            local.clone(),
+            None,
+        ).unwrap();
+        assert_eq!(response["success"], true);
+        assert!(response.get("localRoomClosed").is_none());
+        assert!(local.room.lock().unwrap().is_active);
+        assert_eq!(local.room.lock().unwrap().room_id, "manual-room");
+    }
+
+    #[test]
+    fn loopback_page_can_dissolve_the_startup_room() {
+        let state = protected_state();
+        {
+            let mut room = state.room.lock().unwrap();
+            room.auto_connect = true;
+            room.need_password = false;
+            room.pin.clear();
+        }
+        let port = spawn_test_server(state.clone());
+        let response = get_stream_client()
+            .post(&format!("http://127.0.0.1:{}/api/room/leave_local_default", port))
+            .call()
+            .unwrap();
+        let value: serde_json::Value = response.into_json().unwrap();
+        assert_eq!(value["success"], true);
+        assert_eq!(value["closed"], true);
+        assert!(!state.room.lock().unwrap().is_active);
     }
 }

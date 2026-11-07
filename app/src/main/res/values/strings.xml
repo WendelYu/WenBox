@@ -79,6 +79,8 @@
     <string name="toast_chat_cleared">聊天记录已清空</string>
     <string name="toast_join_failed">加入失败: %1$s</string>
     <string name="toast_room_joined">已加入房间「%1$s」</string>
+    <string name="toast_room_joined_dissolved">已解散本机默认房间，加入「%1$s」</string>
+    <string name="join_dissolve_hint">如果本机已自动创建默认接收房间，加入其他房间后会自动解散，避免同时作为两个房间的房主。</string>
     <string name="toast_left_room">已退出房间</string>
     <string name="toast_room_closed">房间已解散，已切换回客户端发现大厅</string>
     <string name="toast_host_closed_room">房主已关闭房间</string>

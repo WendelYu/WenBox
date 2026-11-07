@@ -23,6 +23,8 @@ import com.landrop.server.FileManager
 import com.landrop.server.RoomManager
 import com.landrop.service.TransferService
 import com.landrop.ui.MainViewModel
+import com.landrop.ui.RoomMode
+import com.landrop.ui.TransferViewModel
 import com.landrop.ui.fragment.ToolsFragment
 import com.landrop.ui.fragment.TransferFragment
 import com.landrop.utils.NetworkUtils
@@ -32,6 +34,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
 
     private val mainViewModel: MainViewModel by viewModels()
+    private val transferViewModel: TransferViewModel by viewModels()
 
     var transferService: TransferService? = null
         private set
@@ -65,7 +68,10 @@ class MainActivity : AppCompatActivity() {
 
             // 打开软件即自动开启服务并创建免密房间:
             // 局域网内其他设备通过 IP 访问后无需任何操作即可直接加入互传
-            if (RoomManager.currentRoom?.isActive != true) {
+            // A joined remote session must not silently recreate the startup
+            // host room after rotation/rebinding.  The ViewModel survives
+            // configuration changes and knows whether this device is a guest.
+            if (RoomManager.currentRoom?.isActive != true && transferViewModel.state.value.mode != RoomMode.JOINED) {
                 if (!svc.isRunning) {
                     svc.startServer(9527)
                 }
@@ -77,7 +83,8 @@ class MainActivity : AppCompatActivity() {
                     pin = "",
                     hostDevice = devName,
                     hostIp = primaryIp,
-                    hostPort = 9527
+                    hostPort = 9527,
+                    autoCreated = true
                 )
             }
             mainViewModel.updateServiceState(svc.isRunning, svc.currentPort, bound = true)

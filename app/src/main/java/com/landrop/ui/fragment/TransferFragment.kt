@@ -822,12 +822,13 @@ class TransferFragment : Fragment() {
         }
     }
 
-    private data class RoomAccess(val origin: String, val token: String, val roomId: String)
+    private data class RoomAccess(val origin: String, val token: String, val roomId: String, val contentKey: String)
     private fun roomAccess() = RoomAccess(roomApiOrigin(), when (currentRoomMode) {
         RoomMode.HOST -> RoomManager.currentHostToken.orEmpty()
         RoomMode.JOINED -> transferViewModel.state.value.joinedToken
         RoomMode.CLIENT -> ""
-    }, transferViewModel.state.value.let { it.joinedRoom?.roomId ?: it.room?.roomId.orEmpty() })
+    }, transferViewModel.state.value.let { it.joinedRoom?.roomId ?: it.room?.roomId.orEmpty() },
+        transferViewModel.state.value.let { if (currentRoomMode == RoomMode.HOST) RoomManager.currentRoom?.contentKey.orEmpty() else it.joinedContentKey })
 
     private fun bindChatMessage(itemBinding: ItemChatMessageBinding, msg: ChatMessage): Job? {
         val ctx = context ?: return null
@@ -948,7 +949,7 @@ class TransferFragment : Fragment() {
                     val coroutine = currentCoroutineContext()
                     val temp = File.createTempFile("wenbox_preview_", ".tmp", cacheDir)
                     try {
-                        RoomDownloadClient.download(access.origin, payload, access.token) { input ->
+                        RoomDownloadClient.download(access.origin, payload, access.token, access.contentKey, access.roomId) { input ->
                             temp.outputStream().use { output ->
                                 val buffer = ByteArray(32768)
                                 var total = 0L

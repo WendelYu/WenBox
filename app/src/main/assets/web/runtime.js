@@ -60,10 +60,21 @@
 
     // 服务端线程池满时返回 503：做 2 次指数退避重试，避免前端把瞬时过载显示成失败。
     async function fetchWithTimeout(url, options = {}, timeout = 4000, retries = 2, backoffMs = 400) {
+        const exchange = /\/api\/room\/(join|create|status)(?:[?]|$)/.test(String(url)) && window.WenBoxKeyExchange
+            ? window.WenBoxKeyExchange.begin() : null;
+        if (exchange) {
+            const headers = new Headers(options.headers || {});
+            headers.set('X-WenBox-Key', exchange.publicKey);
+            options = { ...options, headers };
+        }
         let attempt = 0;
         for (;;) {
             const response = await fetchOnce(url, options, timeout);
-            if (response.status !== 503 || attempt >= retries) return response;
+            if (response.status !== 503 || attempt >= retries) {
+                if (!exchange || !response.ok) return response;
+                const value = exchange.open(await response.json());
+                return new Response(JSON.stringify(value), { status: response.status, headers: response.headers });
+            }
             await new Promise(resolve => setTimeout(resolve, backoffMs * Math.pow(2, attempt)));
             attempt++;
         }
@@ -127,7 +138,7 @@
         signal.addEventListener('abort', cancel, { once: true });
         try {
             check();
-            id = await nativeInvoke('native_upload_begin', { url: context.url, name: file.name, size: file.size, token: context.token || null });
+            id = await nativeInvoke('native_upload_begin', { url: context.url, name: file.name || context.name, size: file.size, token: context.token || null, encrypted: !!context.encrypted });
             check(); onProgress(0, file.size, 'preparing');
             for (let offset = 0; offset < file.size; offset += 512 * 1024) {
                 check();
@@ -150,7 +161,7 @@
             if (signal?.aborted) throw new DOMException('已取消', 'AbortError');
             let timer, abort;
             try {
-                return await Promise.race([nativeResponse(url, options), new Promise((_, reject) => {
+                return await Promise.race([nativeResponse(url, options, options.image === true), new Promise((_, reject) => {
                     abort = () => reject(new DOMException('已取消', 'AbortError'));
                     signal?.addEventListener('abort', abort, { once: true });
                     timer = setTimeout(() => reject(new Error('请求超时')), timeout);

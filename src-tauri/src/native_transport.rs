@@ -80,6 +80,8 @@ fn request(
             "x-room-token",
             "x-host-token",
             "range",
+            "x-wenbox-encryption",
+            "x-wenbox-key",
             "x-share-key",
             "x-share-file",
         ]
@@ -101,7 +103,7 @@ fn request(
         return Err("不支持房间地址重定向".into());
     }
     let mut headers = HashMap::new();
-    for name in ["Content-Type", "Retry-After", "Content-Disposition"] {
+    for name in ["Content-Type", "Retry-After", "Content-Disposition", "X-WenBox-Encryption"] {
         if let Some(value) = response.header(name) {
             headers.insert(name.to_ascii_lowercase(), value.to_string());
         }
@@ -187,6 +189,7 @@ struct Upload {
     name: String,
     token: Option<String>,
     size: u64,
+    encrypted: bool,
     cancelled: AtomicBool,
     sent: AtomicU64,
 }
@@ -208,6 +211,7 @@ pub fn native_upload_begin(
     name: String,
     token: Option<String>,
     size: u64,
+    encrypted: bool,
 ) -> Result<String, String> {
     let url = validate_target(&url)?;
     if url.path() != "/api/upload" && !url.path().starts_with("/api/offers/transfer/") {
@@ -234,6 +238,7 @@ pub fn native_upload_begin(
         let (tx, rx) = std::sync::mpsc::sync_channel(2);
         let (result_tx, result_rx) = std::sync::mpsc::channel();
         let item = Arc::new(Upload {
+            encrypted: false,
             file: Mutex::new(None),
             stream: Some(StreamUpload {
                 tx: Mutex::new(Some(tx)),
@@ -289,6 +294,7 @@ pub fn native_upload_begin(
             name: super::sanitize_file_name(&name),
             token,
             size,
+            encrypted,
             cancelled: AtomicBool::new(false),
             sent: AtomicU64::new(0),
         }),
@@ -408,6 +414,9 @@ fn finish(id: &str) -> Result<serde_json::Value, String> {
             .set("Content-Type", "application/octet-stream")
             .set("Content-Length", &upload.size.to_string())
             .set("X-File-Name", &super::percent_encode_utf8(&upload.name));
+        if upload.encrypted {
+            req = req.set("X-WenBox-Encryption", "v1");
+        }
         if let Some(token) = &upload.token {
             req = req.set("X-Room-Token", token);
         }
@@ -492,6 +501,7 @@ mod tests {
                                 text("name"),
                                 args["token"].as_str().map(str::to_owned),
                                 args["size"].as_u64().unwrap(),
+                                args["encrypted"].as_bool().unwrap_or(false),
                             )
                             .map(serde_json::Value::String),
                             "native_upload_chunk" => chunk(
@@ -554,7 +564,7 @@ mod tests {
                 ))
                 .unwrap();
         });
-        let id = native_upload_begin(url, "图片.png".into(), Some("secret".into()), 5).unwrap();
+        let id = native_upload_begin(url, "图片.png".into(), Some("secret".into()), 5, false).unwrap();
         let staged = upload(&id)
             .unwrap()
             .file
@@ -579,6 +589,7 @@ mod tests {
             "test".into(),
             None,
             10,
+            false,
         )
         .unwrap();
         let path = upload(&id)
@@ -598,6 +609,7 @@ mod tests {
             "test".into(),
             None,
             10,
+            false,
         )
         .unwrap();
         assert!(finish(&id).unwrap_err().contains("完整"));
@@ -663,6 +675,7 @@ mod demand_stream_tests {
             "file.bin".into(),
             Some("room-token".into()),
             expected.len() as u64,
+            false,
         )
         .unwrap();
         assert!(upload(&id).unwrap().file.lock().unwrap().is_none());

@@ -36,7 +36,7 @@ class DemandFiles {
         offers.clear(); owners.clear(); pending.clear(); room = id
     }
     private fun online(owner: String) = owners[owner]?.let { System.nanoTime() - it < TimeUnit.SECONDS.toNanos(12) } == true
-    private fun public(o: Offer) = JSONObject(o.file.toString()).put("id", o.id).put("path", "").put("onDemand", true).put("ownerName", o.sender).put("online", online(o.owner))
+    private fun public(o: Offer) = JSONObject(o.file.toString()).put("id", o.id).put("size", o.file.optLong("plainSize", o.file.getLong("size"))).put("path", "").put("onDemand", true).put("ownerName", o.sender).put("online", online(o.owner))
     @Synchronized fun list(roomId: String): JSONArray {
         room(roomId)
         return JSONArray().apply { offers.values.filter { it.visible }.forEach { put(public(it)) } }
@@ -65,6 +65,7 @@ class DemandFiles {
                     val result = JSONArray()
                     input.forEach { f ->
                         val clean = JSONObject().put("clientId", f.getString("clientId")).put("name", f.getString("name")).put("size", f.getLong("size")).put("mimeType", f.optString("mimeType", "application/octet-stream"))
+                        clean.put("plainSize", f.optLong("plainSize", f.getLong("size"))).put("encrypted", f.optBoolean("encrypted"))
                         val offer = Offer("offer-${UUID.randomUUID()}", owner, sender, clean, scope == "room")
                         offers[offer.id] = offer; result.put(public(offer))
                     }
@@ -113,6 +114,7 @@ class DemandFiles {
                     override fun close() { transfer.closed.set(true); transfer.queue.clear() }
                 }
                 NanoHTTPD.newFixedLengthResponse(Status.OK, "application/octet-stream", stream, transfer.offer.file.getLong("size")).apply {
+                    if (transfer.offer.file.optBoolean("encrypted")) addHeader("X-WenBox-Encryption", "v1")
                     addHeader("Content-Disposition", "attachment; filename*=UTF-8''" + URLEncoder.encode(transfer.offer.file.getString("name"), "UTF-8").replace("+", "%20"))
                 }
             }

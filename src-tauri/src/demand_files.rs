@@ -19,6 +19,10 @@ struct FileInput {
     client_id: String,
     name: String,
     size: u64,
+    #[serde(default)]
+    plain_size: Option<u64>,
+    #[serde(default)]
+    encrypted: bool,
     mime_type: String,
 }
 #[derive(Deserialize)]
@@ -91,7 +95,7 @@ impl DemandFiles {
             .collect()
     }
     fn public(o: &Offer, online: bool) -> serde_json::Value {
-        serde_json::json!({"id":o.id,"clientId":o.file.client_id,"name":o.file.name,"size":o.file.size,"mimeType":o.file.mime_type,"path":"","onDemand":true,"ownerName":o.sender,"online":online})
+        serde_json::json!({"id":o.id,"clientId":o.file.client_id,"name":o.file.name,"size":o.file.plain_size.unwrap_or(o.file.size),"mimeType":o.file.mime_type,"path":"","onDemand":true,"ownerName":o.sender,"online":online})
     }
     pub fn clear(&self) {
         let mut s = self.lock();
@@ -323,6 +327,7 @@ pub fn route(
                         Some(o.file.size as usize),
                         None,
                     );
+                    if o.file.encrypted { r.add_header(Header::from_bytes("X-WenBox-Encryption", "v1").unwrap()); }
                     if let Ok(h) = Header::from_bytes("Content-Type", o.file.mime_type.as_bytes()) {
                         r.add_header(h)
                     }
@@ -494,6 +499,8 @@ mod tests {
             client_id: uuid::Uuid::new_v4().to_string(),
             name: "x".into(),
             size: 0,
+            plain_size: None,
+            encrypted: false,
             mime_type: "text/plain".into(),
         };
         assert!(repo

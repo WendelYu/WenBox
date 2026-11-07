@@ -82,6 +82,9 @@ impl Engine {
             self.resources.join("unsupported")
         }
     }
+    fn tis_serializer(&self) -> PathBuf {
+        self.resources.join("resources/kvm/tis-serializer.dylib")
+    }
     pub fn view(&mut self) -> (bool, bool, String) {
         #[cfg(windows)]
         {
@@ -315,7 +318,10 @@ impl Engine {
             std::fs::set_permissions(runtime.path(), std::fs::Permissions::from_mode(0o700))
                 .map_err(|e| format!("无法保护输入核心运行目录：{e}"))?;
             self.output = Arc::new(Mutex::new(VecDeque::new()));
+            let shim = self.tis_serializer();
+            if !shim.is_file() { return Err("安装包缺少 macOS 输入兼容组件，请使用完整安装包".into()); }
             let mut child = Command::new(self.binary())
+                .env("DYLD_INSERT_LIBRARIES", shim)
                 .arg(if profile.role == Role::Source {
                     "server"
                 } else {

@@ -76,6 +76,16 @@
             android:singleLine="true" />
     </LinearLayout>
 
+    <TextView
+        android:id="@+id/tvJoinDissolveHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/join_dissolve_hint"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp"
+        android:lineSpacingExtra="2dp" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
