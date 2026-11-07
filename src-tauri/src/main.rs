@@ -405,6 +405,19 @@ fn get_received_files(state: tauri::State<Arc<AppState>>) -> Vec<SharedFile> {
     files
 }
 
+#[cfg(any(windows,test))]
+fn shell_file_path(path: &std::path::Path) -> String {
+    let value=path.to_string_lossy();
+    if let Some(unc)=value.strip_prefix(r"\\?\UNC\") {format!(r"\\{}",unc)}
+    else {value.strip_prefix(r"\\?\").unwrap_or(&value).to_string()}
+}
+#[cfg(test)] mod shell_path_tests {
+    #[test] fn explorer_accepts_canonical_local_and_network_paths() {
+        assert_eq!(super::shell_file_path(std::path::Path::new(r"\\?\D:\Saved Files\中文.txt")),r"D:\Saved Files\中文.txt");
+        assert_eq!(super::shell_file_path(std::path::Path::new(r"\\?\UNC\server\share\file.txt")),r"\\server\share\file.txt");
+    }
+}
+
 #[tauri::command]
 fn reveal_received_file(id: String, state: tauri::State<Arc<AppState>>) -> Result<(), String> {
     let native=state.local_downloads.lock().unwrap_or_else(|e|e.into_inner()).iter().find(|f|f.id==id).map(|f|PathBuf::from(&f.path));
@@ -413,7 +426,7 @@ fn reveal_received_file(id: String, state: tauri::State<Arc<AppState>>) -> Resul
     #[cfg(target_os="macos")]
     std::process::Command::new("open").arg("-R").arg(&path).spawn().map_err(|e|e.to_string())?;
     #[cfg(windows)]
-    std::process::Command::new("explorer").arg(format!("/select,{}",path.display())).spawn().map_err(|e|e.to_string())?;
+    std::process::Command::new("explorer").arg(format!("/select,{}",shell_file_path(&path))).spawn().map_err(|e|e.to_string())?;
     #[cfg(target_os="linux")]
     std::process::Command::new("xdg-open").arg(path.parent().ok_or("目录无效")?).spawn().map_err(|e|e.to_string())?;
     Ok(())

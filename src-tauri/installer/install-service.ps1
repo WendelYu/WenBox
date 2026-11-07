@@ -23,7 +23,7 @@ if ($appRoot -notmatch '^[A-Za-z]:\\[^\\]') { throw '请选择本地磁盘上的
 # SYSTEM executables are extracted directly by NSIS here, never copied from
 # the user-selected (possibly user-writable) application directory.
 $InstallRoot = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WenBox Input'
-if ($appRoot.StartsWith($InstallRoot, [StringComparison]::OrdinalIgnoreCase)) { throw '该文件夹由输入服务保留，请选择其他应用目录。' }
+if ($appRoot -ieq $InstallRoot -or $appRoot.StartsWith(($InstallRoot + '\'), [StringComparison]::OrdinalIgnoreCase)) { throw '该文件夹由输入服务保留，请选择其他应用目录。' }
 
 if ($InstallRoot -notmatch '^[A-Za-z]:\\[^\\]') { throw '请选择本地磁盘上的专用安装文件夹。' }
 $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($InstallRoot))

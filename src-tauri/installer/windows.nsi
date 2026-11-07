@@ -559,7 +559,7 @@ Function RunKvmInstaller
   ${EndIf}
   ExecWait '"$1" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wenbox-install-service.ps1" -Action $0 -InstallRoot "$INSTDIR" $3' $2
   ${If} $2 != 0
-    MessageBox MB_ICONSTOP "输入服务安装失败（$2），安装已停止。请检查目录是否可由管理员安全管理。详细原因见 %TEMP%\WenBox-Kvm-Install.log。" /SD IDOK
+    MessageBox MB_ICONSTOP "输入组件安装失败（$2），安装已停止。$\r$\n应用位置：$INSTDIR$\r$\n输入组件位置：$PROGRAMFILES64\WenBox Input$\r$\n详细原因见 %TEMP%\WenBox-Kvm-Install.log。无需单独安装 Deskflow。" /SD IDOK
     SetErrorLevel $2
     Abort
   ${EndIf}

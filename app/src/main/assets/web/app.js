@@ -2428,6 +2428,7 @@
         for (const old of [...list.children].slice(10)) if(old.dataset.state!=='running')old.remove();
         return {
             async complete(path) {
+                if(typeof path !== 'string' || !path.trim())throw Error('保存结果未确认，请检查下载目录');
                 row.dataset.state='complete';status.textContent='下载完成 · 已保存';
                 const location=document.createElement('div');location.className='download-path';location.textContent=path;row.append(location);
                 const actions=document.createElement('div');actions.className='row row--wrap gap-2';
@@ -2446,6 +2447,13 @@
             fail(error){row.dataset.state='failed';status.textContent=`下载失败：${error.message||error}`;}
         };
     }
+    document.addEventListener('keydown', event => {
+        if(event.key === 'Escape') document.getElementById('downloadActivity').hidden=true;
+    });
+    document.addEventListener('pointerdown', event => {
+        const panel=document.getElementById('downloadActivity');
+        if(!panel.hidden && !panel.contains(event.target) && !event.target.closest('#btnDownloadHistory'))panel.hidden=true;
+    });
     document.getElementById('btnDownloadHistory')?.addEventListener('click',()=>{document.getElementById('downloadActivity').hidden=false;});
     document.getElementById('closeDownloadActivity')?.addEventListener('click',()=>{document.getElementById('downloadActivity').hidden=true;});
 
@@ -2464,7 +2472,7 @@
                 });
                 if (!savePath) return;
 
-                const dir = savePath.substring(0, Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')));
+                const dir = savePath.substring(0, Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')) + 1);
                 const name = savePath.substring(Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')) + 1);
 
                 const receipt = beginDownloadReceipt(fileName);
