@@ -7,7 +7,8 @@
     "android_build_unit_lint": "passed; existing warnings remain",
     "css_lint": "passed; 13 existing legacy duplicate-selector warnings remain",
     "chromium_workspace": "passed",
-    "kvm_bridge_fixture": "passed, including combined saves, partial failure retry, clipboard, screen directions and responsive action grid"
+    "kvm_bridge_fixture": "passed, including combined saves, partial failure retry, clipboard, screen directions and responsive action grid",
+    "context_menu_regression": "passed: programmatic scroll notifications preserve the image menu; user wheel gestures dismiss it"
   },
   "limits": [
     "KVM checks use a simulated native bridge; no actual dual-computer input acceptance.",

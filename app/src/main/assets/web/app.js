@@ -3828,10 +3828,13 @@
         contextMenu.hidden = false;
         contextMenu.style.left = Math.max(8, Math.min(event.clientX, innerWidth - 190)) + 'px';
         contextMenu.style.top = Math.max(8, Math.min(event.clientY, innerHeight - contextMenu.offsetHeight - 8)) + 'px';
-        contextMenu.querySelector('button:not(:disabled)')?.focus();
+        contextMenu.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
     });
     document.addEventListener('pointerdown', event => { if (!contextMenu.contains(event.target)) closeContextMenu(); }, true);
-    document.addEventListener('scroll', () => closeContextMenu(), true);
+    // Background list refreshes can dispatch delayed scroll notifications after opening.
+    // Dismiss on the user's scroll gesture, not on those programmatic notifications.
+    for (const type of ['wheel', 'touchmove']) document.addEventListener(type, () => closeContextMenu(), { capture: true, passive: true });
+    window.addEventListener('resize', () => closeContextMenu());
     window.addEventListener('blur', () => closeContextMenu());
     document.addEventListener('keydown', event => {
         if (contextMenu.hidden) return;

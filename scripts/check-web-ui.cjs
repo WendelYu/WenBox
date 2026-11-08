@@ -437,8 +437,14 @@ async function main() {
         await page.waitForFunction(() => window.imageCalls.filter(c => c.cmd === 'copy_image').length === 2);
         await imageCard.locator('.chat-img-thumb').click({ button: 'right' });
         assert.deepEqual(await page.locator('#wenboxContextMenu button').allTextContents(), ['复制图片', '保存原图']);
+        // Background polling may finish a scroll notification after the menu opens.
+        await page.evaluate(() => document.getElementById('webChatMessages').dispatchEvent(new Event('scroll')));
+        assert.equal(await page.locator('#wenboxContextMenu').isVisible(), true, 'background scroll must not dismiss the image menu');
         await page.locator('#wenboxContextMenu button').filter({ hasText: '复制图片' }).click();
         await page.waitForFunction(() => window.imageCalls.filter(c => c.cmd === 'copy_image').length === 3);
+        await imageCard.locator('.chat-img-thumb').click({ button: 'right' });
+        await page.mouse.wheel(0, 120);
+        await page.locator('#wenboxContextMenu').waitFor({ state: 'hidden' });
         // Old inline-image messages must save their original bytes without a CSP-blocked fetch(data:).
         messages.push({ id: String(++serial), senderName: '旧图片', content: '[image:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGPgL8v7TwlmGDVg1IBRA4aLAQBrPvIQoRTfDQAAAABJRU5ErkJggg==]', timestamp: Date.now() + serial });
         await page.evaluate(() => { delete window.__TAURI__; WenBox.scheduler.runNow(); });
