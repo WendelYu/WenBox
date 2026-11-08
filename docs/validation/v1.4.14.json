@@ -8,7 +8,9 @@
     "css_lint": "passed; 13 existing legacy duplicate-selector warnings remain",
     "chromium_workspace": "passed",
     "kvm_bridge_fixture": "passed, including combined saves, partial failure retry, clipboard, screen directions and responsive action grid",
-    "context_menu_regression": "passed: programmatic scroll notifications preserve the image menu; user wheel gestures dismiss it"
+    "context_menu_regression": "passed: programmatic scroll notifications preserve the image menu; user wheel gestures dismiss it",
+    "firefox_workspace": "passed after fixing delayed dialog focus; full regression includes focus retention and traditional passwords",
+    "dialog_focus_regression": "passed: typing in the PIN/password input is not interrupted by nickname autofocus"
   },
   "limits": [
     "KVM checks use a simulated native bridge; no actual dual-computer input acceptance.",

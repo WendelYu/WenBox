@@ -1013,7 +1013,7 @@
         document.getElementById("createRoomError").hidden = true;
         if (createRoomModal) openModal(createRoomModal);
         if (modalInputCreateRoomNickname) {
-            setTimeout(() => { modalInputCreateRoomNickname.focus(); modalInputCreateRoomNickname.select(); }, 120);
+            modalInputCreateRoomNickname.focus({ preventScroll: true }); modalInputCreateRoomNickname.select();
         }
     };
 
@@ -1863,7 +1863,7 @@
         updatePinSlots(); document.getElementById('joinPinError').hidden = true; updateJoinCooldown();
 
         if (joinRoomPinModal) openModal(joinRoomPinModal);
-        if (nickInput) setTimeout(() => { nickInput.focus(); nickInput.select(); }, 150);
+        if (nickInput) { nickInput.focus({ preventScroll: true }); nickInput.select(); }
     };
 
     window.onDiscoveredRoomClicked = function (key) {
@@ -2102,7 +2102,7 @@
         const currentNick = localStorage.getItem('wenbox_nickname') || whoami_device_name_client();
         if (input) { input.value = currentNick; input.dispatchEvent(new Event("input")); }
         if (modal) openModal(modal);
-        if (input) setTimeout(() => { input.focus(); input.select(); }, 120);
+        if (input) { input.focus({ preventScroll: true }); input.select(); }
     };
 
     window.closeEditNicknameModal = function () {

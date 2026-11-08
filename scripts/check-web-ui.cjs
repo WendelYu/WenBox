@@ -291,6 +291,9 @@ async function main() {
         await page.waitForFunction(() => document.body.dataset.roomMode === 'client');
         await page.locator('[data-action="join-room"]').click();
         await page.locator('#modalInputJoinPin').fill('legacy-password');
+        await page.waitForTimeout(180);
+        assert.equal(await page.locator('#modalInputJoinPin').evaluate(el => document.activeElement === el), true, 'dialog focus must not steal an edited password');
+        assert.equal(await page.locator('#modalInputJoinPin').inputValue(), 'legacy-password');
         assert.equal(await page.locator('.pin-entry--full').count(), 1, 'legacy passwords remain usable');
         await page.locator('#modalInputJoinPin').fill('0000');
         assert.equal(await page.locator('#joinPinSlots span').filter({ hasText: '•' }).count(), 4);
