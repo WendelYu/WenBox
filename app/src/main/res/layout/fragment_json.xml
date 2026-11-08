@@ -4,117 +4,125 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_dark">
+    android:background="@color/bg">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:padding="16dp">
-
-        <!-- 页面标题 -->
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/label_json"
-            android:textColor="@color/text_primary"
-            android:textSize="22sp"
-            android:textStyle="bold" />
+        android:padding="12dp">
 
         <TextView
+            style="@style/TextAppearance.WenBox.Title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/label_zh_c56784b1"
-            android:textColor="@color/text_secondary"
-            android:textSize="13sp" />
+            android:text="@string/label_json" />
 
-        <!-- 操作按钮工具栏 -->
-        <HorizontalScrollView
+        <TextView
+            style="@style/TextAppearance.WenBox.Caption"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/label_zh_c56784b1" />
+
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            android:scrollbars="none">
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
 
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnFormatJson"
+                style="@style/Widget.WenBox.Button.Primary"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:minWidth="0dp"
+                android:text="@string/label_zh_7702a6d2" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnFormatJson"
-                    android:layout_width="wrap_content"
-                    android:layout_height="40dp"
-                    android:text="@string/label_zh_7702a6d2"
-                    android:textSize="13sp"
-                    app:backgroundTint="@color/primary"
-                    app:cornerRadius="8dp" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnMinifyJson"
+                style="@style/Widget.WenBox.Button.Secondary"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:minWidth="0dp"
+                android:text="@string/label_zh_f1cc3577"
+                android:textColor="@color/primary_fg" />
+        </LinearLayout>
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnMinifyJson"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="40dp"
-                    android:layout_marginStart="8dp"
-                    android:text="@string/label_zh_f1cc3577"
-                    android:textSize="13sp"
-                    app:cornerRadius="8dp" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:orientation="horizontal">
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnLoadSample"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="40dp"
-                    android:layout_marginStart="8dp"
-                    android:text="@string/label_zh_7d36510f"
-                    android:textSize="13sp"
-                    app:cornerRadius="8dp" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnLoadSample"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:minWidth="0dp"
+                android:minHeight="48dp"
+                android:paddingHorizontal="4dp"
+                android:text="@string/label_zh_7d36510f"
+                android:textColor="@color/text_2"
+                android:textSize="@dimen/fs_sm"
+                android:insetBottom="0dp"
+                android:insetTop="0dp" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnCopyJson"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="40dp"
-                    android:layout_marginStart="8dp"
-                    android:text="@string/label_zh_3cda0d96"
-                    android:textSize="13sp"
-                    app:cornerRadius="8dp" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnCopyJson"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:minWidth="0dp"
+                android:minHeight="48dp"
+                android:paddingHorizontal="4dp"
+                android:text="@string/label_zh_3cda0d96"
+                android:textColor="@color/text_2"
+                android:textSize="@dimen/fs_sm"
+                android:insetBottom="0dp"
+                android:insetTop="0dp" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnClearJson"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="40dp"
-                    android:layout_marginStart="8dp"
-                    android:text="@string/action_clear"
-                    android:textColor="@color/danger" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnClearJson"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:minWidth="0dp"
+                android:minHeight="48dp"
+                android:paddingHorizontal="4dp"
+                android:text="@string/action_clear"
+                android:textColor="@color/danger_fg"
+                android:textSize="@dimen/fs_sm"
+                android:insetBottom="0dp"
+                android:insetTop="0dp" />
+        </LinearLayout>
 
-            </LinearLayout>
-
-        </HorizontalScrollView>
-
-        <!-- 错误提示条 -->
         <TextView
             android:id="@+id/tvJsonError"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:background="@color/danger_soft"
-            android:padding="8dp"
+            android:layout_marginTop="4dp"
+            android:background="@drawable/bg_badge"
+            android:backgroundTint="@color/danger_soft"
+            android:padding="10dp"
             android:textColor="@color/danger_fg"
-            android:textSize="12sp"
+            android:textSize="@dimen/fs_sm"
             android:visibility="gone" />
 
-        <!-- JSON 主输入编辑框 -->
         <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.WenBox.Card"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1"
-            android:layout_marginTop="10dp"
-            app:cardBackgroundColor="@color/surface_2"
-            app:cardCornerRadius="12dp"
-            app:strokeColor="@color/border_color"
-            app:strokeWidth="1dp">
+            android:layout_marginTop="8dp"
+            android:layout_weight="1">
 
             <EditText
                 android:id="@+id/etJsonInput"
@@ -124,15 +132,13 @@
                 android:fontFamily="monospace"
                 android:gravity="top|start"
                 android:hint="@string/label_json_2"
-                android:textColorHint="@color/text_3"
                 android:lineSpacingExtra="3dp"
-                android:padding="14dp"
+                android:padding="12dp"
                 android:scrollbars="vertical"
-                android:textColor="@color/text_primary"
-                android:textSize="14sp" />
+                android:textColor="@color/text_1"
+                android:textColorHint="@color/text_3"
+                android:textSize="@dimen/fs_md" />
 
         </com.google.android.material.card.MaterialCardView>
-
     </LinearLayout>
-
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

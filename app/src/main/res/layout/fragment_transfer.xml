@@ -1,80 +1,529 @@
-<?xml version='1.0' encoding='utf-8'?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" xmlns:tools="http://schemas.android.com/tools" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/bg_dark" android:orientation="vertical">
-    <com.google.android.material.card.MaterialCardView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" app:cardBackgroundColor="@color/card_bg" app:cardCornerRadius="@dimen/r_lg" app:strokeColor="@color/border_color" app:strokeWidth="1dp" android:layout_marginHorizontal="16dp">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="12dp">
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
-                <TextView android:id="@+id/tvRoomModeBadge" android:layout_width="0dp" android:layout_height="wrap_content" android:background="@color/surface_2" android:paddingHorizontal="10dp" android:paddingVertical="4dp" android:text="@string/room_badge_client_literal" android:textColor="@color/primary_fg" android:textSize="13sp" android:textStyle="bold" android:maxLines="1" android:ellipsize="end" android:layout_weight="1" />
-                <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnRefreshRooms" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/refresh_rooms" android:textColor="@color/primary" android:textSize="12sp" />
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:orientation="vertical">
+
+    <com.google.android.material.card.MaterialCardView
+        style="@style/Widget.WenBox.Card"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginTop="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tvRoomModeBadge"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_badge"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:paddingHorizontal="10dp"
+                    android:paddingVertical="5dp"
+                    android:text="@string/room_badge_client_literal"
+                    android:textColor="@color/primary_fg"
+                    android:textSize="@dimen/fs_sm"
+                    android:textStyle="bold" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnRefreshRooms"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="4dp"
+                    android:minWidth="48dp"
+                    android:paddingHorizontal="8dp"
+                    android:text="@string/refresh_rooms"
+                    android:textColor="@color/primary_fg"
+                    android:textSize="@dimen/fs_xs"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp" />
             </LinearLayout>
-            <TextView android:id="@+id/tvRoomDetails" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="@string/room_details_client_literal" android:textColor="@color/text_secondary" android:textSize="13sp" android:lineSpacingExtra="2dp" />
-            <LinearLayout android:id="@+id/llChatStatus" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:background="@color/surface_2" android:orientation="horizontal" android:paddingHorizontal="10dp" android:paddingVertical="0dp" android:gravity="center_vertical" android:visibility="gone">
-                <TextView android:id="@+id/tvChatOnlineCount" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/online_count_one" android:textColor="@color/success_fg" android:textSize="12sp" android:textStyle="bold" android:minHeight="48dp" android:gravity="center_vertical" android:focusable="true" />
-                <View android:layout_width="1dp" android:layout_height="12dp" android:layout_marginHorizontal="8dp" android:background="@color/border_color" />
-                <TextView android:id="@+id/tvChatRoomUrl" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/visit_url_placeholder" android:textColor="@color/primary_light" android:textSize="12sp" android:singleLine="true" android:ellipsize="middle" android:minHeight="48dp" android:gravity="center_vertical" android:focusable="true" />
-                <TextView android:id="@+id/btnChangeNicknameChat" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="?attr/selectableItemBackground" android:paddingHorizontal="6dp" android:paddingVertical="2dp" android:text="@string/nickname_label_short" android:textColor="@color/primary_fg" android:textSize="12sp" android:minHeight="48dp" android:gravity="center_vertical" android:focusable="true" android:minWidth="48dp" />
+
+            <TextView
+                android:id="@+id/tvRoomDetails"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:lineSpacingExtra="1dp"
+                android:text="@string/room_details_client_literal"
+                android:textColor="@color/text_2"
+                android:textSize="@dimen/fs_sm" />
+
+            <LinearLayout
+                android:id="@+id/llChatStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/bg_badge"
+                android:gravity="center_vertical"
+                android:minHeight="48dp"
+                android:orientation="horizontal"
+                android:paddingHorizontal="8dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/tvChatOnlineCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:text="@string/online_count_one"
+                    android:textColor="@color/success_fg"
+                    android:textSize="@dimen/fs_xs"
+                    android:textStyle="bold" />
+
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="16dp"
+                    android:layout_marginHorizontal="8dp"
+                    android:background="@color/border" />
+
+                <TextView
+                    android:id="@+id/tvChatRoomUrl"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:ellipsize="middle"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:singleLine="true"
+                    android:text="@string/visit_url_placeholder"
+                    android:textColor="@color/info"
+                    android:textSize="@dimen/fs_xs" />
+
+                <TextView
+                    android:id="@+id/btnChangeNicknameChat"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="4dp"
+                    android:background="?attr/selectableItemBackground"
+                    android:ellipsize="end"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:maxLines="1"
+                    android:maxWidth="112dp"
+                    android:minWidth="48dp"
+                    android:paddingHorizontal="6dp"
+                    android:text="@string/nickname_label_short"
+                    android:textColor="@color/primary_fg"
+                    android:textSize="@dimen/fs_xs" />
             </LinearLayout>
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnCreateRoom" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1" android:text="@string/create_room_long" android:textSize="14sp" app:cornerRadius="10dp" app:backgroundTint="@color/primary" />
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnCloseRoom" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1" android:text="@string/close_room_long" android:textSize="14sp" android:visibility="gone" app:cornerRadius="10dp" app:backgroundTint="@color/danger" />
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnChangeNicknameJoined" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1" android:layout_marginEnd="8dp" android:text="@string/nickname_button" android:textSize="14sp" android:visibility="gone" app:cornerRadius="10dp" app:backgroundTint="@color/primary" />
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnLeaveRoom" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1" android:text="@string/leave_room_long" android:textSize="14sp" android:visibility="gone" app:cornerRadius="10dp" app:backgroundTint="@color/text_2" />
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnConnectionDetails" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:minHeight="48dp" android:text="@string/room_connection_details" android:visibility="gone" android:textSize="12sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnCreateRoom"
+                    style="@style/Widget.WenBox.Button.Primary"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:text="@string/create_room_long" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnCloseRoom"
+                    style="@style/Widget.WenBox.Button.Danger"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:text="@string/close_room_long"
+                    android:visibility="gone" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnChangeNicknameJoined"
+                    style="@style/Widget.WenBox.Button.Secondary"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="@string/nickname_button"
+                    android:visibility="gone" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnLeaveRoom"
+                    style="@style/Widget.WenBox.Button.Secondary"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:text="@string/leave_room_long"
+                    android:textColor="@color/danger_fg"
+                    android:visibility="gone" />
             </LinearLayout>
-            <LinearLayout android:id="@+id/llHostDetails" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:orientation="vertical" android:gravity="center_horizontal" android:visibility="gone">
-                <View android:layout_width="match_parent" android:layout_height="1dp" android:layout_marginBottom="16dp" android:background="@color/border_color" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/qr_hint" android:textColor="@color/text_secondary" android:textSize="13sp" />
-                <ImageView android:id="@+id/ivQrCode" android:layout_width="150dp" android:layout_height="150dp" android:layout_marginTop="10dp" android:background="@color/qr_background" android:padding="6dp" android:contentDescription="@string/label_qr_code" />
-                <TextView android:id="@+id/tvQrHint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:textColor="@color/text_secondary" android:textSize="12sp" tools:text="二维码对应: 🔌 有线网卡 (eth0)" />
-                <LinearLayout android:id="@+id/llIpSection" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="vertical">
-                    <LinearLayout android:id="@+id/llIpContainer" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnConnectionDetails"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="2dp"
+                android:text="@string/room_connection_details"
+                android:textColor="@color/primary_fg"
+                android:visibility="gone"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <LinearLayout
+                android:id="@+id/llHostDetails"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginBottom="12dp"
+                    android:background="@color/border" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/qr_hint"
+                    android:textColor="@color/text_2"
+                    android:textSize="@dimen/fs_sm" />
+
+                <ImageView
+                    android:id="@+id/ivQrCode"
+                    android:layout_width="144dp"
+                    android:layout_height="144dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@color/qr_background"
+                    android:contentDescription="@string/label_qr_code"
+                    android:padding="6dp" />
+
+                <TextView
+                    android:id="@+id/tvQrHint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textColor="@color/text_2"
+                    android:textSize="@dimen/fs_xs"
+                    tools:text="二维码：有线网卡" />
+
+                <LinearLayout
+                    android:id="@+id/llIpSection"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:id="@+id/llIpContainer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
                 </LinearLayout>
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnOpenHotspot" style="@style/Widget.Material3.Button.OutlinedButton" android:layout_width="match_parent" android:layout_height="44dp" android:layout_marginTop="10dp" android:text="@string/hotspot_button" android:textColor="@color/warning_fg" app:strokeColor="@color/border_strong" app:cornerRadius="10dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnOpenHotspot"
+                    style="@style/Widget.WenBox.Button.Secondary"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/hotspot_button"
+                    android:textColor="@color/warning_fg" />
             </LinearLayout>
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
-    <com.google.android.material.tabs.TabLayout android:id="@+id/roomTabs" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="12dp" android:visibility="gone" app:tabMode="fixed" android:layout_marginHorizontal="16dp" />
-    <androidx.core.widget.NestedScrollView android:id="@+id/discoveryScroll" android:layout_width="match_parent" android:layout_height="0dp" android:fillViewport="true" android:padding="16dp" android:layout_weight="1">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
-            <com.google.android.material.card.MaterialCardView android:id="@+id/cardDiscoveredRooms" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" app:cardBackgroundColor="@color/card_bg" app:cardCornerRadius="@dimen/r_lg" app:strokeColor="@color/border_color" app:strokeWidth="1dp">
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
-                    <TextView android:id="@+id/tvDiscoveredRoomsTitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/discovered_rooms_title_zero" android:textColor="@color/text_primary" android:textSize="16sp" android:textStyle="bold" />
-                    <LinearLayout android:id="@+id/llDiscoveredRoomsContainer" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="vertical" />
-                    <TextView android:id="@+id/tvNoRoomsPrompt" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:gravity="center" android:lineSpacingExtra="3dp" android:padding="16dp" android:text="@string/label_n" android:textColor="@color/text_secondary" android:textSize="13sp" />
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
-        </LinearLayout>
+
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/roomTabs"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginTop="8dp"
+        android:visibility="gone"
+        app:tabIndicatorColor="@color/primary_fg"
+        app:tabMode="fixed"
+        app:tabRippleColor="@color/primary_soft"
+        app:tabSelectedTextColor="@color/primary_fg"
+        app:tabTextColor="@color/text_2" />
+
+    <androidx.core.widget.NestedScrollView
+        android:id="@+id/discoveryScroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:fillViewport="true"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="12dp">
+
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardDiscoveredRooms"
+            style="@style/Widget.WenBox.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <TextView
+                    android:id="@+id/tvDiscoveredRoomsTitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/discovered_rooms_title_zero"
+                    android:textColor="@color/text_1"
+                    android:textSize="@dimen/fs_lg"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:id="@+id/llDiscoveredRoomsContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="vertical" />
+
+                <TextView
+                    android:id="@+id/tvNoRoomsPrompt"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center"
+                    android:lineSpacingExtra="2dp"
+                    android:padding="16dp"
+                    android:text="@string/label_n"
+                    android:textColor="@color/text_2"
+                    android:textSize="@dimen/fs_sm" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
     </androidx.core.widget.NestedScrollView>
-    <LinearLayout android:id="@+id/fileContent" android:layout_width="match_parent" android:layout_height="0dp" android:orientation="vertical" android:layout_weight="1" android:layout_marginTop="8dp" android:layout_marginHorizontal="16dp">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="20dp" android:gravity="center_vertical" android:orientation="horizontal">
-            <TextView android:id="@+id/tvFileListHeader" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/file_list_header_zero" android:textColor="@color/text_primary" android:textSize="16sp" android:textStyle="bold" />
-            <com.google.android.material.button.MaterialButton android:id="@+id/btnClearFiles" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/clear_files" android:textColor="@color/danger" android:visibility="gone" />
-            <com.google.android.material.button.MaterialButton android:id="@+id/btnAddFiles" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/add_files" app:cornerRadius="10dp" app:backgroundTint="@color/primary" />
+
+    <LinearLayout
+        android:id="@+id/fileContent"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginTop="8dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvFileListHeader"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/file_list_header_zero"
+                android:textColor="@color/text_1"
+                android:textSize="@dimen/fs_lg"
+                android:textStyle="bold" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnClearFiles"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:text="@string/clear_files"
+                android:textColor="@color/danger_fg"
+                android:visibility="gone"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnAddFiles"
+                style="@style/Widget.WenBox.Button.Primary"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:text="@string/add_files" />
         </LinearLayout>
-        <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
-            <androidx.recyclerview.widget.RecyclerView android:id="@+id/rvFiles" android:layout_width="match_parent" android:layout_height="match_parent" />
-            <TextView android:id="@+id/tvEmptyHint" android:layout_width="match_parent" android:layout_height="match_parent" android:gravity="center" android:lineSpacingExtra="4dp" android:padding="20dp" android:text="@string/label_n_2" android:textColor="@color/text_secondary" android:textSize="13sp" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="4dp"
+            android:layout_weight="1">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvFiles"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingBottom="12dp" />
+
+            <TextView
+                android:id="@+id/tvEmptyHint"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:lineSpacingExtra="3dp"
+                android:padding="20dp"
+                android:text="@string/label_n_2"
+                android:textColor="@color/text_2"
+                android:textSize="@dimen/fs_sm" />
         </FrameLayout>
     </LinearLayout>
-    <com.google.android.material.card.MaterialCardView android:id="@+id/cardChatSection" android:layout_width="match_parent" android:layout_height="0dp" android:layout_marginTop="8dp" android:visibility="gone" app:cardBackgroundColor="@color/card_bg" app:cardCornerRadius="@dimen/r_lg" app:strokeColor="@color/border_color" app:strokeWidth="1dp" android:layout_weight="1" android:layout_marginHorizontal="16dp" android:layout_marginBottom="12dp">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="12dp">
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
-                <TextView android:id="@+id/tvChatSectionTitle" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/chat_title_short" android:textColor="@color/text_primary" android:textSize="16sp" android:textStyle="bold" />
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnClearChat" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/chat_clear" android:textColor="@color/text_secondary" />
+
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/cardChatSection"
+        style="@style/Widget.WenBox.Card"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="12dp"
+        android:layout_weight="1"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tvChatSectionTitle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="@string/chat_title_short"
+                    android:textColor="@color/text_1"
+                    android:textSize="@dimen/fs_lg"
+                    android:textStyle="bold" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnClearChat"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:text="@string/chat_clear"
+                    android:textColor="@color/text_2"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp" />
             </LinearLayout>
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/chat_hint" android:textColor="@color/text_secondary" android:textSize="12sp" />
-            <FrameLayout android:id="@+id/messageListArea" android:layout_width="match_parent" android:layout_height="0dp" android:layout_marginTop="12dp" android:layout_weight="1">
-                <androidx.recyclerview.widget.RecyclerView android:id="@+id/rvMessages" android:layout_width="match_parent" android:layout_height="match_parent" android:clipToPadding="false" />
-                <TextView android:id="@+id/tvEmptyChat" android:layout_width="match_parent" android:layout_height="match_parent" android:gravity="center" android:padding="16dp" android:text="@string/chat_empty" android:textColor="@color/text_secondary" android:textSize="12sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/chat_hint"
+                android:textColor="@color/text_2"
+                android:textSize="@dimen/fs_xs" />
+
+            <FrameLayout
+                android:id="@+id/messageListArea"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="8dp"
+                android:layout_weight="1">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rvMessages"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:clipToPadding="false" />
+
+                <TextView
+                    android:id="@+id/tvEmptyChat"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:padding="16dp"
+                    android:text="@string/chat_empty"
+                    android:textColor="@color/text_2"
+                    android:textSize="@dimen/fs_sm" />
             </FrameLayout>
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
-                <EditText android:id="@+id/etChatMessage" android:layout_width="0dp" android:layout_height="72dp" android:layout_weight="1" android:background="@drawable/bg_chat_input" android:hint="@string/chat_input_hint" android:textColorHint="@color/chat_text_subtle" android:paddingHorizontal="12dp" android:textColor="@color/chat_text_main" android:fontFamily="sans" android:textSize="14sp" android:inputType="textMultiLine|textCapSentences" android:gravity="top|start" android:paddingVertical="12dp" android:maxLines="4" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <EditText
+                    android:id="@+id/etChatMessage"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_chat_input"
+                    android:hint="@string/chat_input_hint"
+                    android:imeOptions="actionSend"
+                    android:inputType="textCapSentences"
+                    android:singleLine="true"
+                    android:paddingHorizontal="12dp"
+                    android:textColor="@color/text_1"
+                    android:textColorHint="@color/text_3"
+                    android:textSize="@dimen/fs_md" />
             </LinearLayout>
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:gravity="center_vertical" android:orientation="horizontal">
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnChatSendImage" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="48dp" android:paddingHorizontal="8dp" android:paddingVertical="0dp" android:text="@string/chat_send_image" android:textSize="12sp" android:textColor="@color/chat_accent_blue" app:strokeColor="@color/border_color" app:cornerRadius="@dimen/r_sm" android:minWidth="48dp" />
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnChatSendFile" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="48dp" android:layout_marginStart="8dp" android:paddingHorizontal="8dp" android:paddingVertical="0dp" android:text="@string/chat_send_file" android:textSize="12sp" android:textColor="@color/chat_text_main" app:strokeColor="@color/border_color" app:cornerRadius="@dimen/r_sm" android:minWidth="48dp" />
-                <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnSendMessage" android:layout_width="wrap_content" android:layout_height="48dp" android:layout_marginStart="8dp" android:text="@string/chat_send" android:textColor="@color/on_primary" android:textStyle="bold" app:cornerRadius="@dimen/r_sm" app:backgroundTint="@color/primary" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnChatSendImage"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="4dp"
+                    android:text="@string/chat_send_image"
+                    android:textColor="@color/primary_fg"
+                    android:textSize="@dimen/fs_xs" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnChatSendFile"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="4dp"
+                    android:text="@string/chat_send_file"
+                    android:textSize="@dimen/fs_xs" />
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnSendMessage"
+                    style="@style/Widget.WenBox.Button.Primary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/chat_send" />
             </LinearLayout>
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>

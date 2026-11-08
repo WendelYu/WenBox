@@ -5,180 +5,143 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_dark"
+    android:background="@color/bg"
     android:fillViewport="true"
-    android:padding="16dp">
+    android:padding="12dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <!-- 页面标题 -->
         <TextView
+            style="@style/TextAppearance.WenBox.Title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/label_cron"
-            android:textColor="@color/text_primary"
-            android:textSize="22sp"
-            android:textStyle="bold" />
+            android:text="@string/label_cron" />
 
         <TextView
+            style="@style/TextAppearance.WenBox.Caption"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/label_zh_08f783eb"
-            android:textColor="@color/text_secondary"
-            android:textSize="13sp" />
+            android:layout_marginTop="2dp"
+            android:text="@string/label_zh_08f783eb" />
 
-        <!-- 卡片 1：常用预设模板快捷选择 -->
         <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.WenBox.Card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            app:cardBackgroundColor="@color/card_bg"
-            app:cardCornerRadius="14dp"
-            app:strokeColor="@color/border_color"
-            app:strokeWidth="1dp">
+            android:layout_marginTop="12dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:padding="12dp">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/label_zh_2992e843"
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp"
+                    android:textColor="@color/text_1"
+                    android:textSize="@dimen/fs_sm"
                     android:textStyle="bold" />
 
                 <Spinner
                     android:id="@+id/spCronPresets"
                     android:layout_width="match_parent"
                     android:layout_height="48dp"
-                    android:layout_marginTop="8dp"
-                    android:background="@color/surface_2"
-                    android:paddingHorizontal="8dp" />
-
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- 卡片 2：Cron 表达式编辑与自然语言反解 -->
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            app:cardBackgroundColor="@color/card_bg"
-            app:cardCornerRadius="14dp"
-            app:strokeColor="@color/border_color"
-            app:strokeWidth="1dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/bg_input_field"
+                    android:paddingHorizontal="10dp" />
 
                 <com.google.android.material.textfield.TextInputLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
                     android:hint="@string/label_cron_2"
-                    app:boxStrokeColor="@color/accent">
+                    app:boxBackgroundMode="outline"
+                    app:boxStrokeColor="@color/primary_fg"
+                    app:hintTextColor="@color/text_2">
 
                     <com.google.android.material.textfield.TextInputEditText
                         android:id="@+id/etCronInput"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:fontFamily="monospace"
-                        android:textColor="@color/text_primary"
-                        android:textSize="16sp"
-                        android:textStyle="bold"
-                        android:text="@string/label_0_5" />
+                        android:text="@string/label_0_5"
+                        android:textColor="@color/text_1"
+                        android:textSize="@dimen/fs_lg"
+                        android:textStyle="bold" />
                 </com.google.android.material.textfield.TextInputLayout>
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="@color/surface_2"
-                    android:padding="12dp"
-                    android:orientation="vertical">
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/bg_badge"
+                    android:orientation="vertical"
+                    android:padding="10dp">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/label_zh_a69a75d9"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="12sp" />
+                        android:textColor="@color/text_2"
+                        android:textSize="@dimen/fs_xs" />
 
                     <TextView
                         android:id="@+id/tvCronMeaning"
-                        android:layout_width="wrap_content"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
+                        android:layout_marginTop="2dp"
                         android:text="@string/label_5"
-                        android:textColor="@color/accent"
+                        android:textColor="@color/primary_fg"
                         android:textSize="15sp"
                         android:textStyle="bold" />
-
                 </LinearLayout>
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnCopyCron"
-                    style="@style/Widget.Material3.Button.TonalButton"
+                    style="@style/Widget.Material3.Button.TextButton"
                     android:layout_width="match_parent"
-                    android:layout_height="44dp"
-                    android:layout_marginTop="10dp"
+                    android:layout_height="48dp"
+                    android:minHeight="48dp"
                     android:text="@string/label_cron_3"
-                    android:textSize="13sp"
-                    app:cornerRadius="8dp" />
+                    android:textColor="@color/primary_fg"
+                    android:textSize="@dimen/fs_sm"
+                    android:insetBottom="0dp"
+                    android:insetTop="0dp" />
 
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- 卡片 3：接下来 5 次运行时间预演 -->
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            app:cardBackgroundColor="@color/card_bg"
-            app:cardCornerRadius="14dp"
-            app:strokeColor="@color/border_color"
-            app:strokeWidth="1dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginVertical="4dp"
+                    android:background="@color/border" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
                     android:text="@string/label_5_2"
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp"
+                    android:textColor="@color/text_1"
+                    android:textSize="@dimen/fs_sm"
                     android:textStyle="bold" />
 
                 <TextView
                     android:id="@+id/tvNextTimes"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:background="@color/surface_2"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/bg_badge"
                     android:fontFamily="monospace"
-                    android:lineSpacingExtra="6dp"
+                    android:foreground="?attr/selectableItemBackground"
+                    android:lineSpacingExtra="5dp"
                     android:padding="12dp"
-                    android:textColor="@color/primary_fg"
-                    android:textSize="13sp"
+                    android:textColor="@color/info"
+                    android:textSize="@dimen/fs_sm"
                     tools:text="1. 2026-09-19 13:10:00\n2. 2026-09-19 13:15:00\n3. 2026-09-19 13:20:00\n4. 2026-09-19 13:25:00\n5. 2026-09-19 13:30:00" />
-
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
-
     </LinearLayout>
-
 </androidx.core.widget.NestedScrollView>

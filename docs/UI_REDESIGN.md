@@ -1,6 +1,6 @@
 # WenBox 界面重构
 
-基于 `origin/main` 的 v1.4.12（a665867），工作分支为 `codex/ui-redesign`。
+初始基于 v1.4.12（a665867），发布时合入 v1.4.13（4a8f6f3），版本更新为 v1.4.14，工作分支为 `codex/ui-redesign`。
 此分支位于独立工作目录 `.worktrees/ui-redesign`，未覆盖原工作目录的未提交改动。
 
 ## 交互调整

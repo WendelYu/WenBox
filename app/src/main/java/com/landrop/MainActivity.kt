@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -146,16 +147,30 @@ class MainActivity : AppCompatActivity() {
         binding.bottomNavigation.setOnItemSelectedListener { item ->
             when (item.itemId) {
                 R.id.nav_transfer -> {
-                    binding.viewPager.setCurrentItem(0, false)
+                    binding.viewPager.setCurrentItem(0, shouldAnimateTransitions())
                     true
                 }
                 R.id.nav_tools -> {
-                    binding.viewPager.setCurrentItem(1, false)
+                    binding.viewPager.setCurrentItem(1, shouldAnimateTransitions())
                     true
                 }
                 else -> false
             }
         }
+    }
+
+    private fun shouldAnimateTransitions(): Boolean {
+        val animatorScale = Settings.Global.getFloat(
+            contentResolver,
+            Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f
+        )
+        val transitionScale = Settings.Global.getFloat(
+            contentResolver,
+            Settings.Global.TRANSITION_ANIMATION_SCALE,
+            1f
+        )
+        return animatorScale > 0f && transitionScale > 0f
     }
 
     private fun bindTransferService() {
@@ -188,7 +203,7 @@ class MainActivity : AppCompatActivity() {
             (intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let { uri ->
                 FileManager.addFile(this, uri)
                 Toast.makeText(this, "已通过分享添加文件", Toast.LENGTH_SHORT).show()
-                binding.viewPager.setCurrentItem(0, false)
+                binding.viewPager.setCurrentItem(0, shouldAnimateTransitions())
                 if (transferService?.isRunning == false) {
                     transferService?.startServer(9527)
                 }

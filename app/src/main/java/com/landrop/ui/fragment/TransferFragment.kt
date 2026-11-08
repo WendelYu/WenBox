@@ -21,6 +21,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -331,13 +332,16 @@ class TransferFragment : Fragment() {
     /** 只刷新房间名/IP/在线数：不重建网卡列表，避免 setHostIp -> listener 递归 (A1) */
     private fun updateHostHeader(cfg: com.landrop.model.RoomConfig?) {
         val ctx = context ?: return
-        val pinHint = if (cfg?.needPassword == true) " • PIN: ${cfg.pin}" else " • 免密"
+        val pinHint = if (cfg?.needPassword == true) {
+            getString(R.string.room_pin_hint, cfg.pin)
+        } else {
+            getString(R.string.room_open_hint)
+        }
         binding.tvRoomModeBadge.text = getString(R.string.room_badge_host, cfg?.roomName ?: "")
         binding.tvRoomModeBadge.setTextColor(ContextCompat.getColor(ctx, R.color.success_fg))
         binding.tvRoomModeBadge.backgroundTintList =
             android.content.res.ColorStateList.valueOf(ContextCompat.getColor(ctx, R.color.card_bg))
-        binding.tvRoomDetails.text =
-            "您已变身服务端房主$pinHint！局域网内的电脑和其他手机可自动搜索发现您的房间，也可扫码或在电脑浏览器访问下方地址直连。"
+        binding.tvRoomDetails.text = getString(R.string.room_details_host, pinHint)
         binding.tvChatOnlineCount.text = getString(R.string.online_count, cfg?.let { RoomManager.getMembers().size } ?: 1)
     }
 
@@ -511,10 +515,23 @@ class TransferFragment : Fragment() {
             requestWindowFeature(Window.FEATURE_NO_TITLE)
             setContentView(content)
             window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            window?.setLayout(
-                (resources.displayMetrics.widthPixels * 0.9).toInt(),
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
+            setOnShowListener {
+                val metrics = resources.displayMetrics
+                val width = (metrics.widthPixels * 0.9).toInt()
+                val maxHeight = (metrics.heightPixels * 0.82).toInt()
+                content.measure(
+                    View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+                )
+                content.layoutParams = content.layoutParams.apply {
+                    height = if (content.measuredHeight > maxHeight) {
+                        maxHeight
+                    } else {
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    }
+                }
+                window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
+            }
         }
     }
 
@@ -782,6 +799,13 @@ class TransferFragment : Fragment() {
             }
             transferViewModel.sendMessage(draft.trim())
             binding.etChatMessage.setText("")
+        }
+
+        binding.etChatMessage.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                binding.btnSendMessage.performClick()
+                true
+            } else false
         }
 
         binding.btnChatSendImage.setOnClickListener {

@@ -2,57 +2,56 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:background="@drawable/bg_dialog_card"
     android:orientation="vertical"
-    android:padding="22dp"
-    android:background="@drawable/bg_dialog_card">
+    android:padding="16dp">
 
     <TextView
         android:id="@+id/tvConfirmTitle"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_zh_cca5f2fc"
-        android:textColor="@color/text_primary"
-        android:textSize="18sp"
-        android:textStyle="bold" />
-
-    <TextView
-        android:id="@+id/tvConfirmMessage"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:lineSpacingExtra="3dp"
-        android:text="@string/label_zh_a12fdfd5"
-        android:textColor="@color/text_secondary"
-        android:textSize="14sp" />
+        android:text="@string/label_zh_cca5f2fc"
+        android:textColor="@color/text_1"
+        android:textSize="@dimen/fs_xl"
+        android:textStyle="bold" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_marginTop="8dp"
+        android:overScrollMode="ifContentScrolls">
+
+        <TextView
+            android:id="@+id/tvConfirmMessage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:lineSpacingExtra="2dp"
+            android:text="@string/label_zh_a12fdfd5"
+            android:textColor="@color/text_2"
+            android:textSize="@dimen/fs_md" />
+    </ScrollView>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="22dp"
+        android:layout_marginTop="12dp"
         android:gravity="end"
         android:orientation="horizontal">
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnConfirmCancel"
+            style="@style/Widget.WenBox.Button.Secondary"
             android:layout_width="wrap_content"
-            android:layout_height="42dp"
-            android:background="@drawable/bg_btn_secondary"
-            android:paddingHorizontal="18dp"
-            android:text="@string/dialog_cancel"
-            android:textColor="@color/text_primary"
-            android:textSize="14sp" />
+            android:layout_height="48dp"
+            android:text="@string/dialog_cancel" />
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnConfirmOk"
+            style="@style/Widget.WenBox.Button.Danger"
             android:layout_width="wrap_content"
-            android:layout_height="42dp"
-            android:layout_marginStart="12dp"
-            android:background="@drawable/bg_btn_danger"
-            android:paddingHorizontal="18dp"
-            android:text="@string/dialog_ok"
-            android:textColor="@color/qr_background"
-            android:textSize="14sp"
-            android:textStyle="bold" />
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:text="@string/dialog_ok" />
     </LinearLayout>
-
 </LinearLayout>

@@ -453,3 +453,8 @@ dialog.members-drawer { border-radius: var(--r-xl) 0 0 var(--r-xl); padding: 28p
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Tool actions retain the v1.4.13 editor-first arrangement. */
+.json-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.json-actions-primary, .json-actions-secondary { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.json-actions-secondary { margin-left: auto; }
