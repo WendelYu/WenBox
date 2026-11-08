@@ -1,20 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.core.widget.NestedScrollView
-    xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_dark"
+    android:background="@color/bg"
     android:fillViewport="true"
-    android:padding="16dp">
+    android:padding="12dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <!-- 页面标题与一键清空 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -31,338 +29,309 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/converter_title"
-                    android:textColor="@color/text_primary"
+                    android:textColor="@color/text_1"
                     android:textSize="@dimen/fs_xl"
                     android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginTop="2dp"
                     android:text="@string/converter_subtitle"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="@color/text_2"
                     android:textSize="@dimen/fs_sm" />
-
             </LinearLayout>
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnClearAll"
                 style="@style/Widget.Material3.Button.TextButton"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_height="48dp"
                 android:text="@string/action_clear"
-                android:textColor="@color/danger" />
-
+                android:textColor="@color/danger_fg"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
         </LinearLayout>
 
-        <!-- 输入校验提示：非法或负数输入在此说明原因，而不是静默算错 -->
         <TextView
             android:id="@+id/tvConverterError"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/sp_3"
-            android:background="@color/danger_soft"
-            android:padding="@dimen/sp_3"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_badge"
+            android:backgroundTint="@color/danger_soft"
+            android:padding="10dp"
             android:textColor="@color/danger_fg"
             android:textSize="@dimen/fs_sm"
             android:visibility="gone"
             tools:text="不支持负数，请输入非负整数" />
 
-        <!-- 1. 16 进制 (HEX) 卡片 -->
         <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.WenBox.Card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            app:cardBackgroundColor="@color/card_bg"
-            app:cardCornerRadius="@dimen/r_lg"
-            app:strokeColor="@color/border_color"
-            app:strokeWidth="1dp">
+            android:layout_marginTop="12dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:padding="8dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:gravity="center_vertical"
-                    android:orientation="horizontal">
+                    android:minHeight="56dp"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="4dp"
+                    android:paddingVertical="4dp">
 
                     <TextView
-                        android:layout_width="0dp"
+                        android:layout_width="64dp"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
                         android:text="@string/converter_hex_label"
                         android:textColor="@color/primary_fg"
-                        android:textSize="@dimen/fs_md"
+                        android:textSize="@dimen/fs_xs"
                         android:textStyle="bold" />
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etHex"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_marginHorizontal="6dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_input_field"
+                        android:fontFamily="monospace"
+                        android:hint="@string/converter_hex_hint"
+                        android:paddingHorizontal="10dp"
+                        android:singleLine="true"
+                        android:textColor="@color/text_1"
+                        android:textColorHint="@color/text_3"
+                        android:textSize="@dimen/fs_md" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnCopyHex"
                         style="@style/Widget.Material3.Button.TonalButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="@dimen/touch_min"
-                        android:minWidth="@dimen/touch_min"
+                        android:layout_width="56dp"
+                        android:layout_height="48dp"
+                        android:minWidth="48dp"
+                        android:paddingHorizontal="2dp"
                         android:text="@string/action_copy"
                         android:textSize="@dimen/fs_xs"
-                        app:cornerRadius="@dimen/r_md" />
-
+                        app:cornerRadius="@dimen/r_md"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
                 </LinearLayout>
 
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/etHex"
+                <View
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@color/surface_2"
-                    android:fontFamily="monospace"
-                    android:hint="@string/converter_hex_hint"
-                    android:textColorHint="@color/text_3"
-                    android:padding="12dp"
-                    android:textColor="@color/text_primary"
-                    android:textSize="@dimen/fs_md" />
-
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- 2. 10 进制 (DEC) 卡片 -->
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            app:cardBackgroundColor="@color/card_bg"
-            app:cardCornerRadius="@dimen/r_lg"
-            app:strokeColor="@color/border_color"
-            app:strokeWidth="1dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
+                    android:layout_height="1dp"
+                    android:layout_marginHorizontal="8dp"
+                    android:background="@color/border" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:gravity="center_vertical"
-                    android:orientation="horizontal">
+                    android:minHeight="56dp"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="4dp"
+                    android:paddingVertical="4dp">
 
                     <TextView
-                        android:layout_width="0dp"
+                        android:layout_width="64dp"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
                         android:text="@string/converter_dec_label"
-                        android:textColor="@color/accent"
-                        android:textSize="@dimen/fs_md"
+                        android:textColor="@color/primary_fg"
+                        android:textSize="@dimen/fs_xs"
                         android:textStyle="bold" />
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etDec"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_marginHorizontal="6dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_input_field"
+                        android:fontFamily="monospace"
+                        android:hint="@string/converter_dec_hint"
+                        android:inputType="number"
+                        android:paddingHorizontal="10dp"
+                        android:singleLine="true"
+                        android:textColor="@color/text_1"
+                        android:textColorHint="@color/text_3"
+                        android:textSize="@dimen/fs_md" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnCopyDec"
                         style="@style/Widget.Material3.Button.TonalButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="@dimen/touch_min"
-                        android:minWidth="@dimen/touch_min"
+                        android:layout_width="56dp"
+                        android:layout_height="48dp"
+                        android:minWidth="48dp"
+                        android:paddingHorizontal="2dp"
                         android:text="@string/action_copy"
                         android:textSize="@dimen/fs_xs"
-                        app:cornerRadius="@dimen/r_md" />
-
+                        app:cornerRadius="@dimen/r_md"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
                 </LinearLayout>
 
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/etDec"
+                <View
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@color/surface_2"
-                    android:fontFamily="monospace"
-                    android:hint="@string/converter_dec_hint"
-                    android:inputType="number"
-                    android:textColorHint="@color/text_3"
-                    android:padding="12dp"
-                    android:textColor="@color/text_primary"
-                    android:textSize="@dimen/fs_md" />
-
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- 3. 2 进制 (BIN) 卡片 -->
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            app:cardBackgroundColor="@color/card_bg"
-            app:cardCornerRadius="@dimen/r_lg"
-            app:strokeColor="@color/border_color"
-            app:strokeWidth="1dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
+                    android:layout_height="1dp"
+                    android:layout_marginHorizontal="8dp"
+                    android:background="@color/border" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:gravity="center_vertical"
-                    android:orientation="horizontal">
+                    android:minHeight="56dp"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="4dp"
+                    android:paddingVertical="4dp">
 
                     <TextView
-                        android:layout_width="0dp"
+                        android:layout_width="64dp"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
                         android:text="@string/converter_bin_label"
-                        android:textColor="@color/warning_fg"
-                        android:textSize="@dimen/fs_md"
+                        android:textColor="@color/primary_fg"
+                        android:textSize="@dimen/fs_xs"
                         android:textStyle="bold" />
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etBin"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_marginHorizontal="6dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_input_field"
+                        android:fontFamily="monospace"
+                        android:hint="@string/converter_bin_hint"
+                        android:paddingHorizontal="10dp"
+                        android:singleLine="true"
+                        android:textColor="@color/text_1"
+                        android:textColorHint="@color/text_3"
+                        android:textSize="@dimen/fs_md" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnCopyBin"
                         style="@style/Widget.Material3.Button.TonalButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="@dimen/touch_min"
-                        android:minWidth="@dimen/touch_min"
+                        android:layout_width="56dp"
+                        android:layout_height="48dp"
+                        android:minWidth="48dp"
+                        android:paddingHorizontal="2dp"
                         android:text="@string/action_copy"
                         android:textSize="@dimen/fs_xs"
-                        app:cornerRadius="@dimen/r_md" />
-
+                        app:cornerRadius="@dimen/r_md"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
                 </LinearLayout>
 
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/etBin"
+                <View
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@color/surface_2"
-                    android:fontFamily="monospace"
-                    android:hint="@string/converter_bin_hint"
-                    android:textColorHint="@color/text_3"
-                    android:padding="12dp"
-                    android:textColor="@color/text_primary"
-                    android:textSize="@dimen/fs_md" />
-
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- 4. 8 进制 (OCT) 卡片 -->
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            app:cardBackgroundColor="@color/card_bg"
-            app:cardCornerRadius="@dimen/r_lg"
-            app:strokeColor="@color/border_color"
-            app:strokeWidth="1dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
+                    android:layout_height="1dp"
+                    android:layout_marginHorizontal="8dp"
+                    android:background="@color/border" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:gravity="center_vertical"
-                    android:orientation="horizontal">
+                    android:minHeight="56dp"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="4dp"
+                    android:paddingVertical="4dp">
 
                     <TextView
-                        android:layout_width="0dp"
+                        android:layout_width="64dp"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
                         android:text="@string/converter_oct_label"
-                        android:textColor="@color/chat_accent_purple"
-                        android:textSize="@dimen/fs_md"
+                        android:textColor="@color/primary_fg"
+                        android:textSize="@dimen/fs_xs"
                         android:textStyle="bold" />
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etOct"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_marginHorizontal="6dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_input_field"
+                        android:fontFamily="monospace"
+                        android:hint="@string/converter_oct_hint"
+                        android:paddingHorizontal="10dp"
+                        android:singleLine="true"
+                        android:textColor="@color/text_1"
+                        android:textColorHint="@color/text_3"
+                        android:textSize="@dimen/fs_md" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnCopyOct"
                         style="@style/Widget.Material3.Button.TonalButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="@dimen/touch_min"
-                        android:minWidth="@dimen/touch_min"
+                        android:layout_width="56dp"
+                        android:layout_height="48dp"
+                        android:minWidth="48dp"
+                        android:paddingHorizontal="2dp"
                         android:text="@string/action_copy"
                         android:textSize="@dimen/fs_xs"
-                        app:cornerRadius="@dimen/r_md" />
-
+                        app:cornerRadius="@dimen/r_md"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
                 </LinearLayout>
 
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/etOct"
+                <View
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@color/surface_2"
-                    android:fontFamily="monospace"
-                    android:hint="@string/converter_oct_hint"
-                    android:textColorHint="@color/text_3"
-                    android:padding="12dp"
-                    android:textColor="@color/text_primary"
-                    android:textSize="@dimen/fs_md" />
-
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- 5. ASCII 字符文本 卡片 -->
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            app:cardBackgroundColor="@color/card_bg"
-            app:cardCornerRadius="@dimen/r_lg"
-            app:strokeColor="@color/border_color"
-            app:strokeWidth="1dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
+                    android:layout_height="1dp"
+                    android:layout_marginHorizontal="8dp"
+                    android:background="@color/border" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:gravity="center_vertical"
-                    android:orientation="horizontal">
+                    android:minHeight="56dp"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="4dp"
+                    android:paddingVertical="4dp">
 
                     <TextView
-                        android:layout_width="0dp"
+                        android:layout_width="64dp"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
                         android:text="@string/converter_ascii_label"
                         android:textColor="@color/primary_fg"
-                        android:textSize="@dimen/fs_md"
+                        android:textSize="@dimen/fs_xs"
                         android:textStyle="bold" />
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etAscii"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_marginHorizontal="6dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_input_field"
+                        android:hint="@string/converter_ascii_hint"
+                        android:paddingHorizontal="10dp"
+                        android:singleLine="true"
+                        android:textColor="@color/text_1"
+                        android:textColorHint="@color/text_3"
+                        android:textSize="@dimen/fs_md" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnCopyAscii"
                         style="@style/Widget.Material3.Button.TonalButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="@dimen/touch_min"
-                        android:minWidth="@dimen/touch_min"
+                        android:layout_width="56dp"
+                        android:layout_height="48dp"
+                        android:minWidth="48dp"
+                        android:paddingHorizontal="2dp"
                         android:text="@string/action_copy"
                         android:textSize="@dimen/fs_xs"
-                        app:cornerRadius="@dimen/r_md" />
-
+                        app:cornerRadius="@dimen/r_md"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
                 </LinearLayout>
-
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/etAscii"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@color/surface_2"
-                    android:hint="@string/converter_ascii_hint"
-                    android:textColorHint="@color/text_3"
-                    android:padding="12dp"
-                    android:textColor="@color/text_primary"
-                    android:textSize="@dimen/fs_md" />
-
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
-
     </LinearLayout>
-
 </androidx.core.widget.NestedScrollView>

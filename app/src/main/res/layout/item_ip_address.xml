@@ -1,23 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<com.google.android.material.card.MaterialCardView
-    xmlns:android="http://schemas.android.com/apk/res/android"
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/cardIpItem"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginBottom="8dp"
-    app:cardBackgroundColor="#162032"
-    app:cardCornerRadius="10dp"
-    app:strokeColor="@color/border_color"
+    android:foreground="?attr/selectableItemBackground"
+    app:cardBackgroundColor="@color/surface_2"
+    app:cardCornerRadius="@dimen/r_md"
+    app:cardElevation="0dp"
+    app:strokeColor="@color/border"
     app:strokeWidth="1dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:padding="12dp">
+        android:orientation="horizontal"
+        android:padding="10dp">
 
         <LinearLayout
             android:layout_width="0dp"
@@ -26,7 +27,7 @@
             android:orientation="vertical">
 
             <LinearLayout
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
@@ -35,48 +36,51 @@
                     android:id="@+id/tvInterfaceBadge"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:background="#223656"
+                    android:background="@drawable/bg_badge"
+                    android:backgroundTint="@color/surface_3"
                     android:paddingHorizontal="6dp"
                     android:paddingVertical="2dp"
-                    android:textColor="#60A5FA"
-                    android:textSize="11sp"
+                    android:textColor="@color/info"
+                    android:textSize="@dimen/fs_xs"
                     android:textStyle="bold"
-                    tools:text="🔌 有线网卡 (eth0)" />
+                    tools:text="有线网卡" />
 
                 <TextView
                     android:id="@+id/tvActiveTag"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
-                    android:textColor="@color/accent"
-                    android:textSize="11sp"
-                    android:visibility="gone"
-                    android:text="@string/cd_current_qr" />
-
+                    android:text="@string/cd_current_qr"
+                    android:textColor="@color/primary_fg"
+                    android:textSize="@dimen/fs_xs"
+                    android:visibility="gone" />
             </LinearLayout>
 
             <TextView
                 android:id="@+id/tvIpUrl"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:textColor="@color/text_primary"
-                android:textSize="15sp"
+                android:ellipsize="middle"
+                android:singleLine="true"
+                android:textColor="@color/text_1"
+                android:textSize="@dimen/fs_md"
                 android:textStyle="bold"
                 tools:text="http://192.168.137.2:9527" />
-
         </LinearLayout>
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnCopyIp"
             style="@style/Widget.Material3.Button.TonalButton"
             android:layout_width="wrap_content"
-            android:layout_height="36dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:minWidth="48dp"
             android:paddingHorizontal="10dp"
             android:text="@string/action_copy"
-            android:textSize="12sp"
-            app:cornerRadius="8dp" />
-
+            android:textSize="@dimen/fs_xs"
+            app:cornerRadius="@dimen/r_md"
+            android:insetTop="0dp"
+            android:insetBottom="0dp" />
     </LinearLayout>
-
 </com.google.android.material.card.MaterialCardView>

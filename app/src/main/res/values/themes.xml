@@ -1,32 +1,44 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <style name="Theme.LanDrop" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/primary</item>
-        <item name="colorOnPrimary">@color/text_1</item>
+        <item name="colorOnPrimary">@color/on_primary</item>
+        <item name="colorPrimaryContainer">@color/primary_soft</item>
+        <item name="colorOnPrimaryContainer">@color/primary_fg</item>
+        <item name="colorSecondary">@color/primary</item>
+        <item name="colorOnSecondary">@color/on_primary</item>
+        <item name="colorSecondaryContainer">@color/surface_2</item>
+        <item name="colorOnSecondaryContainer">@color/text_1</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="colorOnBackground">@color/text_1</item>
         <item name="colorSurface">@color/surface_1</item>
         <item name="colorOnSurface">@color/text_1</item>
+        <item name="colorSurfaceVariant">@color/surface_2</item>
+        <item name="colorOnSurfaceVariant">@color/text_2</item>
         <item name="colorOutline">@color/border</item>
+        <item name="colorError">@color/danger</item>
+        <item name="colorOnError">@color/on_primary</item>
+        <item name="colorErrorContainer">@color/danger_soft</item>
+        <item name="colorOnErrorContainer">@color/danger_fg</item>
+        <item name="android:colorAccent">@color/primary</item>
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>
-        <!-- 深色主题下状态栏图标必须是浅色；浅色主题（Phase 4）在 values/ 覆盖 -->
-        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
-        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">false</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">true</item>
     </style>
 
-    <!-- 透明指示器，避免选中 Tab 时出现突兀的白色盖字药丸框 -->
     <style name="Widget.Material3.BottomNavigationView.ActiveIndicator.Transparent" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
         <item name="android:color">@android:color/transparent</item>
     </style>
 
-    <!-- ==== 文字样式：对应 tokens.css 的 6 档字号，对应 14/16/13/12sp ==== -->
     <style name="TextAppearance.WenBox.Body" parent="TextAppearance.Material3.BodyMedium">
         <item name="android:textSize">@dimen/fs_md</item>
         <item name="android:textColor">@color/text_1</item>
-        <item name="android:lineSpacingMultiplier">1.4</item>
+        <item name="android:lineSpacingMultiplier">1.25</item>
     </style>
 
     <style name="TextAppearance.WenBox.Title" parent="TextAppearance.Material3.TitleMedium">
-        <item name="android:textSize">@dimen/fs_lg</item>
+        <item name="android:textSize">@dimen/fs_xl</item>
         <item name="android:textColor">@color/text_1</item>
         <item name="android:textStyle">bold</item>
     </style>
@@ -41,12 +53,14 @@
         <item name="android:textColor">@color/text_2</item>
     </style>
 
-    <!-- ==== 按钮：统一高度与圆角，取消渐变与彩色阴影 ==== -->
     <style name="Widget.WenBox.Button.Primary" parent="Widget.Material3.Button">
         <item name="android:minHeight">@dimen/touch_min</item>
         <item name="android:textSize">@dimen/fs_md</item>
+        <item name="android:textColor">@color/on_primary</item>
         <item name="backgroundTint">@color/primary</item>
         <item name="cornerRadius">@dimen/r_md</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
     </style>
 
     <style name="Widget.WenBox.Button.Secondary" parent="Widget.Material3.Button.OutlinedButton">
@@ -55,17 +69,20 @@
         <item name="android:textColor">@color/text_1</item>
         <item name="strokeColor">@color/border_strong</item>
         <item name="cornerRadius">@dimen/r_md</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
     </style>
 
-    <style name="Widget.WenBox.Button.Danger" parent="Widget.Material3.Button.OutlinedButton">
+    <style name="Widget.WenBox.Button.Danger" parent="Widget.Material3.Button">
         <item name="android:minHeight">@dimen/touch_min</item>
         <item name="android:textSize">@dimen/fs_md</item>
-        <item name="android:textColor">@color/danger_fg</item>
-        <item name="strokeColor">@color/danger_fg</item>
+        <item name="android:textColor">@color/on_primary</item>
+        <item name="backgroundTint">@color/danger</item>
         <item name="cornerRadius">@dimen/r_md</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
     </style>
 
-    <!-- ==== 卡片：1px 边框，无阴影 ==== -->
     <style name="Widget.WenBox.Card" parent="Widget.Material3.CardView.Outlined">
         <item name="cardBackgroundColor">@color/surface_1</item>
         <item name="strokeColor">@color/border</item>

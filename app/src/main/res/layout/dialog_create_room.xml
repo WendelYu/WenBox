@@ -2,114 +2,125 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:background="@drawable/bg_dialog_card"
     android:orientation="vertical"
-    android:padding="22dp"
-    android:background="@drawable/bg_dialog_card">
+    android:padding="16dp">
 
     <TextView
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/label_zh_f43a4068"
-        android:textColor="@color/text_primary"
-        android:textSize="18sp"
+        android:textColor="@color/text_1"
+        android:textSize="@dimen/fs_xl"
         android:textStyle="bold" />
 
     <TextView
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:text="@string/label_zh_bf07b844"
-        android:textColor="@color/text_secondary"
-        android:textSize="12sp" />
+        android:textColor="@color/text_2"
+        android:textSize="@dimen/fs_sm" />
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="@string/label_zh_568a041e"
-        android:textColor="@color/text_primary"
-        android:textSize="13sp" />
-
-    <EditText
-        android:id="@+id/etRoomName"
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="46dp"
-        android:layout_marginTop="6dp"
-        android:background="@drawable/bg_input_field"
-        android:hint="@string/label_zh_ecee3864"
-        android:textColor="@color/text_primary"
-        android:textColorHint="@color/text_secondary"
-        android:textSize="14sp"
-        android:paddingHorizontal="12dp"
-        android:singleLine="true" />
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_marginTop="12dp"
+        android:fillViewport="true"
+        android:overScrollMode="ifContentScrolls">
 
-    <TextView
-        android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/label_zh_568a041e"
+                android:textColor="@color/text_1"
+                android:textSize="@dimen/fs_sm"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/etRoomName"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="6dp"
+                android:background="@drawable/bg_input_field"
+                android:hint="@string/label_zh_ecee3864"
+                android:imeOptions="actionNext"
+                android:paddingHorizontal="12dp"
+                android:singleLine="true"
+                android:textColor="@color/text_1"
+                android:textColorHint="@color/text_3"
+                android:textSize="@dimen/fs_md" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/label_pin"
+                android:textColor="@color/text_1"
+                android:textSize="@dimen/fs_sm"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/etRoomPin"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="6dp"
+                android:background="@drawable/bg_input_field"
+                android:hint="@string/label_1234"
+                android:imeOptions="actionDone"
+                android:inputType="textPassword"
+                android:paddingHorizontal="12dp"
+                android:singleLine="true"
+                android:textColor="@color/text_1"
+                android:textColorHint="@color/text_3"
+                android:textSize="@dimen/fs_md" />
+
+            <LinearLayout
+                android:id="@+id/llRoomProfiles"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
+            <CheckBox
+                android:id="@+id/chkSaveProfile"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:minHeight="48dp"
+                android:text="@string/label_zh_43883a78"
+                android:textColor="@color/text_2"
+                android:textSize="@dimen/fs_sm" />
+        </LinearLayout>
+    </ScrollView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="12dp"
-        android:text="@string/label_pin"
-        android:textColor="@color/text_primary"
-        android:textSize="13sp" />
-
-    <EditText
-        android:id="@+id/etRoomPin"
-        android:layout_width="match_parent"
-        android:layout_height="46dp"
-        android:layout_marginTop="6dp"
-        android:background="@drawable/bg_input_field"
-        android:hint="@string/label_1234"
-        android:textColor="@color/text_primary"
-        android:textColorHint="@color/text_secondary"
-        android:textSize="14sp"
-        android:paddingHorizontal="12dp"
-        android:inputType="textPassword"
-        android:singleLine="true" />
-
-    <LinearLayout
-        android:id="@+id/llRoomProfiles"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:orientation="vertical"
-        android:visibility="gone" />
-
-    <CheckBox
-        android:id="@+id/chkSaveProfile"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="@string/label_zh_43883a78"
-        android:textColor="@color/text_secondary"
-        android:textSize="12sp" />
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="14dp"
         android:gravity="end"
         android:orientation="horizontal">
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnCancelCreateRoom"
+            style="@style/Widget.WenBox.Button.Secondary"
             android:layout_width="wrap_content"
-            android:layout_height="42dp"
-            android:background="@drawable/bg_btn_secondary"
-            android:paddingHorizontal="18dp"
-            android:text="@string/dialog_cancel"
-            android:textColor="@color/text_primary"
-            android:textSize="14sp" />
+            android:layout_height="48dp"
+            android:text="@string/dialog_cancel" />
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnConfirmCreateRoom"
+            style="@style/Widget.WenBox.Button.Primary"
             android:layout_width="wrap_content"
-            android:layout_height="42dp"
-            android:layout_marginStart="12dp"
-            android:background="@drawable/bg_btn_primary"
-            android:paddingHorizontal="20dp"
-            android:text="@string/label_zh_8b0de172"
-            android:textColor="#FFFFFF"
-            android:textSize="14sp"
-            android:textStyle="bold" />
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:text="@string/label_zh_8b0de172" />
     </LinearLayout>
-
 </LinearLayout>

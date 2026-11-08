@@ -1,6 +1,7 @@
 package com.landrop.ui.fragment
 
 import android.os.Bundle
+import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -44,7 +45,10 @@ class ToolsFragment : Fragment() {
         binding.toolSelector.addOnButtonCheckedListener { _, id, checked ->
             if (checked) {
                 val index = toolIds.indexOf(id)
-                if (index >= 0) { selectedTool = index; binding.toolPager.setCurrentItem(index, false) }
+                if (index >= 0) {
+                    selectedTool = index
+                    binding.toolPager.setCurrentItem(index, shouldAnimateTransitions())
+                }
             }
         }
         pageCallback = object : ViewPager2.OnPageChangeCallback() {
@@ -53,6 +57,21 @@ class ToolsFragment : Fragment() {
                 _binding?.toolSelector?.check(toolIds[position])
             }
         }.also { binding.toolPager.registerOnPageChangeCallback(it) }
+    }
+
+    private fun shouldAnimateTransitions(): Boolean {
+        val resolver = context?.contentResolver ?: return false
+        val animatorScale = Settings.Global.getFloat(
+            resolver,
+            Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f
+        )
+        val transitionScale = Settings.Global.getFloat(
+            resolver,
+            Settings.Global.TRANSITION_ANIMATION_SCALE,
+            1f
+        )
+        return animatorScale > 0f && transitionScale > 0f
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

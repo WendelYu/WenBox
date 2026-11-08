@@ -199,6 +199,28 @@ body[data-active-view="view-tools"] .app-container { grid-template-rows: 80px 0 
 .cron-expression-input { border-color: var(--border); background: var(--surface-2); box-shadow: none; border-radius: var(--r-sm); }
 .cron-result-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 16px; }
 .cron-meaning { color: var(--primary-fg); font-weight: var(--fw-medium); }
+.converter-rows { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface-1); }
+.converter-row { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 9px 14px; border-top: 1px solid var(--border); }
+.converter-row:first-child { border-top: 0; }
+.converter-row .box-tag { justify-self: start; }
+.converter-row .converter-input { width: 100%; min-width: 0; border: 0; background: transparent; box-shadow: none; padding: 8px 10px; }
+.converter-row .converter-input:focus { background: var(--surface-2); box-shadow: var(--focus-ring); }
+.converter-copy { opacity: .65; transition: opacity .15s ease; }
+.converter-row:hover .converter-copy, .converter-copy:focus-visible { opacity: 1; }
+.json-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.json-actions-primary, .json-actions-secondary { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.json-actions-secondary { margin-left: auto; }
+.cron-section { display: grid; gap: 14px; }
+.cron-field-group { display: grid; gap: 6px; min-width: 0; }
+.cron-section .cron-label { font-size: var(--fs-xs); font-weight: var(--fw-medium); color: var(--text-3); }
+.cron-select { width: 100%; }
+.cron-section .input-with-btn { display: flex; align-items: center; gap: 8px; }
+.cron-section .input-with-btn .converter-input { flex: 1 1 auto; min-width: 0; }
+.cron-section .cron-result-card { display: grid; gap: 6px; }
+@media (min-width: 900px) {
+  .cron-section { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; }
+  .cron-section .cron-result-card { align-self: stretch; }
+}
 dialog.modal { border: 1px solid var(--border); border-radius: var(--r-xl); padding: 26px; box-shadow: var(--shadow-pop); background: var(--surface-1); }
 dialog.modal[open] { animation: none; }
 dialog.modal::backdrop { background: var(--backdrop); backdrop-filter: blur(6px); }
@@ -303,6 +325,9 @@ dialog.modal::backdrop { background: var(--backdrop); backdrop-filter: blur(6px)
   .tool-pane .card { padding: 18px 14px; }
   .tool-pane .section-title .subtitle { line-height: 1.7; }
   .json-textarea { min-height: 340px; padding: 14px; }
+  .json-actions-secondary { margin-left: 0; }
+  .converter-row { grid-template-columns: 60px minmax(0, 1fr) auto; gap: 8px; padding: 7px 10px; }
+  .converter-row .box-tag { padding: 2px 6px; }
   .lobby { padding: 18px 14px; }
   .lobby .empty-state { margin: 36px auto; }
   .lobby .empty-state > p { font-size: var(--fs-md); }

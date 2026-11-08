@@ -20,10 +20,11 @@
     <color name="text_disabled">#A3AAB8</color>
 
     <!-- ==== 语义 ==== -->
-    <color name="primary">#2563EB</color>
-    <color name="primary_hover">#1D4ED8</color>
-    <color name="primary_fg">#1D4ED8</color>
-    <color name="primary_soft">#1F2563EB</color>
+    <color name="primary">#0F766E</color>
+    <color name="primary_hover">#115E59</color>
+    <color name="primary_fg">#0F766E</color>
+    <color name="primary_soft">#1F0F766E</color>
+    <color name="on_primary">#FFFFFF</color>
     <color name="success">#047857</color>
     <color name="success_fg">#047857</color>
     <color name="success_soft">#1F047857</color>
@@ -34,6 +35,10 @@
     <color name="danger_soft">#1FB91C1C</color>
     <color name="info">#0E7490</color>
     <color name="chat_accent_purple">#6D28D9</color>
+    <color name="qr_background">#FFFFFF</color>
+    <color name="media_surface">#181818</color>
+    <color name="media_scrim">#B3000000</color>
+    <color name="media_foreground">#E0E0E0</color>
 
     <!-- ==== 兼容别名：旧代码继续引用旧名字，逐步迁移 ==== -->
     <color name="bg_dark">@color/bg</color>
@@ -59,6 +64,6 @@
     <color name="chat_text_muted">@color/text_2</color>
     <color name="chat_text_subtle">@color/text_3</color>
     <color name="chat_system_amber">@color/warning_fg</color>
-    <color name="accent">@color/success_fg</color>
+    <color name="accent">@color/primary_fg</color>
     <color name="accent_blue">@color/primary_fg</color>
 </resources>

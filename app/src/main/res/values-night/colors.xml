@@ -20,10 +20,11 @@
     <color name="text_disabled">#5B6372</color>
 
     <!-- 语义 -->
-    <color name="primary">#2563EB</color>
-    <color name="primary_hover">#1D4ED8</color>
-    <color name="primary_fg">#6EA8FE</color>
-    <color name="primary_soft">#292563EB</color>
+    <color name="primary">#0F766E</color>
+    <color name="primary_hover">#115E59</color>
+    <color name="primary_fg">#5EEAD4</color>
+    <color name="primary_soft">#2914B8A6</color>
+    <color name="on_primary">#FFFFFF</color>
     <color name="success">#047857</color>
     <color name="success_fg">#34D399</color>
     <color name="success_soft">#2434D399</color>
@@ -34,4 +35,8 @@
     <color name="danger_soft">#24F87171</color>
     <color name="info">#06B6D4</color>
     <color name="chat_accent_purple">#A78BFA</color>
+    <color name="qr_background">#FFFFFF</color>
+    <color name="media_surface">#181818</color>
+    <color name="media_scrim">#B3000000</color>
+    <color name="media_foreground">#E0E0E0</color>
 </resources>

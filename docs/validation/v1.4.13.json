@@ -1,0 +1,23 @@
+{
+  "version": "1.4.13",
+  "scope": "Android native UI and web tools refresh merged onto v1.4.12; stale local backend/layout fragments excluded",
+  "review_fixes": [
+    "Android framework attribute namespaces",
+    "IME send action listener",
+    "Scrollable dialog body keeps action buttons reachable"
+  ],
+  "local": {
+    "node": 58,
+    "android_build_unit_lint": "passed (existing lint warnings remain)",
+    "chromium_workspace": "passed; light/dark tools screenshots inspected",
+    "rust": {
+      "passed": 102,
+      "ignored_fixture": 1
+    },
+    "android_tests": 41
+  },
+  "limits": [
+    "No Android emulator/device was available for native visual acceptance."
+  ],
+  "release_gate": "Android, Windows installation matrix, macOS and Chromium/WebKit/Firefox checks must pass before publication."
+}
