@@ -24,6 +24,8 @@
                 || (a === 'forget' && !peer)
                 || (a === 'layout' && (!peer || m?.local?.role !== 'source'))
                 || (['clipboard', 'release'].includes(a) && !m?.enabled)
+                || (a === 'clipboard' && (!peer || !snapshot?.clipboard))
+                || (a === 'save-mouse' && (!m?.enabled || !peer || (!speedDirty && !scrollDirty)))
                 || (a === 'keymap' && (!m?.enabled || !peer || m.local.role !== 'source'))
                 || (a === 'scroll-speed' && (!m?.enabled || !peer || snapshot?.scrollSpeed == null))
                 || (a === 'speed' && (!m?.enabled || !peer || m.local.role !== 'source' || snapshot?.pointerSpeed == null))
@@ -32,14 +34,17 @@
         }
         for (const button of node('kvmCandidates').querySelectorAll('button')) button.disabled = busy || !!peer || button.dataset.pairing !== 'true';
         node('kvmRoleSelect').disabled = busy || !desktop || !!peer || !!pending;
-        node('kvmSide').disabled = busy || !desktop || !peer || m?.local?.role !== 'source';
         for (const button of view.querySelectorAll('[data-kvm-side]')) {
             button.disabled = busy || !m?.enabled || !peer || m.local.role !== 'source';
             button.setAttribute('aria-pressed', String(button.dataset.kvmSide === m?.side));
         }
-        for (const b of view.querySelectorAll('[data-kvm-speed]')) b.disabled = busy;
-        node('kvmPointerSpeed').disabled = busy;
-        node('kvmScrollSpeed').disabled = busy || snapshot?.scrollSpeed == null;
+        for (const b of view.querySelectorAll('[data-kvm-speed]')) {
+            b.disabled = busy || !desktop || !m?.enabled || !peer || m.local.role !== 'source' || snapshot?.pointerSpeed == null;
+            b.setAttribute('aria-pressed', String(Number(b.dataset.kvmSpeed) === Number(node('kvmPointerSpeed').value)));
+        }
+        node('kvmPointerSpeed').disabled = busy || !desktop || !m?.enabled || !peer || m.local.role !== 'source' || snapshot?.pointerSpeed == null;
+        node('kvmScrollSpeed').disabled = busy || !desktop || !m?.enabled || !peer || snapshot?.scrollSpeed == null;
+        text('kvmMouseSaveStatus', speedDirty || scrollDirty ? '有未保存的修改' : '设置已同步');
         text('kvmKeymapHint', node('kvmKeyboardPreset').value === 'shortcuts' ? '交换 Command/Win 与 Control；Mac 的 Command+C/V/A/Z 对应 Windows 的 Ctrl+C/V/A/Z。' : node('kvmKeyboardPreset').value === 'original' ? '按原始修饰键发送：Command 对应 Win，Control 对应 Ctrl，Option 对应 Alt。' : '为每个修饰键选择目标。四个目标不能重复，左右两侧同名按键使用相同映射。');
         for (const select of node('kvmKeyboardSettings').querySelectorAll('select')) select.disabled = busy || (select.hasAttribute('data-keymap') && node('kvmKeyboardPreset').value !== 'custom');
         view.setAttribute('aria-busy', String(busy));
@@ -53,6 +58,7 @@
         text('kvmAccessibilityStatus', permissionLabel(state.permissions?.accessibility));
         text('kvmInputStatus', permissionLabel(state.permissions?.inputMonitoring));
         const enabled = !!m?.enabled;
+        text('kvmHeading', enabled && m?.peer ? '两台电脑，一个工作空间' : '连接你的另一台电脑');
         const missingPermissions = state.platform === 'macOS' ? [state.permissions?.accessibility === false ? '辅助功能' : '', state.permissions?.inputMonitoring === false ? '输入监控' : ''].filter(Boolean) : [];
         text('kvmSettingsSummary', missingPermissions.length ? `需要授权：${missingPermissions.join('、')}` : '权限与连接详情');
         node('kvmDetails').dataset.permissionMissing = String(missingPermissions.length > 0);
@@ -80,7 +86,7 @@
             text('kvmPairCode', `${code.slice(0, 4)} ${code.slice(4)}`);
             text('kvmPairExpiry', `${m.pending.localConfirmed ? '本机已确认，等待对端' : '等待本机确认'} · 约 ${m.pending.expiresIn} 秒后过期`);
         }
-        node('kvmClipboardSettings').hidden = !m.enabled || !m.peer || !state.clipboard;
+        node('kvmClipboardSettings').hidden = false;
         text('kvmClipboardStatus', state.clipboard?.message || '请更新桌面客户端');
         const clipboardButton = view.querySelector('[data-kvm="clipboard"]');
         clipboardButton.textContent = state.clipboard?.enabled ? '关闭文本同步' : '开启文本同步';
@@ -102,7 +108,6 @@
             text('kvmOwnScreen', m.local.name);
             text('kvmPeerScreen', m.peer.name);
             node('kvmPeerScreen').dataset.side = m.side;
-            if (document.activeElement !== node('kvmSide')) node('kvmSide').value = m.side;
         }
         const list = node('kvmEvents');
         const nextEventsKey = JSON.stringify(state.events || []);
@@ -141,7 +146,7 @@
         }
         if (!seen.size) text('kvmPairingHint', '暂无已开启流转的可用电脑。请在对端开启流转，选择不同角色并允许配对。');
     }
-    async function act(action) {
+    async function act(action, options = {}) {
         if (!desktop || busy) return;
         clearTimeout(timer); if (action === 'refresh') return refresh();
         epoch++; busy = true; controls(); errorBox.hidden = true;
@@ -150,10 +155,20 @@
                 const managed = snapshot?.managed;
                 const safe = managed ? { ...managed, pending: managed.pending ? { localConfirmed: managed.pending.localConfirmed, remoteConfirmed: managed.pending.remoteConfirmed, expiresIn: managed.pending.expiresIn } : null } : null;
                 await window.WenBox.copyText(JSON.stringify({ appVersion: document.querySelector('meta[name="wenbox-version"]')?.content, ...snapshot, managed: safe }, null, 2)); text('kvmMessage', '诊断信息已复制');
+            } else if (action === 'save-mouse') {
+                if (speedDirty && snapshot?.managed?.local?.role === 'source' && snapshot?.pointerSpeed != null) {
+                    await invoke('kvm_pointer_speed', { percent: Number(node('kvmPointerSpeed').value) });
+                    speedDirty = false;
+                }
+                if (scrollDirty && snapshot?.scrollSpeed != null) {
+                    await invoke('kvm_scroll_speed', { percent: Number(node('kvmScrollSpeed').value) });
+                    scrollDirty = false;
+                }
+                render(await invoke('kvm_status', {}));
             } else if (action === 'discover') { candidates(await invoke('kvm_discover', {})); }
             else {
                 const m = snapshot?.managed;
-                const commands = { release: ['kvm_release', {}], clipboard: ['kvm_clipboard', { enabled: !snapshot?.clipboard?.enabled }], keymap: ['kvm_keyboard_map', { mapping: readKeymap() }], 'scroll-speed': ['kvm_scroll_speed', { percent: Number(node('kvmScrollSpeed').value) }], speed: ['kvm_pointer_speed', { percent: Number(node('kvmPointerSpeed').value) }], start: ['kvm_start', {}], stop: ['kvm_stop', {}], settings: ['kvm_open_settings', { pane: 'accessibility' }], 'input-settings': ['kvm_open_settings', { pane: 'input-monitoring' }], 'reveal-app': ['kvm_open_settings', { pane: 'reveal-app' }], pairing: ['kvm_pairing_window', {}], pair: ['kvm_pair', { ip: node('kvmPeerIp').value.trim() }], confirm: ['kvm_confirm', { session: m?.pending?.session, accept: true }], reject: ['kvm_confirm', { session: m?.pending?.session, accept: false }], forget: ['kvm_forget', {}], layout: ['kvm_layout', { side: node('kvmSide').value }], role: ['kvm_role', { role: node('kvmRoleSelect').value }] };
+                const commands = { release: ['kvm_release', {}], clipboard: ['kvm_clipboard', { enabled: !snapshot?.clipboard?.enabled }], keymap: ['kvm_keyboard_map', { mapping: readKeymap() }], 'scroll-speed': ['kvm_scroll_speed', { percent: Number(node('kvmScrollSpeed').value) }], speed: ['kvm_pointer_speed', { percent: Number(node('kvmPointerSpeed').value) }], start: ['kvm_start', {}], stop: ['kvm_stop', {}], settings: ['kvm_open_settings', { pane: 'accessibility' }], 'input-settings': ['kvm_open_settings', { pane: 'input-monitoring' }], 'reveal-app': ['kvm_open_settings', { pane: 'reveal-app' }], pairing: ['kvm_pairing_window', {}], pair: ['kvm_pair', { ip: node('kvmPeerIp').value.trim() }], confirm: ['kvm_confirm', { session: m?.pending?.session, accept: true }], reject: ['kvm_confirm', { session: m?.pending?.session, accept: false }], forget: ['kvm_forget', {}], layout: ['kvm_layout', { side: options.side }], role: ['kvm_role', { role: node('kvmRoleSelect').value }] };
                 const entry = commands[action]; if (!entry) return;
                 await invoke(entry[0], entry[1]);
                 if (action === 'keymap') keymapDirty = false;
@@ -175,9 +190,9 @@
         controls();
     });
     for (const input of view.querySelectorAll('[data-keymap]')) input.addEventListener('change', () => { keymapDirty = true; });
-    node('kvmScrollSpeed').addEventListener('input', () => { scrollDirty = true; text('kvmScrollValue', (Number(node('kvmScrollSpeed').value)/100).toFixed(2)+'×'); });
-    node('kvmPointerSpeed').addEventListener('input', () => { speedDirty = true; text('kvmPointerValue', (Number(node('kvmPointerSpeed').value) / 100).toFixed(2) + '×'); });
-    view.addEventListener('click', event => { const preset = event.target.closest('[data-kvm-speed]'); if (preset && !preset.disabled) { node('kvmPointerSpeed').value = preset.dataset.kvmSpeed; speedDirty = true; text('kvmPointerValue', (Number(preset.dataset.kvmSpeed) / 100).toFixed(2) + '×'); act('speed'); return; } const direction = event.target.closest('[data-kvm-side]'); if (direction && !direction.disabled) { node('kvmSide').value = direction.dataset.kvmSide; act('layout'); return; } const button = event.target.closest('button[data-kvm]'); if (button && !button.disabled) act(button.dataset.kvm); });
+    node('kvmScrollSpeed').addEventListener('input', () => { scrollDirty = true; text('kvmScrollValue', (Number(node('kvmScrollSpeed').value)/100).toFixed(2)+'×'); controls(); });
+    node('kvmPointerSpeed').addEventListener('input', () => { speedDirty = true; text('kvmPointerValue', (Number(node('kvmPointerSpeed').value) / 100).toFixed(2) + '×'); controls(); });
+    view.addEventListener('click', event => { const preset = event.target.closest('[data-kvm-speed]'); if (preset && !preset.disabled) { node('kvmPointerSpeed').value = preset.dataset.kvmSpeed; speedDirty = true; text('kvmPointerValue', (Number(preset.dataset.kvmSpeed) / 100).toFixed(2) + '×'); controls(); return; } const direction = event.target.closest('[data-kvm-side]'); if (direction && !direction.disabled) { act('layout', { side: direction.dataset.kvmSide }); return; } const button = event.target.closest('button[data-kvm]'); if (button && !button.disabled) act(button.dataset.kvm); });
     function onView() {
         clearTimeout(timer); if (!visible()) return;
         if (!desktop) {

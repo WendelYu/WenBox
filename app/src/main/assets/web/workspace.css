@@ -217,7 +217,7 @@ body.room-switching [id="roomLobby"] { animation: room-switch-in .38s cubic-bezi
   body.room-switching .room-workspace,
   body.room-switching [id="roomLobby"] { animation: none; }
 }
-.file-drag-target { outline: 2px solid var(--color-primary, #318a81); outline-offset: -3px; }
+.file-drag-target { outline: 2px solid var(--primary-fg); outline-offset: -3px; }
 
 .chat-identity-restore { border: 0; padding: 2px 4px; border-radius: 4px; background: transparent; color: var(--primary-fg); font: inherit; font-size: var(--fs-xs); align-self: flex-end; cursor: pointer; }
 .chat-identity-restore:hover { background: var(--primary-soft); }

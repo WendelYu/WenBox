@@ -1,21 +1,21 @@
 /* Shared palette and rhythm. All product colors are defined here. */
 :root {
   color-scheme: dark;
-  --bg: #0d1315;
-  --rail-bg: #111a1c;
-  --surface-1: #152225;
-  --surface-2: #1b2c30;
-  --surface-3: #243b40;
-  --border: #233438;
-  --border-strong: #334b52;
-  --text-1: #eff6f5;
-  --text-2: #a2b7b5;
-  --text-3: #6b8482;
-  --text-disabled: #415553;
-  --primary: #0d9488;
-  --primary-hover: #0f766e;
-  --primary-fg: #2dd4bf;
-  --primary-soft: rgba(45, 212, 191, .12);
+  --bg: #101116;
+  --rail-bg: #15161e;
+  --surface-1: #1b1c26;
+  --surface-2: #222430;
+  --surface-3: #2b2e3e;
+  --border: #303241;
+  --border-strong: #44475d;
+  --text-1: #f2f3fa;
+  --text-2: #b2b5c9;
+  --text-3: #8b90a8;
+  --text-disabled: #565c73;
+  --primary: #635bff;
+  --primary-hover: #5148df;
+  --primary-fg: #a39dff;
+  --primary-soft: rgba(133, 123, 255, .14);
   --success: #059669;
   --success-fg: #34d399;
   --success-soft: rgba(52, 211, 153, .12);
@@ -27,7 +27,7 @@
   --info: #38bdf8;
   --on-primary: #fff;
   --qr-surface: #fff;
-  --focus-ring: 0 0 0 3px rgba(45, 212, 191, .25);
+  --focus-ring: 0 0 0 3px rgba(133, 123, 255, .24);
   --avatar-0: #1b3d3b; --avatar-1: #3e2e5c; --avatar-2: #1e453e; --avatar-3: #4d331e;
   --avatar-4: #4a2436; --avatar-5: #2c4224; --avatar-6: #1e3f4d; --avatar-7: #3d3452;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", Roboto, sans-serif;
@@ -38,10 +38,10 @@
   --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600;
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
   --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
-  --r-xs: 4px; --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-xl: 20px; --r-full: 9999px;
-  --shadow-card: 0 1px 3px rgba(0, 0, 0, .12), 0 4px 12px rgba(0, 0, 0, .08);
+  --r-xs: 4px; --r-sm: 8px; --r-md: 12px; --r-lg: 14px; --r-xl: 18px; --r-full: 9999px;
+  --shadow-card: 0 2px 5px rgba(0, 0, 0, .06);
   --shadow-pop: 0 16px 40px rgba(0, 0, 0, .4), 0 0 0 1px var(--border);
-  --shadow-button: 0 2px 6px rgba(13, 148, 136, .3);
+  --shadow-button: 0 3px 8px rgba(99, 91, 255, .16);
   --backdrop: rgba(0, 0, 0, .55);
   --ease-out: cubic-bezier(.16, 1, .3, 1);
   --dur-1: 140ms; --dur-2: 220ms; --dur-3: 300ms;
@@ -49,31 +49,32 @@
 }
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f8faf9;
-  --rail-bg: #eef3f1;
+  --bg: #f6f7fb;
+  --rail-bg: #fafaff;
   --surface-1: #fff;
-  --surface-2: #f2f6f4;
-  --surface-3: #e5ece9;
-  --border: #e0e7e4;
-  --border-strong: #c8d5cf;
-  --text-1: #162422;
-  --text-2: #4d635e;
-  --text-3: #758c86;
-  --text-disabled: #9db0a9;
-  --primary-fg: #0f766e;
-  --primary-soft: rgba(15, 118, 110, .08);
+  --surface-2: #f6f7fb;
+  --surface-3: #eceef5;
+  --border: #e6e8f0;
+  --border-strong: #cdd1df;
+  --text-1: #202235;
+  --text-2: #5f647b;
+  --text-3: #70768d;
+  --text-disabled: #a1a6b8;
+  --primary-fg: #5148df;
+  --primary-hover: #5148df;
+  --primary-soft: rgba(99, 91, 255, .08);
   --success-fg: #047857;
   --success-soft: rgba(4, 120, 87, .08);
   --warning-fg: #b45309;
   --warning-soft: rgba(180, 83, 9, .08);
   --danger-fg: #b91c1c;
   --danger-soft: rgba(185, 28, 28, .08);
-  --focus-ring: 0 0 0 3px rgba(15, 118, 110, .18);
+  --focus-ring: 0 0 0 3px rgba(99, 91, 255, .18);
   --avatar-0: #d5ece5; --avatar-1: #e4d7f5; --avatar-2: #c5ebe0; --avatar-3: #f7ddbf;
   --avatar-4: #f7d5e4; --avatar-5: #dbeac6; --avatar-6: #cbe7f2; --avatar-7: #e2dbf0;
-  --shadow-card: 0 1px 3px rgba(22, 36, 34, .04), 0 4px 12px rgba(22, 36, 34, .04);
+  --shadow-card: 0 2px 5px rgba(32, 34, 53, .025);
   --shadow-pop: 0 16px 40px rgba(22, 36, 34, .14), 0 0 0 1px var(--border);
-  --shadow-button: 0 2px 6px rgba(15, 118, 110, .2);
+  --shadow-button: 0 3px 8px rgba(99, 91, 255, .12);
 }
 @media (pointer: coarse) {
   :root { --control-h: 44px; --touch-min: 44px; }

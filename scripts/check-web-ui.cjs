@@ -310,7 +310,7 @@ async function main() {
         for (const width of [1280, 1440]) {
             await page.setViewportSize({ width, height: 900 });
             const heading = await page.locator('#currentViewingDeviceTitle').boundingBox();
-            assert.ok(heading.width >= 100 && heading.height < 55, 'file heading must not collapse into one Chinese character per line');
+            assert.ok(heading.width >= 100 && heading.height < 55, `file heading must not collapse into one Chinese character per line: ${JSON.stringify(heading)}`);
         }
         for (const src of ['/api/download/preview', origin + '/api/download/preview']) {
             messages.push({ id: String(++serial), senderName: 'Mac 图片测试', senderIp: '169.254.142.249', content: `[image:${src}]`, timestamp: Date.now() + serial });

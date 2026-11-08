@@ -40,7 +40,7 @@
         });
     }
 
-    function showToast(msg) {
+    function showToast(msg, detailText = msg) {
         if (!toast) return;
         const message = String(msg);
         const error = /失败|错误|无法|异常|未就绪|404|断开/.test(message);
@@ -52,7 +52,7 @@
             const copy = document.createElement('button'); copy.type = 'button';
             copy.className = 'btn btn--secondary btn--sm'; copy.textContent = '复制错误详情';
             copy.addEventListener('click', async () => {
-                try { await copyText(message); copy.textContent = '已复制'; }
+                try { await copyText(String(detailText)); copy.textContent = '已复制'; }
                 catch (_) { copy.textContent = '请选择文字复制'; }
             });
             const close = document.createElement('button'); close.type = 'button';
@@ -2450,7 +2450,15 @@
                 actions.append(open,copy);row.append(actions);refreshDownloadSummary();showToast(`下载完成：${name}`);
             },
             handedOff(){row.dataset.state='browser';refreshDownloadSummary();status.textContent='文件已下载到浏览器，请在浏览器下载列表确认保存并打开目录';},
-            fail(error){row.dataset.state='failed';refreshDownloadSummary();status.textContent=`下载失败：${error.message||error}`;}
+            fail(error) {
+                row.dataset.state = 'failed'; refreshDownloadSummary();
+                const detail = String(error?.message || error);
+                status.textContent = /(?:410|过期|不存在)/.test(detail) ? '文件已过期，请让发送方重新分享。' : /(?:offline|断开|离线|连接|fetch)/i.test(detail) ? '连接已中断，请确认发送方在线后重试。' : '下载失败，请稍后重试。';
+                const details = document.createElement('details'); details.className = 'download-error-details';
+                const summary = document.createElement('summary'); summary.textContent = '错误详情';
+                const content = document.createElement('pre'); content.textContent = detail;
+                details.append(summary, content); row.append(details);
+            }
         };
     }
     document.addEventListener('keydown', event => {
@@ -2498,7 +2506,7 @@
                 } catch(error) {receipt.fail(error);throw error;}
                 return;
             } catch (e) {
-                showToast(`保存失败：${e.message || e}`);
+                showToast('保存失败，请在下载记录中查看详情。', `保存失败：${e.message || e}`);
                 return;
             }
         }
@@ -2510,7 +2518,7 @@
             receipt.handedOff();
         } catch (e) {
             receipt.fail(e);
-            showToast(`下载失败：${e.message || e}`);
+            showToast('下载失败，请确认发送方在线。', `下载失败：${e.message || e}`);
         }
     };
 

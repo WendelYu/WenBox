@@ -106,14 +106,14 @@
         <aside class="app-rail" aria-label="WenBox工作区">
             <div class="brand" title="WenBox">
                 <div class="logo-icon"><img src="logo.png" alt="WenBox" class="w-full h-full"></div>
-                <div class="brand-text"><h1>WenBox</h1></div>
+                <div class="brand-text"><h1>WenBox</h1><span>设备协作空间</span></div>
             </div>
             <nav class="nav-tabs" aria-label="主导航"><button type="button" class="nav-tab active" data-view="view-rooms" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="#i-monitor"></use></svg><span>房间</span></button>
                 <button type="button" class="nav-tab" data-view="view-room" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-message-square"></use></svg><span>快传</span></button>
                 <button type="button" class="nav-tab" data-view="view-kvm" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-link"></use></svg><span>流转</span></button>
                 <button type="button" class="nav-tab" data-view="view-tools" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-braces"></use></svg><span>工具</span></button>
             </nav>
-            <div class="rail-footer"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-shield"></use></svg><span>离线可用</span></div>
+            <div class="rail-footer"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-shield"></use></svg><span>局域网 · 离线可用</span></div>
         </aside>
         <header class="header">
             <div class="workspace-heading"><h1 id="workspaceTitle">房间</h1><p id="workspaceSubtitle">发现、加入和管理局域网房间</p></div>
@@ -200,12 +200,12 @@
                         </div>
                     </div>
 
-                </div></section><aside id="filePanel" class="card file-panel" aria-label="房间文件"><div class="file-panel-heading"><div><h2>房间文件</h2><span>先分享信息，点击下载才传输</span></div><button id="btnCloseFiles" type="button" class="btn btn--ghost btn--sm">收起</button></div>                            <button id="btnSelectShareFile" class="btn btn--primary" type="button">
+                </div></section><aside id="filePanel" class="card file-panel" aria-label="房间文件"><div class="file-panel-heading"><div><h2>房间文件</h2><span>文件按需传输</span></div><button id="btnSelectShareFile" class="btn btn--primary btn--sm" type="button">
                                 <svg viewbox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M12 5v14m-7-7h14"></path>
                                 </svg>
-                                添加文件
-                            </button><div class="segmented" aria-label="文件分类"><button type="button" data-file-page="panel-remote" class="only-joined active" aria-pressed="true">房间文件</button><button type="button" data-file-page="panel-shared" class="only-host active" aria-pressed="true">房间文件</button><button type="button" data-file-page="panel-received" class="only-host" aria-pressed="false">已接收</button></div><section class="file-panel-page only-joined" id="panel-remote">
+                                添加
+                            </button><button id="btnCloseFiles" type="button" class="btn btn--ghost btn--sm">收起</button></div>                            <div class="segmented" aria-label="文件分类"><button type="button" data-file-page="panel-remote" class="only-joined active" aria-pressed="true">房间文件</button><button type="button" data-file-page="panel-shared" class="only-host active" aria-pressed="true">房间文件</button><button type="button" data-file-page="panel-received" class="only-host" aria-pressed="false">已接收</button></div><section class="file-panel-page only-joined" id="panel-remote">
                     <div class="section-header">
                         <div class="section-title">
                             <h2 id="currentViewingDeviceTitle"> 对方分享的文件</h2>
@@ -301,17 +301,37 @@
             </section></aside></div></main><main id="view-kvm" class="primary-view kvm-view" aria-label="键鼠流转" hidden>
                 <section class="card kvm-hero">
                     <div class="kvm-hero-copy">
-                        <span class="kvm-eyebrow">你的双机工作台</span>
-                        <h2>一套键鼠，自由切换</h2>
-                        <span class="kvm-hero-subtitle">用一套键鼠操作 Mac 和 Windows</span>
-                        <div class="kvm-flow" aria-hidden="true">
-                            <span class="kvm-flow-node"><svg class="icon icon--sm"><use href="#i-monitor"></use></svg>本机</span>
-                            <span class="kvm-flow-track"><span class="kvm-flow-pulse"></span></span>
-                            <span class="kvm-flow-node"><svg class="icon icon--sm"><use href="#i-monitor"></use></svg>对端</span>
+                        <div class="kvm-hero-topline"><span class="kvm-eyebrow">设备协作 / INPUT SHARING</span><button type="button" class="btn btn--ghost btn--sm kvm-refresh" data-kvm="refresh" title="重新检测连接"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-refresh-cw"></use></svg><span>重新检测</span></button></div>
+                        <h2 id="kvmHeading">连接你的另一台电脑</h2>                        <div class="kvm-console-state">
+                            <div id="kvmStatusBadge" class="kvm-status-badge">未开启</div>
+                            <p id="kvmMessage" role="status" aria-live="polite">打开此页后检测本机输入后端。</p>
+                            <p id="kvmError" class="kvm-error" role="alert" hidden></p>
                         </div>
+
                         <p id="kvmIntro" class="subtitle kvm-note">按需开启，只与你确认的电脑共享键鼠。房间内其他成员不会自动加入。</p>
                         <p id="kvmEscape" class="subtitle kvm-escape" hidden>随时按 <kbd>Control + Alt + Escape</kbd> 返回主控电脑。</p>
-                        <details id="kvmDetails" class="kvm-settings" hidden><summary id="kvmSettingsSummary">权限与连接详情</summary>
+
+                    </div>
+                    <div class="kvm-console">
+                        <div class="kvm-unsupported">
+                            <span class="kvm-unsupported-icon" aria-hidden="true"><svg class="icon"><use href="#i-monitor"></use></svg></span>
+                            <h3>当前客户端暂不支持流转</h3>
+                        </div>
+                        <div class="kvm-hero-actions">
+                            <div class="kvm-power">
+                                <button type="button" class="btn btn--primary kvm-cta" data-kvm="start" disabled><svg class="icon icon--sm" aria-hidden="true"><use href="#i-play"></use></svg><span>开启流转</span></button>
+                                <button type="button" class="btn btn--secondary" data-kvm="stop" hidden disabled><svg class="icon icon--sm" aria-hidden="true"><use href="#i-square"></use></svg><span>关闭流转</span></button>
+                            </div>
+                            <div id="kvmClipboardSettings" class="kvm-clipboard-control">
+                                <button type="button" class="btn btn--secondary" data-kvm="clipboard" aria-pressed="false" title="两端都开启后，新复制的文本会双向同步；最大 1 MiB，图片和文件不参与同步。" disabled>开启文本同步</button>
+                            </div>
+                            <button type="button" class="btn btn--secondary" data-kvm="release" hidden disabled><svg class="icon icon--sm" aria-hidden="true"><use href="#i-log-out"></use></svg><span>收回并停止输入</span></button>
+                            <button type="button" class="btn btn--secondary" data-kvm="diagnostics" hidden disabled><svg class="icon icon--sm" aria-hidden="true"><use href="#i-copy"></use></svg><span>复制诊断</span></button>
+                        </div>
+                        <p id="kvmClipboardStatus" class="kvm-hint" role="status">配对后可同步文本剪贴板</p>
+                    </div>
+                </section>
+                        <details id="kvmDetails" class="card kvm-settings" hidden><summary id="kvmSettingsSummary">权限与连接详情</summary>
                     <dl class="kvm-facts">
                         <div><dt>本机</dt><dd id="kvmPlatform">待检测</dd></div>
                         <div><dt>输入角色</dt><dd id="kvmRole">待检测</dd></div>
@@ -329,29 +349,6 @@
                         <p class="subtitle">列表中没有 WenBox？点击“＋”添加当前应用，或从访达拖入列表。授权后重新打开 WenBox。当前版本使用临时签名，更新后可能需要移除旧条目并重新添加；请始终运行“应用程序”中的 WenBox。</p>
                     </div>
                     </details>
-                    </div>
-                    <div class="kvm-console">
-                        <div class="kvm-unsupported">
-                            <span class="kvm-unsupported-icon" aria-hidden="true"><svg class="icon"><use href="#i-monitor"></use></svg></span>
-                            <h3>当前客户端暂不支持流转</h3>
-                        </div>
-                        <div class="kvm-console-head">
-                            <span class="kvm-console-label">连接状态</span>
-                            <button type="button" class="btn btn--ghost btn--sm kvm-refresh" data-kvm="refresh"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-refresh-cw"></use></svg><span>重新检测</span></button>
-                        </div>
-                        <div class="kvm-console-state">
-                            <div id="kvmStatusBadge" class="kvm-status-badge">未开启</div>
-                            <p id="kvmMessage" role="status" aria-live="polite">打开此页后检测本机输入后端。</p>
-                            <p id="kvmError" class="kvm-error" role="alert" hidden></p>
-                        </div>
-                        <div class="kvm-hero-actions">
-                            <button type="button" class="btn btn--primary kvm-cta" data-kvm="start" disabled><svg class="icon icon--sm" aria-hidden="true"><use href="#i-play"></use></svg><span>开启键鼠流转</span></button>
-                            <button type="button" class="btn btn--secondary" data-kvm="stop" disabled><svg class="icon icon--sm" aria-hidden="true"><use href="#i-square"></use></svg><span>关闭流转</span></button>
-                            <button type="button" class="btn btn--secondary" data-kvm="release" disabled>收回并停止输入</button>
-                            <button type="button" class="btn btn--secondary" data-kvm="diagnostics" disabled><svg class="icon icon--sm" aria-hidden="true"><use href="#i-copy"></use></svg><span>复制诊断</span></button>
-                        </div>
-                    </div>
-                </section>
                 <section class="card kvm-pair-card" id="kvmPairingCard" hidden>
                     <div class="kvm-card-head">
                         <span class="kvm-card-icon" aria-hidden="true"><svg class="icon"><use href="#i-link"></use></svg></span>
@@ -377,44 +374,42 @@
                     </div>
                 </section>
                 <section class="card kvm-layout-card" id="kvmLayoutCard" hidden>
-                    <div class="section-header"><div class="section-title"><h2>你的屏幕布局</h2><span id="kvmPeerLabel" class="subtitle"></span></div><button type="button" class="btn btn--secondary btn--sm" data-kvm="forget" disabled>解除配对</button></div>
-                    <p class="subtitle kvm-layout-tip">点击方向即可保存。把对端放到与你桌面一致的位置。</p>
+                    <div class="section-header"><div class="section-title"><h2>屏幕与输入</h2><span id="kvmPeerLabel" class="subtitle"></span></div><button type="button" class="btn btn--secondary btn--sm" data-kvm="forget" disabled>解除配对</button></div>
+                    <p class="subtitle kvm-layout-tip">01 / LAYOUT · 把对端放到与你桌面一致的位置。</p>
                     <div class="kvm-layout-body">
                         <div class="kvm-layout" aria-label="两台电脑的相对位置">
                             <div class="kvm-stage">
+                            <button type="button" data-kvm-side="top" class="kvm-direction kvm-top" aria-label="将对端放在上方" aria-pressed="false">↑ 上方</button><button type="button" data-kvm-side="left" class="kvm-direction kvm-left" aria-label="将对端放在左侧" aria-pressed="false">← 左侧</button><button type="button" data-kvm-side="right" class="kvm-direction kvm-right" aria-label="将对端放在右侧" aria-pressed="false">右侧 →</button><button type="button" data-kvm-side="bottom" class="kvm-direction kvm-bottom" aria-label="将对端放在下方" aria-pressed="false">↓ 下方</button>
                                 <div id="kvmOwnScreen" class="kvm-screen kvm-own">本机</div>
                                 <div id="kvmPeerScreen" class="kvm-screen kvm-peer"></div>
                             </div>
-                            <div class="kvm-direction-pad" role="group" aria-label="对端方位"><button type="button" data-kvm-side="top" class="kvm-direction kvm-top" aria-label="将对端放在上方" aria-pressed="false">↑ 上方</button><button type="button" data-kvm-side="left" class="kvm-direction kvm-left" aria-label="将对端放在左侧" aria-pressed="false">← 左侧</button><button type="button" data-kvm-side="right" class="kvm-direction kvm-right" aria-label="将对端放在右侧" aria-pressed="false">右侧 →</button><button type="button" data-kvm-side="bottom" class="kvm-direction kvm-bottom" aria-label="将对端放在下方" aria-pressed="false">↓ 下方</button></div>
+
                         </div>
-                        <div class="kvm-settings-col">
-                            <div id="kvmPointerSettings" class="kvm-pointer" hidden>
-                                <div class="kvm-tuning-head"><h3>被控端鼠标速度</h3><p class="subtitle">只影响跨屏后的移动速度，主控电脑手感不变。</p></div>
-                                <div class="kvm-speed-presets"><button type="button" data-kvm-speed="75">慢 · 0.75×</button><button type="button" data-kvm-speed="100">标准 · 1.0×</button><button type="button" data-kvm-speed="150">快 · 1.5×</button></div>
-                                <div class="kvm-form-row kvm-slider-row"><label for="kvmPointerSpeed">速度倍率</label><input id="kvmPointerSpeed" type="range" min="50" max="200" step="5" value="100"><output id="kvmPointerValue" for="kvmPointerSpeed">1.00×</output><button type="button" class="btn btn--secondary btn--sm" data-kvm="speed">保存速度</button></div>
-                                <p class="subtitle">保存会短暂重连；标准速度为 1.0×。</p>
+                        <section class="kvm-settings-col" aria-label="鼠标与滚轮设置">
+                            <div class="kvm-tuning-head"><span class="kvm-section-number">02 / INPUT</span><h3>鼠标与滚轮</h3><p class="subtitle">调整跨屏后的手感，本机速度保持不变。</p></div>
+                            <div id="kvmPointerSettings" class="kvm-tuning-row" hidden>
+                                <div class="kvm-slider-label"><label for="kvmPointerSpeed">指针速度</label><output id="kvmPointerValue" for="kvmPointerSpeed">1.00×</output></div>
+                                <input id="kvmPointerSpeed" type="range" min="50" max="200" step="5" value="100">
+                                <div class="kvm-speed-presets" aria-label="指针速度预设"><button type="button" data-kvm-speed="75" aria-pressed="false">慢 · 0.75×</button><button type="button" data-kvm-speed="100" aria-pressed="true">标准 · 1×</button><button type="button" data-kvm-speed="150" aria-pressed="false">快 · 1.5×</button></div>
                             </div>
-                            <div id="kvmScrollSettings" class="kvm-pointer" hidden>
-                                <div class="kvm-tuning-head"><h3>被控端滚轮速度</h3><p class="subtitle">调整被控电脑的滚动倍率，与指针速度分开保存。</p></div>
-                                <div class="kvm-form-row kvm-slider-row"><label for="kvmScrollSpeed">滚动倍率</label><input id="kvmScrollSpeed" type="range" min="50" max="200" step="5" value="100"><output id="kvmScrollValue" for="kvmScrollSpeed">1.00×</output><button type="button" class="btn btn--secondary btn--sm" data-kvm="scroll-speed">保存滚轮速度</button></div>
-                                <p class="subtitle">保存会短暂重连，默认倍率为 1.0×。</p>
+                            <div id="kvmScrollSettings" class="kvm-tuning-row" hidden>
+                                <div class="kvm-slider-label"><label for="kvmScrollSpeed">滚轮速度</label><output id="kvmScrollValue" for="kvmScrollSpeed">1.00×</output></div>
+                                <input id="kvmScrollSpeed" type="range" min="50" max="200" step="5" value="100">
+                                <div class="kvm-range-labels"><span>精细</span><span>标准 1×</span><span>快速</span></div>
                             </div>
-                            <p id="kvmScrollHint" class="subtitle kvm-hint" hidden>正在读取被控端设置；若一直未出现，请将两端更新到同一版本。</p>
-                        </div>
+                            <p id="kvmScrollHint" class="subtitle kvm-hint" hidden>正在读取被控端设置；请确保两端版本一致。</p>
+                            <div class="kvm-tuning-footer"><span id="kvmMouseSaveStatus" role="status">修改后统一保存</span><button type="button" class="btn btn--primary btn--sm" data-kvm="save-mouse" disabled>保存设置</button></div>
+                            <p class="kvm-hint">保存时会短暂重连。</p>
+                        </section>
                     </div>
-                    <details class="kvm-layout-advanced"><summary>精确设置与连接说明</summary><div class="kvm-form-row"><label for="kvmSide">对端位于本机</label><select id="kvmSide"><option value="left">左侧</option><option value="right">右侧</option><option value="top">上方</option><option value="bottom">下方</option></select><button type="button" class="btn btn--primary btn--sm" data-kvm="layout" disabled>应用方位</button></div><p class="subtitle">在主控端修改后同步到对端，应用时会短暂重连。关闭流转会立即停止输入共享，但保留配对。</p></details>
+                    <p class="kvm-layout-footnote">点击屏幕周围的方向即可保存位置。关闭流转会保留配对。</p>
                 </section>
-                <section class="card kvm-keyboard" id="kvmClipboardSettings" hidden>
-                    <div class="section-header"><div class="section-title"><h2>文本剪贴板同步</h2><span class="subtitle">仅在这两台已授权的电脑之间同步。</span></div><button type="button" class="btn btn--secondary" data-kvm="clipboard">开启文本同步</button></div>
-                    <p id="kvmClipboardStatus" class="subtitle" role="status"></p>
-                    <p class="subtitle">两端都需开启。连接后新复制的文本可双向同步，最大 1 MiB；图片和文件不参与同步。断线后暂停，恢复连接后从新复制的内容开始。</p>
-                </section>
-                <section class="card kvm-keyboard" id="kvmKeyboardSettings" hidden>
+                <details class="card kvm-keyboard" id="kvmKeyboardSettings" hidden><summary>跨屏按键映射<span>快捷键与自定义修饰键</span></summary>
                     <div class="section-title"><h2>跨屏按键映射</h2><span class="subtitle">仅影响被控端，本机快捷键保持原样。</span></div>
                     <div class="kvm-form-row"><label for="kvmKeyboardPreset">映射方式</label><select id="kvmKeyboardPreset"><option value="shortcuts">常用快捷键</option><option value="original">原始映射</option><option value="custom">自定义</option></select></div>
                     <div class="kvm-keymap-grid" id="kvmKeymapFields"><label>Command / Win → <select data-keymap="super_key" aria-label="Command / Win 映射到"><option value="ctrl">Ctrl</option><option value="super">Win / Command</option><option value="alt">Alt / Option</option><option value="shift">Shift</option></select></label><label>Control → <select data-keymap="ctrl" aria-label="Control 映射到"><option value="ctrl">Ctrl</option><option value="super">Win / Command</option><option value="alt">Alt / Option</option><option value="shift">Shift</option></select></label><label>Option / Alt → <select data-keymap="alt" aria-label="Option / Alt 映射到"><option value="ctrl">Ctrl</option><option value="super">Win / Command</option><option value="alt">Alt / Option</option><option value="shift">Shift</option></select></label><label>Shift → <select data-keymap="shift" aria-label="Shift 映射到"><option value="ctrl">Ctrl</option><option value="super">Win / Command</option><option value="alt">Alt / Option</option><option value="shift">Shift</option></select></label></div><p class="subtitle" id="kvmKeymapHint">常用快捷键会交换 Command/Win 与 Control。Mac 的 Command+C/V/A/Z 对应 Windows 的 Ctrl+C/V/A/Z。</p>
                     <button type="button" class="btn btn--secondary" data-kvm="keymap">保存映射</button><p class="subtitle">保存后会短暂重连。返回主控仍使用本机 Control + Alt + Escape。</p>
-                </section>
+                </details>
                 <details class="card kvm-events" id="kvmEventsSection" hidden><summary>最近的控制操作</summary>
                     <div class="section-title"><h2>最近的控制操作</h2><span class="subtitle">仅记录启动与停止等状态，不记录键入内容</span></div>
                     <ol id="kvmEvents"></ol>
@@ -424,20 +419,20 @@
                 <div class="section-header">
                     <div class="section-title">
                         <h2> JSON 格式化与校验</h2>
-                        <span class="subtitle">支持 2 空格/4 空格层级美化、单行精简压缩、语法纠错分析</span>
+                        <span class="subtitle">格式化、压缩与语法检查</span>
                     </div>
                     <div class="actions row row--wrap gap-2">
                         <button id="webBtnFormatJson2" class="btn btn--primary btn--sm" type="button">2 空格美化</button>
                         <button id="webBtnFormatJson4" class="btn btn--secondary btn--sm" type="button">4 空格美化</button>
-                        <button id="webBtnMinifyJson" class="btn btn--secondary btn--sm" type="button">压缩成单行</button>
-                        <button id="webBtnLoadSampleJson" class="btn btn--secondary btn--sm" type="button">载入示例</button>
+                        <button id="webBtnMinifyJson" class="btn btn--secondary btn--sm" type="button">压缩</button>
+                        <button id="webBtnLoadSampleJson" class="btn btn--secondary btn--sm" type="button">示例</button>
                         <button id="webBtnCopyJson" class="btn btn--secondary btn--sm" type="button">复制结果</button>
                         <button id="webBtnClearJson" class="btn btn--secondary btn--sm" type="button">清空</button>
                     </div>
                 </div>
 
                 <div class="json-editor-wrapper">
-                    <textarea id="webJsonInput" class="json-textarea" placeholder="在此粘贴或输入需要格式化/校验的 JSON 字符串..." aria-label="JSON 内容"></textarea>
+                    <textarea id="webJsonInput" class="json-textarea" placeholder="粘贴 JSON，开始编辑…" aria-label="JSON 内容"></textarea>
                     <div id="webJsonError" class="json-error-banner" hidden></div>
                 </div>
             </section>

@@ -30,7 +30,7 @@ async function main() {
     if(command==='kvm_keyboard_map'){s.keyboardMap=args.mapping;}
     if(command==='kvm_layout'){m.side=args.side;}
     if(command==='kvm_pointer_speed'){s.pointerSpeed=args.percent;}
-    if(command==='kvm_scroll_speed'){s.scrollSpeed=args.percent;}
+    if(command==='kvm_scroll_speed'){if(window.failScrollSave)throw Error('fixture scroll save failed');s.scrollSpeed=args.percent;}
     if(command==='kvm_role'){m.local.role=args.role;s.role=args.role;}
    }};
   });
@@ -56,7 +56,35 @@ async function main() {
   await page.evaluate(()=>{window.statusDelay=150;});
   await page.locator('[data-kvm="refresh"]').click();
   assert.equal(await page.locator('[data-kvm-speed="150"]').isDisabled(),false);
-  await page.locator('[data-kvm-speed="150"]').click();await page.waitForFunction(()=>window.state.pointerSpeed===150);
+  await page.locator('[data-kvm-speed="150"]').click();
+  assert.equal(await page.locator('#kvmPointerValue').innerText(),'1.50×');
+  assert.equal(await page.locator('[data-kvm-speed="150"]').getAttribute('aria-pressed'),'true');
+  await page.locator('[data-kvm="save-mouse"]').click();await page.waitForFunction(()=>window.state.pointerSpeed===150);
+  // Both controls are drafted and saved together, without resending unchanged values.
+  await page.evaluate(()=>{window.state.scrollSpeed=100;});
+  await page.locator('[data-kvm="refresh"]').click();
+  await page.waitForFunction(()=>!document.querySelector('#kvmScrollSpeed').disabled);
+  await page.locator('#kvmPointerSpeed').fill('125');
+  await page.locator('#kvmScrollSpeed').fill('175');
+  await page.locator('[data-kvm="refresh"]').click();
+  assert.equal(await page.locator('#kvmPointerSpeed').inputValue(),'125');
+  assert.equal(await page.locator('#kvmScrollSpeed').inputValue(),'175');
+  await page.locator('[data-kvm="save-mouse"]').click();
+  await page.waitForFunction(()=>window.state.pointerSpeed===125&&window.state.scrollSpeed===175);
+  assert.equal(await page.locator('[data-kvm="save-mouse"]').isDisabled(),true);
+  // If the second backend save fails, only its draft remains pending for retry.
+  await page.evaluate(()=>{window.failScrollSave=true;});
+  await page.locator('#kvmPointerSpeed').fill('150');await page.locator('#kvmScrollSpeed').fill('125');
+  await page.locator('[data-kvm="save-mouse"]').click();await page.locator('#kvmError').waitFor({state:'visible'});
+  assert.equal(await page.evaluate(()=>window.state.pointerSpeed),150);
+  assert.equal(await page.locator('#kvmScrollSpeed').inputValue(),'125');
+  assert.equal(await page.locator('[data-kvm="save-mouse"]').isDisabled(),false);
+  const pointerSaves=await page.evaluate(()=>window.calls.filter(c=>c.command==='kvm_pointer_speed').length);
+  await page.evaluate(()=>{window.failScrollSave=false;});await page.locator('[data-kvm="save-mouse"]').click();
+  await page.waitForFunction(()=>window.state.scrollSpeed===125);
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='kvm_pointer_speed').length),pointerSaves);
+  assert.equal(await page.locator('#kvmSide').count(),0,'screen board is the only position control');
+  assert.equal(await page.locator('.kvm-hero [data-kvm="clipboard"]').count(),1);
   await page.evaluate(()=>{window.statusDelay=0;});
   await page.evaluate(()=>{window.state.events=[{time:1,message:'已开启流转'}]});await page.locator('[data-kvm="refresh"]').click();
   await page.evaluate(()=>{window.savedEventNode=document.querySelector('#kvmEvents li');});
@@ -72,6 +100,7 @@ async function main() {
   assert.equal(await page.locator('[data-kvm="clipboard"]').innerText(),'关闭文本同步');
   await page.locator('[data-kvm="clipboard"]').click();
   await page.waitForFunction(()=>!window.state.clipboard.enabled);
+  await page.locator('#kvmKeyboardSettings > summary').click();
   await page.locator('#kvmKeyboardPreset').selectOption('custom');
   await page.locator('[data-keymap="alt"]').selectOption('shift');
   await page.locator('[data-keymap="shift"]').selectOption('alt');
@@ -83,7 +112,7 @@ async function main() {
   await page.waitForFunction(()=>window.state.keyboardMap.ctrl==='ctrl');
   await page.evaluate(()=>{window.state.role='target';window.state.managed.local.role='target';window.state.scrollSpeed=100;});
   await page.locator('[data-kvm="refresh"]').click();await page.locator('#kvmScrollSettings').waitFor({state:'visible'});
-  await page.locator('#kvmScrollSpeed').fill('150');await page.locator('[data-kvm="scroll-speed"]').click();
+  await page.locator('#kvmScrollSpeed').fill('150');await page.locator('[data-kvm="save-mouse"]').click();
   await page.waitForFunction(()=>window.state.scrollSpeed===150);
   assert.equal(await page.locator('[data-kvm-side="left"]').isDisabled(),true);
   await page.evaluate(()=>{window.state.role='source';window.state.managed.local.role='source';});await page.locator('[data-kvm="refresh"]').click();
@@ -106,15 +135,38 @@ async function main() {
   await page.evaluate(()=>{document.querySelector('main').hidden=true;document.dispatchEvent(new CustomEvent('wenbox:viewchange'));});const count=await page.evaluate(()=>window.calls.length);await page.waitForTimeout(3800);assert.equal(await page.evaluate(()=>window.calls.length),count);
   if (process.env.KVM_SCREEN_DIR) {
    fs.mkdirSync(process.env.KVM_SCREEN_DIR,{recursive:true});
-   for (const css of ['tokens.css','style.css','workspace.css','kvm.css','polish.css']) await page.addStyleTag({path:'app/src/main/assets/web/'+css});
-   await page.evaluate(()=>{window.failStatus=false;document.body.dataset.activeView='view-kvm';document.body.style.display='block';document.body.style.overflow='auto';document.querySelector('main').hidden=false;window.state.platform='macOS';window.state.inputConnected=true;window.state.backendRunning=true;window.state.managed.enabled=true;window.state.managed.local.name='我的 Mac';window.state.managed.side='left';window.state.managed.peer={id:'peer',name:'工作电脑 · Windows',ip:'192.168.1.2'};window.state.permissions={accessibility:true,inputMonitoring:true};document.querySelector('#kvmDetails').open=false;document.dispatchEvent(new CustomEvent('wenbox:viewchange'));});
-   for (const [theme,width] of [['light',1280],['dark',1280],['light',390]]) {
-    await page.setViewportSize({width,height:1100});await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
-    await page.waitForTimeout(200);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-    await page.screenshot({path:`${process.env.KVM_SCREEN_DIR}/connected-${theme}-${width}.png`,fullPage:true});
+   const shell=await browser.newPage();await shell.emulateMedia({reducedMotion:'reduce'});shell.on('pageerror',e=>errors.push(e.message));
+   const shellHtml=html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'').replace(/<link\b[^>]*>/gi,'').replace('src="logo.png"','src="data:image/png;base64,'+fs.readFileSync('app/src/main/assets/web/logo.png').toString('base64')+'"');
+   await shell.setContent(shellHtml);
+   const state=await page.evaluate(()=>{const s=structuredClone(window.state);s.platform='macOS';s.role='source';s.inputConnected=true;s.pointerSpeed=125;s.scrollSpeed=100;s.backendRunning=true;s.managed.enabled=true;s.managed.local.role='source';s.managed.local.name='我的 MacBook';s.managed.side='left';s.managed.peer={id:'peer',name:'工作电脑 · Windows',ip:'192.168.1.2'};s.permissions={accessibility:true,inputMonitoring:true};s.clipboard.enabled=true;s.clipboard.message='文本同步已开启 · 仅同步新复制的文本';return s;});
+   await shell.evaluate(state=>{
+    window.__TAURI__={invoke:async()=>structuredClone(state)};
+    window.WenBox={copyText:async()=>{}};
+    document.body.dataset.activeView='view-kvm';document.body.dataset.roomMode='host';
+    for(const main of document.querySelectorAll('main.primary-view'))main.hidden=main.id!=='view-kvm';
+    for(const nav of document.querySelectorAll('.nav-tab')){const active=nav.dataset.view==='view-kvm';nav.classList.toggle('active',active);nav.setAttribute('aria-pressed',String(active));}
+    for(const [id,text] of Object.entries({roomName:'设计工作室',roomRoleBadge:'房主',roomLock:'公开房间',workspaceTitle:'键鼠流转',workspaceSubtitle:'让设备之间的协作更自然',chatMyNicknameDisplay:'我的 MacBook',serviceHealthText:'服务正常',clientVersion:'v1.4.12',chatOnlineMemberBadge:'2 人在线 · 查看成员'}))document.getElementById(id).textContent=text;
+    document.getElementById('serviceHealth').dataset.state='ready';
+   },state);
+   for(const css of ['tokens.css','style.css','workspace.css','kvm.css','polish.css'])await shell.addStyleTag({path:'app/src/main/assets/web/'+css});
+   await shell.addScriptTag({path:'app/src/main/assets/web/kvm.js'});
+   await shell.evaluate(()=>document.dispatchEvent(new CustomEvent('wenbox:viewchange')));
+   await shell.locator('#kvmLayoutCard').waitFor({state:'visible'});
+   for(const [theme,width,height] of [['light',1440,1000],['dark',1440,1000],['light',1024,900],['light',768,1000],['light',390,844],['dark',390,844]]){
+    await shell.setViewportSize({width,height});await shell.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
+    await shell.waitForTimeout(250);
+    assert.equal(await shell.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`KVM overflow at ${width}`);
+    const buttons=await shell.locator('.kvm-hero-actions button:visible').all();assert.equal(buttons.length,4);
+    const boxes=await Promise.all(buttons.map(b=>b.boundingBox()));
+    assert.ok(Math.abs(boxes[0].width-boxes[1].width)<2,'balanced action widths');
+    assert.ok(Math.abs(boxes[0].y-boxes[1].y)<2,'first action row aligned');
+    assert.ok(Math.abs(boxes[2].y-boxes[3].y)<2,'second action row aligned');
+    if(width===1440){const save=await shell.locator('[data-kvm="save-mouse"]').boundingBox();assert.ok(save.y+save.height<height,'mouse settings fit in desktop viewport');}
+    await shell.screenshot({path:`${process.env.KVM_SCREEN_DIR}/workspace-${theme}-${width}.png`,fullPage:false});
    }
+   await shell.close();
   }
-  assert.deepEqual(errors,[]);console.log('PASS M2 UI: native boundary, device discovery, SAS display, cancel/confirm, no early trust UI, diagnostics redaction, layout, enable/stop/revoke, stale state and polling cleanup');
+  assert.deepEqual(errors,[]);console.log('PASS UI redesign: combined speed saves and partial retry, direct screen controls, top clipboard, responsive action grid; M2: native boundary, device discovery, SAS display, cancel/confirm, no early trust UI, diagnostics redaction, layout, enable/stop/revoke, stale state and polling cleanup');
  }finally{await browser.close();}
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

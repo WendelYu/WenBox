@@ -6,24 +6,24 @@
 -->
 <resources>
     <!-- 表面 -->
-    <color name="bg">#111317</color>
-    <color name="surface_1">#181B21</color>
-    <color name="surface_2">#20242C</color>
-    <color name="surface_3">#2A2F39</color>
-    <color name="border">#2A2F39</color>
-    <color name="border_strong">#3A4150</color>
+    <color name="bg">#101116</color>
+    <color name="surface_1">#1B1C26</color>
+    <color name="surface_2">#222430</color>
+    <color name="surface_3">#2B2E3E</color>
+    <color name="border">#303241</color>
+    <color name="border_strong">#44475D</color>
 
     <!-- 文字 -->
-    <color name="text_1">#ECEEF2</color>
-    <color name="text_2">#A3AAB8</color>
-    <color name="text_3">#8A92A2</color>
-    <color name="text_disabled">#5B6372</color>
+    <color name="text_1">#F2F3FA</color>
+    <color name="text_2">#B2B5C9</color>
+    <color name="text_3">#8B90A8</color>
+    <color name="text_disabled">#565C73</color>
 
     <!-- 语义 -->
-    <color name="primary">#2563EB</color>
-    <color name="primary_hover">#1D4ED8</color>
-    <color name="primary_fg">#6EA8FE</color>
-    <color name="primary_soft">#292563EB</color>
+    <color name="primary">#635BFF</color>
+    <color name="primary_hover">#5148DF</color>
+    <color name="primary_fg">#A39DFF</color>
+    <color name="primary_soft">#24857BFF</color>
     <color name="success">#047857</color>
     <color name="success_fg">#34D399</color>
     <color name="success_soft">#2434D399</color>
@@ -34,4 +34,5 @@
     <color name="danger_soft">#24F87171</color>
     <color name="info">#06B6D4</color>
     <color name="chat_accent_purple">#A78BFA</color>
+    <color name="on_primary">#FFFFFF</color>
 </resources>

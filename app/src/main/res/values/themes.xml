@@ -1,17 +1,24 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <style name="Theme.LanDrop" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.WenBox.Base" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorSecondary">@color/primary_fg</item>
+        <item name="colorSecondaryContainer">@color/primary_soft</item>
+        <item name="colorOnSecondaryContainer">@color/primary_fg</item>
+        <item name="materialButtonStyle">@style/Widget.WenBox.Button.Primary</item>
+        <item name="materialCardViewStyle">@style/Widget.WenBox.Card</item>
         <item name="colorPrimary">@color/primary</item>
-        <item name="colorOnPrimary">@color/text_1</item>
+        <item name="colorOnPrimary">@color/on_primary</item>
         <item name="colorSurface">@color/surface_1</item>
         <item name="colorOnSurface">@color/text_1</item>
         <item name="colorOutline">@color/border</item>
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>
-        <!-- 深色主题下状态栏图标必须是浅色；浅色主题（Phase 4）在 values/ 覆盖 -->
-        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
-        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">false</item>
+        <!-- 浅色背景使用深色系统图标；夜间主题覆盖为浅色图标。 -->
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
     </style>
+
+    <style name="Theme.LanDrop" parent="Theme.WenBox.Base" />
 
     <!-- 透明指示器，避免选中 Tab 时出现突兀的白色盖字药丸框 -->
     <style name="Widget.Material3.BottomNavigationView.ActiveIndicator.Transparent" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
@@ -46,6 +53,8 @@
         <item name="android:minHeight">@dimen/touch_min</item>
         <item name="android:textSize">@dimen/fs_md</item>
         <item name="backgroundTint">@color/primary</item>
+        <item name="android:textColor">@color/on_primary</item>
+        <item name="android:textAllCaps">false</item>
         <item name="cornerRadius">@dimen/r_md</item>
     </style>
 

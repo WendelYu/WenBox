@@ -50,7 +50,7 @@
             android:background="@drawable/bg_btn_danger"
             android:paddingHorizontal="18dp"
             android:text="@string/dialog_ok"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/qr_background"
             android:textSize="14sp"
             android:textStyle="bold" />
     </LinearLayout>

@@ -34,7 +34,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:textColor="@color/chat_text_subtle"
-            android:textSize="11sp"
+            android:textSize="12sp"
             android:fontFamily="monospace"
             android:layout_marginEnd="8dp"
             tools:text="14:32:05" />
@@ -58,9 +58,9 @@
         android:layout_height="wrap_content"
         android:textColor="@color/chat_text_main"
         android:textColorLink="@color/chat_accent_blue"
-        android:textSize="13.5sp"
+        android:textSize="14sp"
         android:lineSpacingExtra="3dp"
-        android:typeface="monospace"
+        android:fontFamily="sans"
         android:textIsSelectable="true"
         tools:text="这是来自设备发送的文本或代码" />
 
@@ -73,7 +73,7 @@
         android:layout_marginBottom="2dp"
         app:cardCornerRadius="8dp"
         app:cardElevation="0dp"
-        app:cardBackgroundColor="#181818"
+        app:cardBackgroundColor="@color/media_surface"
         android:visibility="gone">
 
         <FrameLayout
@@ -95,11 +95,11 @@
                 android:layout_height="wrap_content"
                 android:layout_gravity="bottom|end"
                 android:layout_margin="4dp"
-                android:background="#B3000000"
+                android:background="@color/media_scrim"
                 android:paddingHorizontal="6dp"
                 android:paddingVertical="2dp"
                 android:text="@string/cd_view_original"
-                android:textColor="#E0E0E0"
+                android:textColor="@color/media_foreground"
                 android:textSize="10sp" />
         </FrameLayout>
     </androidx.cardview.widget.CardView>

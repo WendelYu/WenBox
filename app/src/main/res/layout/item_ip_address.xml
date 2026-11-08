@@ -7,7 +7,7 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginBottom="8dp"
-    app:cardBackgroundColor="#162032"
+    app:cardBackgroundColor="@color/surface_2"
     app:cardCornerRadius="10dp"
     app:strokeColor="@color/border_color"
     app:strokeWidth="1dp">
@@ -35,10 +35,10 @@
                     android:id="@+id/tvInterfaceBadge"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:background="#223656"
+                    android:background="@color/border"
                     android:paddingHorizontal="6dp"
                     android:paddingVertical="2dp"
-                    android:textColor="#60A5FA"
+                    android:textColor="@color/primary_fg"
                     android:textSize="11sp"
                     android:textStyle="bold"
                     tools:text="🔌 有线网卡 (eth0)" />
