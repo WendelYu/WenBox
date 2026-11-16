@@ -12,3 +12,9 @@ not modified, so its existing permission identity stays valid.
 
 The engine injects the dylib with `DYLD_INSERT_LIBRARIES` only on macOS.
 Windows builds do not compile or ship this file.
+
+WenBox also passes `WENBOX_INPUT_PARENT_PID` when launching its input core.
+The shim checks that identity at load time and every 250 ms, exiting if the
+parent disappears. This releases input capture and the listening port even
+after a WenBox crash or forced termination, when normal shutdown cannot run.
+Loading the shim without this variable retains standalone behavior.

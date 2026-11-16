@@ -322,6 +322,7 @@ impl Engine {
             if !shim.is_file() { return Err("安装包缺少 macOS 输入兼容组件，请使用完整安装包".into()); }
             let mut child = Command::new(self.binary())
                 .env("DYLD_INSERT_LIBRARIES", shim)
+                .env("WENBOX_INPUT_PARENT_PID", std::process::id().to_string())
                 .arg(if profile.role == Role::Source {
                     "server"
                 } else {

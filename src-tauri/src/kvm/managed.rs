@@ -501,6 +501,11 @@ impl Managed {
         let target = s.saved.role == Role::Target;
         drop(s);
         if target {
+            // A source's last report cannot prove that this receiver is alive.
+            // Refresh service health before reusing the cached remote status.
+            if !lock(&self.engine).view().1 {
+                return None;
+            }
             lock(&self.remote_input)
                 .filter(|(at, _)| at.elapsed() < Duration::from_secs(10))
                 .map(|(_, connected)| connected)
@@ -1330,6 +1335,26 @@ mod tests {
         let client = Channel::connect(&id, addr, pin.as_deref());
         let server = t.join().unwrap();
         Ok((client?, server?))
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn receiver_connection_requires_a_live_local_core() {
+        let root = tempfile::tempdir().unwrap();
+        let app = fixture(root.path(), Role::Target);
+        lock(&app.state).saved.peer = Some(Peer {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "source".into(),
+            platform: "macOS".into(),
+            fingerprint: "ab".repeat(32),
+            ip: "192.168.1.2".parse().unwrap(),
+            local_ip: "192.168.1.1".parse().unwrap(),
+        });
+        *lock(&app.remote_input) = Some((Instant::now(), true));
+        assert_eq!(app.input_connected(), None);
+        lock(&app.engine).install_health_fixture(tempfile::tempdir().unwrap());
+        assert_eq!(app.input_connected(), Some(true));
+        lock(&app.engine).emergency_stop().unwrap();
+        assert_eq!(app.input_connected(), None, "cached peer status must not mask a stopped receiver");
     }
     #[cfg(target_os = "macos")]
     #[test]

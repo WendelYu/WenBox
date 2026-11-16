@@ -20,6 +20,50 @@
 
 #include <Carbon/Carbon.h>
 #include <pthread.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+/* RunEvent::Exit cannot run after a crash or SIGKILL. The input core must
+ * never outlive its owning WenBox process and keep capturing input/ports.
+ * Only WenBox-launched cores opt in; standalone shim users are unaffected. */
+static pid_t g_wenbox_parent;
+
+static void *wenbox_watch_parent(void *unused)
+{
+    (void)unused;
+    for (;;) {
+        if (getppid() != g_wenbox_parent) _exit(0);
+        usleep(250000);
+    }
+    return NULL;
+}
+
+__attribute__((constructor)) static void wenbox_guard_parent(void)
+{
+    const char *value = getenv("WENBOX_INPUT_PARENT_PID");
+    if (!value) return;
+    char *end = NULL;
+    errno = 0;
+    long parent = strtol(value, &end, 10);
+    if (errno || end == value || *end || parent <= 1 || parent > INT_MAX) {
+        fputs("WenBox input parent identity is invalid\n", stderr);
+        _exit(1);
+    }
+    g_wenbox_parent = (pid_t)parent;
+    // Helpers launched by the core are not direct children of WenBox.
+    unsetenv("WENBOX_INPUT_PARENT_PID");
+    // Also cover the owner exiting before this library finishes loading.
+    if (getppid() != g_wenbox_parent) _exit(0);
+    pthread_t watcher;
+    if (pthread_create(&watcher, NULL, wenbox_watch_parent, NULL) != 0) {
+        fputs("WenBox input parent monitor could not start\n", stderr);
+        _exit(1);
+    }
+    pthread_detach(watcher);
+}
 
 static pthread_mutex_t g_tis_serial = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
 
