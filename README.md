@@ -205,7 +205,7 @@ node scripts/check-direct-connection.cjs
 
 ## 更新与发布
 
-当前代码版本为 **v1.4.0**，详细变更见 [更新说明](docs/RELEASE_NOTES.md)。本轮主要增加 USB 网卡直连、网卡热插拔与重连支持，重做房间、昵称、成员、归档和传输 UI，修复 WebKit 焦点恢复，并配置 macOS 通用包与 Windows 离线运行时。
+最新发布版本与安装包见 [GitHub Releases](https://github.com/WendelYu/WenBox/releases/latest)。源码版本以 [package.json](package.json) 为准，逐版变更见 [更新说明](docs/RELEASE_NOTES.md)。
 
 - `auto-release.yml`：main/master 的非纯文档更新触发多平台构建，成功后按 `package.json` 版本发布；发布新版本前应同步提升各端版本号。
 - `release.yml`：推送 `v*` 标签或手动选择标签发布。
