@@ -1,0 +1,2 @@
+# Generated parser bundle contains upstream multiline string literals.
+app/src/main/assets/web/api-debug.js whitespace=-blank-at-eol

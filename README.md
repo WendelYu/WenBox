@@ -98,7 +98,7 @@ WenBox 当前负责**传输**，不监听构建目录、不自动发送新产物
 
 前往 [GitHub Releases](https://github.com/WendelYu/WenBox/releases)，选择已成功发布的版本。源码或工作流更新不代表所有平台安装包已经构建完成。
 
-- **Windows 10 / 11**：优先下载文件名含 `Installer` 的 EXE，安装包配置为携带离线 WebView2 安装器。裸 EXE 需要电脑已安装 WebView2，不适合缺少运行时的离线现场。单位安装策略仍需事先确认。
+- **Windows 10 / 11 x64**：需要键鼠流转时下载 `Installer.exe`。电脑已有 Microsoft Edge WebView2 时，也可以直接运行 `Portable-x64.exe`，使用局域网快传和工具。免安装版不提供键鼠流转。
 - **macOS 12.3+**：下载 `WenBox-macOS-v版本号-universal.dmg`，打开后拖入“应用程序”；也可解压同名 ZIP。通用包包含 Intel 与 Apple Silicon 两种架构，附有 `SHA256SUMS-macOS-v版本号.txt`。
 - **Android 8.0+**：下载 APK 安装。当前工作流输出 Debug APK；后台传输会受系统电池优化和厂商策略影响，不保证永久保活。
 - **浏览器**：访问房主的 `http://IP:9527`，无需单独安装。浏览器访问的是房主提供的网页，不会独立启动 UDP 发现服务。Linux / iPhone / iPad 可使用可用的现代浏览器，当前不提供对应原生安装包。

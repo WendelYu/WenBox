@@ -12,7 +12,15 @@
         };
         async function request(ctx, path, init = {}) {
             const response = await options.fetch(ctx.base + path, { ...init, headers: { 'X-Room-Token': ctx.token || '', 'X-Share-Key': ctx.key, ...init.headers } });
-            if (!response.ok) throw new Error(response.status === 404 ? '房主版本不支持按需分享，请更新房主客户端' : `分享请求失败 (${response.status})`);
+            if (!response.ok) {
+                if (response.status === 404) throw new Error('房主版本不支持按需分享，请更新房主客户端');
+                let message = '';
+                try {
+                    const body = await response.json();
+                    if (typeof body?.message === 'string') message = body.message.trim();
+                } catch (_) { /* Non-JSON responses still retain the HTTP status. */ }
+                throw new Error(`分享请求失败 (${response.status})${message ? '：' + message : ''}`);
+            }
             return response.json();
         }
         async function rawUpload(file, ctx, job, controller) {
@@ -76,7 +84,14 @@
                 const entries = Array.from(list, file => ({ file: options.prepare ? options.prepare(file, ctx) : file, original: file, clientId: uuid() }));
                 if (!entries.length) return [];
                 if (entries.length > 32) throw new Error('每次最多分享 32 个文件');
-                const response = await request(active, '/api/offers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ownerKey: active.key, senderName: options.sender(), scope, files: entries.map(e => ({ clientId: e.clientId, name: e.file.name, size: e.file.size, plainSize: e.original.size, encrypted: !!e.file.virtualEncrypted, mimeType: e.original.type || 'application/octet-stream' })) }) });
+                const metadata = entries.map(e => ({
+                    clientId: e.clientId, name: e.file.name, size: e.file.size,
+                    mimeType: e.original.type || 'application/octet-stream',
+                    // Older hosts reject unknown fields. Plain files need only the
+                    // original schema; encrypted files must retain their metadata.
+                    ...(e.file.virtualEncrypted ? { plainSize: e.original.size, encrypted: true } : {})
+                }));
+                const response = await request(active, '/api/offers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ownerKey: active.key, senderName: options.sender(), scope, files: metadata }) });
                 if (current !== generation) { await request(active, '/api/offers/revoke', { method: 'POST' }); return []; }
                 for (const offer of response.files || []) {
                     const entry = entries.find(e => e.clientId === offer.clientId);

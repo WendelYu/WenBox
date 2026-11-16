@@ -2,6 +2,11 @@
     'use strict';
     const view = document.getElementById('view-kvm');
     if (!view) return;
+    if (window.__WENBOX_PORTABLE__) {
+        document.querySelector('[data-view="view-kvm"]')?.remove();
+        view.remove();
+        return;
+    }
     const node = id => document.getElementById(id);
     const text = (id, value) => { if (node(id).textContent !== String(value)) node(id).textContent = value; };
     const errorBox = node('kvmError');

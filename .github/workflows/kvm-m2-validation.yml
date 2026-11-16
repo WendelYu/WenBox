@@ -18,6 +18,7 @@ jobs:
           node-version: 24
       - name: Test native pairing and shared logic
         run: |
+          npm ci --ignore-scripts
           npm test
           cargo test --locked --manifest-path src-tauri/Cargo.toml --bin wenbox
       - name: Check privileged installer helper syntax

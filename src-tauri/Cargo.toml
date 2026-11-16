@@ -1,6 +1,6 @@
 [package]
 name = "wenbox"
-version = "1.4.14"
+version = "1.4.15"
 description = "WenBox - 局域网跨设备互传与多端百宝箱"
 authors = ["Wendel"]
 edition = "2021"
@@ -23,7 +23,7 @@ hostname = "=0.4.2"
 base64 = "0.21"
 rust-embed = "8.2"
 mime_guess = "2.0"
-ureq = { version = "2.12", default-features = false, features = ["json"] }
+ureq = { version = "2.12", default-features = false, features = ["json", "tls"] }
 url = "2.5"
 dirs-next = "2.0"
 tempfile = "=3.27.0"
@@ -41,3 +41,4 @@ objc = "=0.2.7"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+portable = []

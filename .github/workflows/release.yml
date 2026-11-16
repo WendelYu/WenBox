@@ -92,6 +92,10 @@ jobs:
       - name: Test desktop backend
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
+      - name: Build and verify Windows x64 portable EXE
+        shell: powershell
+        run: ./scripts/package-windows-portable.ps1
+
       - name: Build Tauri Windows EXE
         run: npx --yes @tauri-apps/cli@1.5 build --bundles nsis
 
@@ -114,6 +118,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-exe
+          if-no-files-found: error
           retention-days: 1
           path: release-win/*
 

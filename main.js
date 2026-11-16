@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, ipcMain, clipboard, shell } = require('electron');
 const path = require('path');
 const { startDesktopServer } = require('./desktop-server');
+const { apiRequest } = require('./api-debug-client');
 let desktopServer;
 function isAppPage(value) {
   try { const url = new URL(value); return url.origin === desktopServer?.origin && ['/', '/index.html'].includes(url.pathname) && !url.username && !url.password; } catch (_) { return false; }
@@ -12,6 +13,14 @@ ipcMain.handle('wenbox:copy-text', (event, text) => {
   }
   if (typeof text !== 'string') throw new TypeError('剪贴板内容必须是文本');
   clipboard.writeText(text);
+});
+
+let activeApiRequests = 0;
+ipcMain.handle('wenbox:api-request', async (event, request) => {
+  if (event.senderFrame !== event.sender.mainFrame || !isAppPage(event.senderFrame.url)) throw Error('仅允许本机桌面工具发起调试请求');
+  if (activeApiRequests >= 4) throw Error('调试请求过多，请稍后重试');
+  activeApiRequests++;
+  try { return await apiRequest(request); } finally { activeApiRequests--; }
 });
 
 function createWindow() {

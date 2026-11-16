@@ -1,0 +1,24 @@
+{
+  "package": {
+    "productName": "WenBox Portable"
+  },
+  "tauri": {
+    "bundle": {
+      "identifier": "com.wendel.wenbox.portable",
+      "resources": []
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "WenBox 免安装版",
+        "width": 1100,
+        "height": 780,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "fileDropEnabled": false
+      }
+    ]
+  }
+}

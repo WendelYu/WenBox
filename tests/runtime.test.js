@@ -120,7 +120,7 @@ test('empty success responses remain valid', async () => {
     assert.equal(await response.text(), '');
 });
 
-test('Electron preload works with sandbox-only modules and exposes one text IPC method', async () => {
+test('Electron preload works with sandbox-only modules and exposes only clipboard and API request IPC methods', async () => {
     let exposed, args;
     const ipcRenderer = { invoke: async (...value) => { args = value; } };
     vm.runInNewContext(readFileSync('preload.js', 'utf8'), {
@@ -131,9 +131,12 @@ test('Electron preload works with sandbox-only modules and exposes one text IPC 
             } } };
         }
     });
-    assert.deepEqual(Object.keys(exposed), ['writeText']);
+    assert.deepEqual(Object.keys(exposed).sort(), ['apiRequest', 'writeText']);
     await exposed.writeText('中文消息');
     assert.deepEqual(args, ['wenbox:copy-text', '中文消息']);
+    const request = { url: 'https://example.com', method: 'GET' };
+    await exposed.apiRequest(request);
+    assert.deepEqual(args, ['wenbox:api-request', request]);
 });
 
 

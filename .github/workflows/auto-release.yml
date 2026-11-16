@@ -84,6 +84,7 @@ jobs:
         run: |
           node --check app/src/main/assets/web/app.js
           node --check app/src/main/assets/web/runtime.js
+          npm ci --ignore-scripts
           npm test
 
       - name: Test desktop backend
@@ -94,6 +95,10 @@ jobs:
           npm install --ignore-scripts --no-save --package-lock=false playwright@1.62.1
           npx playwright install chromium
           node scripts/check-native-transport.cjs
+
+      - name: Build and verify Windows x64 portable EXE
+        shell: powershell
+        run: ./scripts/package-windows-portable.ps1
 
       - name: Build Tauri Windows EXE
         run: npx --yes @tauri-apps/cli@1.5 build --bundles nsis
@@ -115,6 +120,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-exe
+          if-no-files-found: error
           retention-days: 1
           path: release-win/*
 

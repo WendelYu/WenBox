@@ -2,7 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod content_crypto;
+mod api_debug;
 mod key_exchange;
+#[cfg(not(feature = "portable"))]
 mod kvm;
 mod demand_files;
 mod network;
@@ -2794,6 +2796,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
             }
 
             // 1. 获取本端信息 (供前端展示自身 IP 与服务状态)
+            #[cfg(not(feature = "portable"))]
             if url == "/api/kvm/info" && method == Method::Get {
                 let body = kvm::public_info().map(|v| serde_json::to_string(&v).unwrap_or_default()).unwrap_or_else(|| "{}".into());
                 let _ = req.respond(with_cors!(Response::from_string(body).with_header(Header::from_bytes("Content-Type", "application/json").unwrap())));
@@ -3657,10 +3660,17 @@ fn main() {
 
     // 软件打开即自动创建一个免密房间并对外广播:
     // 局域网内其他设备通过 IP 访问后无需任何操作即可直接加入互传
-    let kvm_state = state.clone();
-    tauri::Builder::default()
-        .manage(state)
-        .setup(move |app| {
+    let builder = tauri::Builder::default();
+    #[cfg(feature = "portable")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<_, ()>::new("portable")
+            .js_init_script("window.__WENBOX_PORTABLE__ = true;".into())
+            .build(),
+    );
+    #[cfg(not(feature = "portable"))]
+    let builder = {
+        let kvm_state = state.clone();
+        builder.setup(move |app| {
             let result = (|| -> Result<(), String> {
                 let root = app.path_resolver().app_config_dir().ok_or("无法定位流转设置目录")?.join("kvm");
                 let resources = app.path_resolver().resource_dir().ok_or("无法定位应用资源")?;
@@ -3669,63 +3679,79 @@ fn main() {
             if let Err(error) = result { kvm::initialization_failed(error); }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            kvm::kvm_status,
-            kvm::kvm_start,
-            kvm::kvm_stop,
-            kvm::kvm_open_settings,
-            kvm::kvm_pointer_speed,
-            kvm::kvm_scroll_speed,
-            kvm::kvm_keyboard_map,
-            kvm::kvm_clipboard,
-            kvm::kvm_release,
-            kvm::kvm_pairing_window,
-            kvm::kvm_discover,
-            kvm::kvm_pair,
-            kvm::kvm_confirm,
-            kvm::kvm_forget,
-            kvm::kvm_layout,
-            kvm::kvm_role,
-            copy_image,
-            clipboard_image,
-            clipboard_files::clipboard_files,
-            clipboard_files::clipboard_file_chunk,
-            native_transport::native_request,
-            native_transport::native_upload_begin,
-            native_transport::native_upload_chunk,
-            native_transport::native_upload_finish,
-            native_transport::native_upload_progress,
-            native_transport::native_upload_cancel,
-            get_local_ip,
-            get_all_lan_ips_cmd,
-            set_room_host_ip_cmd,
-            get_lan_devices,
-            connect_device_node,
-            create_room_cmd,
-            close_room_cmd,
-            get_room_status_cmd,
-            get_discovered_rooms_cmd,
-            get_room_members_cmd,
-            join_remote_room_cmd,
-            add_share_file,
-            remove_share_file,
-            clear_share_files,
-            get_received_files,
-            open_download_folder,
-            reveal_received_file,
-            fetch_node_files,
-            save_remote_file_to_directory,
-            save_file_to_directory,
-            upload_local_file_to_remote,
-            fetch_node_messages,
-            send_node_message,
-            send_room_probe_cmd,
-            clear_chat_messages_cmd
-        ])
+    };
+    #[cfg(not(feature = "portable"))]
+    let kvm_commands: fn(tauri::Invoke) = tauri::generate_handler![
+        kvm::kvm_status,
+        kvm::kvm_start,
+        kvm::kvm_stop,
+        kvm::kvm_open_settings,
+        kvm::kvm_pointer_speed,
+        kvm::kvm_scroll_speed,
+        kvm::kvm_keyboard_map,
+        kvm::kvm_clipboard,
+        kvm::kvm_release,
+        kvm::kvm_pairing_window,
+        kvm::kvm_discover,
+        kvm::kvm_pair,
+        kvm::kvm_confirm,
+        kvm::kvm_forget,
+        kvm::kvm_layout,
+        kvm::kvm_role,
+    ];
+    let commands: fn(tauri::Invoke) = tauri::generate_handler![
+        api_debug::api_debug_request,
+        copy_image,
+        clipboard_image,
+        clipboard_files::clipboard_files,
+        clipboard_files::clipboard_file_chunk,
+        native_transport::native_request,
+        native_transport::native_upload_begin,
+        native_transport::native_upload_chunk,
+        native_transport::native_upload_finish,
+        native_transport::native_upload_progress,
+        native_transport::native_upload_cancel,
+        get_local_ip,
+        get_all_lan_ips_cmd,
+        set_room_host_ip_cmd,
+        get_lan_devices,
+        connect_device_node,
+        create_room_cmd,
+        close_room_cmd,
+        get_room_status_cmd,
+        get_discovered_rooms_cmd,
+        get_room_members_cmd,
+        join_remote_room_cmd,
+        add_share_file,
+        remove_share_file,
+        clear_share_files,
+        get_received_files,
+        open_download_folder,
+        reveal_received_file,
+        fetch_node_files,
+        save_remote_file_to_directory,
+        save_file_to_directory,
+        upload_local_file_to_remote,
+        fetch_node_messages,
+        send_node_message,
+        send_room_probe_cmd,
+        clear_chat_messages_cmd
+    ];
+    builder
+        .manage(state)
+        .invoke_handler(move |invoke: tauri::Invoke| {
+            #[cfg(not(feature = "portable"))]
+            if invoke.message.command().starts_with("kvm_") {
+                kvm_commands(invoke);
+                return;
+            }
+            commands(invoke);
+        })
         .build(tauri::generate_context!())
         .expect("error while building wenbox application")
-        .run(|_app, event| {
-            if matches!(event, tauri::RunEvent::Exit) {
+        .run(|_app, _event| {
+            #[cfg(not(feature = "portable"))]
+            if matches!(_event, tauri::RunEvent::Exit) {
                 kvm::shutdown();
             }
         });

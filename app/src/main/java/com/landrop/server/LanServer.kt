@@ -81,6 +81,8 @@ class LanServer(
                 uri == "/" || uri == "/index.html" -> serveAsset("web/index.html", "text/html; charset=UTF-8")
                 uri == "/style.css" -> serveAsset("web/style.css", "text/css; charset=UTF-8")
                 uri == "/app.js" -> serveAsset("web/app.js", "application/javascript; charset=UTF-8")
+                uri == "/api-debug.js" -> serveAsset("web/api-debug.js", "application/javascript; charset=UTF-8")
+                uri == "/api-debug.css" -> serveAsset("web/api-debug.css", "text/css; charset=UTF-8")
                 uri == "/kvm.js" -> serveAsset("web/kvm.js", "application/javascript; charset=UTF-8")
                 uri == "/kvm.css" -> serveAsset("web/kvm.css", "text/css; charset=UTF-8")
                 uri == "/runtime.js" -> serveAsset("web/runtime.js", "application/javascript; charset=UTF-8")
