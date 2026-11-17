@@ -3372,7 +3372,8 @@
         }
 
 
-        // 消息内容与复制按钮容器: .chat-item_content
+        const messageRow = document.createElement('div');
+        messageRow.className = 'chat-message-row';
         const contentWrap = document.createElement('div');
         contentWrap.className = 'chat-item_content';
 
@@ -3545,8 +3546,8 @@
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
         copyBtn.className = 'copy-btn';
-        copyBtn.title = '复制消息内容';
-        copyBtn.setAttribute('aria-label', '复制消息内容');
+        copyBtn.title = isImage ? '复制图片' : '复制消息内容';
+        copyBtn.setAttribute('aria-label', copyBtn.title);
         copyBtn.innerHTML = `
             <svg viewBox="0 0 24 24" width="17" height="17">
                 <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" fill="currentColor"></path>
@@ -3557,10 +3558,10 @@
             if (isImage) { copyImage(contentWrap.querySelector('img').src, copyBtn); }
             else window.copyChatMessage(content, copyBtn);
         });
-        contentWrap.appendChild(copyBtn);
+        messageRow.append(contentWrap, copyBtn);
 
         item.appendChild(userHeader);
-        item.appendChild(contentWrap);
+        item.appendChild(messageRow);
         if (ownershipButton) item.appendChild(ownershipButton);
         target.appendChild(item);
         return item;

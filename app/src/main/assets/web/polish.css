@@ -1003,6 +1003,14 @@ select {
 .chat-item_time { font-size: var(--fs-3xs); font-variant-numeric: tabular-nums; color: var(--text-disabled); }
 .chat-identity-restore { align-self: flex-end; margin-top: 2px; font-size: var(--fs-3xs); }
 
+.chat-message-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+}
+.chat-item.is-me .chat-message-row { flex-direction: row-reverse; }
+
 .chat-item_content {
     position: relative;
     min-width: 0;
@@ -1159,11 +1167,8 @@ select {
 }
 
 .copy-btn {
-    position: absolute;
-    top: 50%;
-    left: calc(100% + 6px);
-    right: auto;
-    transform: translateY(-50%);
+    flex: 0 0 auto;
+    margin: 0;
     display: grid;
     place-items: center;
     width: 22px;
@@ -1179,7 +1184,6 @@ select {
     transition: opacity var(--dur-1) var(--ease-out), color var(--dur-1);
 }
 .copy-btn .icon { width: 11px; height: 11px; }
-.chat-item.is-me .copy-btn { left: auto; right: calc(100% + 6px); }
 .chat-item:hover .copy-btn, .chat-item:focus-within .copy-btn { opacity: 1; }
 .copy-btn:hover { color: var(--text-1); border-color: var(--border-strong); }
 .copy-btn.copied {

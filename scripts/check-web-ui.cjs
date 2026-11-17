@@ -449,8 +449,10 @@ async function main() {
         await page.locator('#chatModalDownloadBtn').click();
         await page.waitForFunction(() => window.imageCalls.some(c => c.cmd === 'save_remote_file_to_directory'));
         await page.locator('#btnCloseChatImageModal').click();
-        await imageCard.locator('.copy-btn').click();
+        await page.locator('#chatImageModal').waitFor({ state: 'hidden' });
+        await imageCard.getByRole('button', { name: '复制图片', exact: true }).click();
         await page.waitForFunction(() => window.imageCalls.filter(c => c.cmd === 'copy_image').length === 2);
+        assert.deepEqual(await page.evaluate(() => window.imageCalls.filter(c => c.cmd === 'copy_image')[1].args), copied);
         await imageCard.locator('.chat-img-thumb').click({ button: 'right' });
         assert.deepEqual(await page.locator('#wenboxContextMenu button').allTextContents(), ['复制图片', '保存原图']);
         // Background polling may finish a scroll notification after the menu opens.
