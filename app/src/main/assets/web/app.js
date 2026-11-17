@@ -1405,35 +1405,41 @@
     }
 
     // ---------------- 离开房间主动通知 ----------------
-    function notifyLeaveRoom() {
-        if (roomState.mode === 'joined' && currentTargetBaseUrl && roomState.token) {
-            const url = `${currentTargetBaseUrl}/api/room/leave`;
-            const payload = JSON.stringify({ token: roomState.token });
-            try {
-                if (navigator.sendBeacon && !window.WenBox.needsNativeTransport()) {
-                    const blob = new Blob([payload], { type: 'application/json' });
-                    navigator.sendBeacon(url, blob);
-                } else {
-                    fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'X-Room-Token': roomState.token },
-                        body: payload,
-                        keepalive: true
-                    }).catch(() => {});
-                }
-            } catch (_) {}
+    function notifyLeaveRoom(context, unloading = false) {
+        const url = context.base + '/api/room/leave';
+        const body = JSON.stringify({ token: context.token });
+        if (unloading && navigator.sendBeacon && !window.WenBox.needsNativeTransport()) {
+            const blob = new Blob([body], { type: 'application/json' });
+            if (navigator.sendBeacon(url, blob)) return;
         }
+        return fetchWithTimeout(url, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true
+        }, 1800, 0).catch(() => {});
     }
-    window.addEventListener('beforeunload', notifyLeaveRoom);
-    window.addEventListener('pagehide', notifyLeaveRoom);
+    window.addEventListener('pagehide', () => {
+        if (roomState.mode === 'joined' && roomState.token) notifyLeaveRoom(captureAttachmentContext(), true);
+    });
 
     // ---------------- 房间系统核心：模式渲染与切换 ----------------
     function setRoomMode(mode, data) {
-        if (roomState.mode === 'joined' && mode !== 'joined') notifyLeaveRoom();
+        const changingRoom = roomState.mode !== mode || roomState.roomInfo?.roomId !== data?.roomId
+            || (mode === 'joined' && currentTargetBaseUrl !== data?.hostUrl?.replace(/\/+$/, ''));
+        if (changingRoom) {
+            const leave = roomState.mode === 'joined' && roomState.token ? captureAttachmentContext() : null;
+            const cleanup = demandFiles?.reset();
+            if (leave) void Promise.resolve(cleanup).then(() => notifyLeaveRoom(leave));
+            clearRoomFilePanel();
+        }
+        if (mode === 'client') {
+            roomState.token = '';
+            roomState.memberId = '';
+            localStorage.removeItem('wenbox_room_token');
+            localStorage.removeItem('wenbox_member_id');
+        }
         updateRemoteConnection('ready');
         if (mode !== 'joined') joinedPin = '';
-        const changed = roomState.mode !== mode || roomState.roomInfo?.roomId !== data?.roomId;
-        if (changed) { resetChatRoomHistory(); uploadQueue?.clear(); demandFiles?.reset(); outbox.clear(); roomState.contentKey = ''; aesKeyCache = { raw: '', key: null }; }
+        const changed = changingRoom;
+        if (changed) { resetChatRoomHistory(); uploadQueue?.clear(); outbox.clear(); roomState.contentKey = ''; aesKeyCache = { raw: '', key: null }; }
         if (mode === 'client') discoveryStartedAt = Date.now();
         discoveryOpen = currentActiveTab === 'view-rooms';
         document.body.dataset.discoveryOpen = String(discoveryOpen);
@@ -1447,6 +1453,14 @@
             roomSwitchTimer = setTimeout(() => document.body.classList.remove('room-switching'), 420);
         }
         latestRoomMembers = [];
+        if (mode === 'joined' && data.token !== undefined) {
+            const { token, memberId, ...info } = data;
+            roomState.token = token;
+            roomState.memberId = memberId;
+            localStorage.setItem('wenbox_room_token', token);
+            localStorage.setItem('wenbox_member_id', memberId);
+            data = info;
+        }
         roomState.mode = mode;
         if (changed && (mode === 'host' || mode === 'joined')) selectView('view-room');
         else if (changed && mode === 'client' && currentActiveTab === 'view-room') selectView('view-rooms');
@@ -1758,9 +1772,6 @@
             );
             if (!ok) return;
             directAutoConnectEnabled = false;
-            notifyLeaveRoom();
-            roomState.token = '';
-            localStorage.removeItem('wenbox_room_token');
             showToast('已退出房间');
             setRoomMode('client');
         });
@@ -2001,15 +2012,13 @@
                     || document.querySelector('dialog[open]') || document.getElementById('webChatMessageInput')?.value.trim()) return;
             }
             if (joinRes && joinRes.success) {
-                roomState.token = joinRes.token || '';
-                roomState.memberId = joinRes.memberId || '';
-                localStorage.setItem('wenbox_room_token', roomState.token);
-                localStorage.setItem('wenbox_member_id', roomState.memberId);
                 window.closeJoinPinModal();
                 window.closeManualJoinModal();
                 joinedPin = pin; joinedResumeAt = 0;
                 const browserClosed = invoke ? false : await dissolveLocalDefaultRoomForBrowser();
                 setRoomMode('joined', {
+                    token: joinRes.token || '',
+                    memberId: joinRes.memberId || '',
                     hostUrl: effectiveHostUrl,
                     roomName: joinRes.room ? joinRes.room.roomName : (roomName || '已加入房间'),
                     roomId: joinRes.room ? joinRes.room.roomId : roomId,
@@ -2473,6 +2482,7 @@
 
     // 远程文件下载
     window.downloadRemoteFile = async function(fileId, fileName, context = captureAttachmentContext()) {
+        const revision = roomRevision;
         const token = context.roomId === roomState.roomInfo?.roomId ? getEffectiveRoomToken() : context.token;
         const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
         const downloadBase = context.base;
@@ -2484,7 +2494,7 @@
                     defaultPath: fileName,
                     title: `保存文件 ${fileName}`
                 });
-                if (!savePath) return;
+                if (!savePath || revision !== roomRevision) return;
 
                 const dir = savePath.substring(0, Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')) + 1);
                 const name = savePath.substring(Math.max(savePath.lastIndexOf('\\'), savePath.lastIndexOf('/')) + 1);
@@ -2544,7 +2554,7 @@
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
                             <div class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
-                            <div class="file-size">${size} · ${file.onDemand ? escapeHtml(file.ownerName || '成员') + (file.online ? ' · 按需下载' : ' · 发送方离线') : '对方分享'}</div>
+                            <div class="file-size">${size} · ${file.onDemand ? escapeHtml(file.ownerName || '成员') + (file.cached ? ' · 房间有副本' : file.online ? ' · 按需下载' : ' · 发送方离线') : '对方分享'}</div>
                         </div>
                     </div>
                     <div class="file-row-actions"><button ${file.onDemand && !file.online ? 'disabled' : ''} data-action="download-file" data-value="${escapeHtml(file.id)}" data-name="${escapeHtml(file.name)}" class="btn btn--secondary btn--sm">
@@ -2629,7 +2639,7 @@
                         <span class="file-type-icon">${icon}</span>
                         <div class="file-meta">
                             <div class="file-name" title="${escapeHtml(file.path || file.name)}">${escapeHtml(file.name)}</div>
-                            <div class="file-size">${size} · ${file.onDemand ? escapeHtml(file.ownerName || '成员') + (file.online ? ' · 按需下载' : ' · 发送方离线') : '已分享'}</div>
+                            <div class="file-size">${size} · ${file.onDemand ? escapeHtml(file.ownerName || '成员') + (file.cached ? ' · 房间有副本' : file.online ? ' · 按需下载' : ' · 发送方离线') : '已分享'}</div>
                         </div>
                     </div>
                     <div class="file-row-actions">
@@ -2816,6 +2826,22 @@
     let archiveRevision = -1;
     const archiveSelection = new Set();
     const archiveChoices = document.getElementById('archiveFileChoices');
+    function clearRoomFilePanel() {
+        currentFiles = [];
+        document.getElementById('filePanel').scrollTop = 0;
+        webChatMessageInput.value = '';
+        if (chatImageModal.open) closeChatImageModal();
+        for (const id of ['fileListContainer', 'localSharedFileListContainer', 'receivedFileListContainer']) {
+            document.getElementById(id)?.replaceChildren();
+        }
+        archiveCandidates = [];
+        archiveSelection.clear();
+        archiveChoices.replaceChildren();
+        document.getElementById('roomArchive').open = false;
+        reimburseStatus.hidden = true;
+        btnSelectReimburseDir.disabled = true;
+        updateArchiveCount();
+    }
     function updateArchiveCount() { document.getElementById('archiveSelectionCount').textContent = `已选 ${archiveSelection.size} 个`; }
     async function refreshArchiveFiles() {
         const context = captureAttachmentContext();
@@ -2830,7 +2856,7 @@
                 if (!response.ok) throw new Error(`读取文件失败：HTTP ${response.status}`);
                 return (await response.json()).files || [];
             }));
-            if (revision !== roomRevision) { archiveChoices.textContent = '房间已切换，请刷新'; return; }
+            if (revision !== roomRevision) return;
             archiveCandidates = [...new Map(lists.flat().map(file => [file.id, { ...file, context }])).values()];
             const ids = new Set(archiveCandidates.map(f => f.id));
             for (const id of archiveSelection) if (!ids.has(id)) archiveSelection.delete(id);
@@ -2845,8 +2871,9 @@
             }
             if (!archiveCandidates.length) archiveChoices.textContent = '当前房间还没有文件';
             updateArchiveCount();
-        } catch (error) { archiveChoices.textContent = '读取失败，请刷新重试'; showToast(error.message || String(error)); }
-        finally { btnSelectReimburseDir.disabled = false; }
+        } catch (error) {
+            if (revision === roomRevision) { archiveChoices.textContent = '读取失败，请刷新重试'; showToast(error.message || String(error)); }
+        } finally { if (revision === roomRevision) btnSelectReimburseDir.disabled = false; }
     }
     document.getElementById('roomArchive').addEventListener('toggle', event => { if (event.target.open) refreshArchiveFiles(); });
     document.getElementById('refreshArchiveFiles').addEventListener('click', refreshArchiveFiles);
@@ -2857,6 +2884,7 @@
     });
     btnSelectReimburseDir.addEventListener('click', async () => {
         if (archiveRevision !== roomRevision) { await refreshArchiveFiles(); showToast('房间已切换，请重新选择文件'); return; }
+        const revision = roomRevision;
         const files = archiveCandidates.filter(f => archiveSelection.has(f.id));
         const folder = archiveFolderName();
         if (!files.length) { showToast('请先勾选需要归档的文件'); return; }
@@ -2876,8 +2904,10 @@
                 const root = await window.showDirectoryPicker({ mode: 'readwrite' });
                 handle = await root.getDirectoryHandle(folder, { create: true });
             } else { showToast('当前浏览器无法选择归档目录，请使用 WenBox 桌面客户端'); return; }
+            if (revision !== roomRevision) return;
             reimburseStatus.hidden = false;
             for (const file of files) {
+                if (revision !== roomRevision) return;
                 reimburseStatus.textContent = `正在归档 ${saved + failures.length + 1}/${files.length}：${file.name}`;
                 try {
                     const url = resolveChatUrl('/api/download/' + encodeURIComponent(file.id), file.context);
@@ -2892,6 +2922,7 @@
                         const writer = await target.createWritable();
                         try { await writer.write(blob); await writer.close(); } catch (e) { await writer.abort(); throw e; }
                     }
+                    if (revision !== roomRevision) return;
                     saved++; archiveSelection.delete(file.id);
                 } catch (error) { failures.push(`${file.name}：${error.message || error}`); }
             }
@@ -2901,7 +2932,7 @@
             updateArchiveCount();
             archiveChoices.querySelectorAll('input').forEach((input, index) => { input.checked = archiveSelection.has(archiveCandidates[index]?.id); });
         } catch (error) { if (error.name !== 'AbortError') showToast(`归档失败：${error.message || error}`); }
-        finally { btnSelectReimburseDir.disabled = false; }
+        finally { if (revision === roomRevision) btnSelectReimburseDir.disabled = false; }
     });
 
     async function uploadFiles(fileList, image = false, scope = 'chat') {
@@ -2912,7 +2943,7 @@
             if (revision !== roomRevision) return;
             if (scope === 'chat') for (const file of offers) {
                 const name = file.name.replace(/[|\[\]]/g, '_');
-                if (!await sendChatMessageDirect(`[file:${name}|${formatBytes(file.size)} · 按需下载，发送方需在线|/api/download/${encodeURIComponent(file.id)}]`)) throw new Error('文件信息已发布，但消息发送失败');
+                if (!await sendChatMessageDirect(`[file:${name}|${formatBytes(file.size)} · 房间附件|/api/download/${encodeURIComponent(file.id)}]`)) throw new Error('文件信息已发布，但消息发送失败');
             }
             showToast(`已分享 ${offers.length} 个文件，点击下载时才传输；请保持 WenBox 开启`);
             if (roomState.mode === 'host') loadLocalSharedFiles(); else loadFiles();

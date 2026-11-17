@@ -2,9 +2,9 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    io::{self, Read},
+    io::{self, Read, Write},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
         Arc, Mutex,
     },
@@ -12,6 +12,7 @@ use std::{
 };
 use tiny_http::{Header, Method, Request, Response, StatusCode};
 const WAIT: Duration = Duration::from_secs(20);
+const CACHE_LIMIT: u64 = 1024 * 1024 * 1024;
 const ONLINE: Duration = Duration::from_secs(12);
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -42,6 +43,7 @@ struct Offer {
     file: FileInput,
     visible: bool,
     cancelled: Arc<AtomicBool>,
+    cache: Arc<Mutex<Option<CachedOffer>>>,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,9 +67,35 @@ struct State {
     owners: HashMap<String, Instant>,
     pending: HashMap<String, Pending>,
 }
+struct CachedOffer {
+    file: tempfile::NamedTempFile,
+    size: u64,
+    usage: Arc<AtomicU64>,
+}
+impl CachedOffer {
+    fn reserve(size: u64, usage: &Arc<AtomicU64>) -> Option<Self> {
+        let file = tempfile::NamedTempFile::new().ok()?;
+        usage
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(size).filter(|total| *total <= CACHE_LIMIT)
+            })
+            .ok()?;
+        Some(Self {
+            file,
+            size,
+            usage: usage.clone(),
+        })
+    }
+}
+impl Drop for CachedOffer {
+    fn drop(&mut self) {
+        self.usage.fetch_sub(self.size, Ordering::Relaxed);
+    }
+}
 #[derive(Default)]
 pub struct DemandFiles {
     state: Mutex<State>,
+    cache_usage: Arc<AtomicU64>,
 }
 impl DemandFiles {
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -95,7 +123,8 @@ impl DemandFiles {
             .collect()
     }
     fn public(o: &Offer, online: bool) -> serde_json::Value {
-        serde_json::json!({"id":o.id,"clientId":o.file.client_id,"name":o.file.name,"size":o.file.plain_size.unwrap_or(o.file.size),"mimeType":o.file.mime_type,"path":"","onDemand":true,"ownerName":o.sender,"online":online})
+        let cached = o.cache.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+        serde_json::json!({"id":o.id,"clientId":o.file.client_id,"name":o.file.name,"size":o.file.plain_size.unwrap_or(o.file.size),"mimeType":o.file.mime_type,"path":"","onDemand":true,"ownerName":o.sender,"online":online || cached,"cached":cached})
     }
     pub fn clear(&self) {
         let mut s = self.lock();
@@ -142,6 +171,7 @@ impl DemandFiles {
                 file,
                 visible: p.scope == "room",
                 cancelled: Arc::new(AtomicBool::new(false)),
+                cache: Arc::new(Mutex::new(None)),
             };
             result.push(Self::public(&o, true));
             s.offers.insert(o.id.clone(), o);
@@ -185,10 +215,27 @@ fn error(status: u16, message: &str) -> Response<Box<dyn Read + Send>> {
         serde_json::json!({"success":false,"message":message}),
     )
 }
+struct CachedReader {
+    file: std::fs::File,
+    offer: Offer,
+}
+impl Read for CachedReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.offer.cancelled.load(Ordering::SeqCst) {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "分享已取消",
+            ));
+        }
+        self.file.read(buffer)
+    }
+}
 struct Relay {
     rx: Receiver<Vec<u8>>,
     current: io::Cursor<Vec<u8>>,
     cancelled: Arc<AtomicBool>,
+    cache: Option<(CachedOffer, Arc<Mutex<Option<CachedOffer>>>)>,
+    remaining: u64,
 }
 impl Read for Relay {
     fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
@@ -196,22 +243,58 @@ impl Read for Relay {
             return Ok(0);
         }
         if self.cancelled.load(Ordering::SeqCst) {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "分享已取消"));
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "分享已取消",
+            ));
         }
-        let n = self.current.read(b)?;
-        if n > 0 {
-            return Ok(n);
+        if self.remaining == 0 {
+            return Ok(0);
         }
-        match self.rx.recv_timeout(WAIT) {
-            Ok(v) => {
-                self.current = io::Cursor::new(v);
-                self.current.read(b)
+        let mut n = self.current.read(b)?;
+        if n == 0 {
+            self.current = io::Cursor::new(self.rx.recv_timeout(WAIT).map_err(|error| {
+                let kind = match error {
+                    mpsc::RecvTimeoutError::Timeout => io::ErrorKind::TimedOut,
+                    mpsc::RecvTimeoutError::Disconnected => io::ErrorKind::UnexpectedEof,
+                };
+                io::Error::new(kind, "发送方传输中断")
+            })?);
+            n = self.current.read(b)?;
+        }
+        self.remaining -= n as u64;
+        if let Some((mut cache, target)) = self.cache.take() {
+            if cache.file.write_all(&b[..n]).is_ok() {
+                if self.remaining == 0 {
+                    let mut slot = target.lock().unwrap_or_else(|e| e.into_inner());
+                    if slot.is_none() && !self.cancelled.load(Ordering::SeqCst) {
+                        *slot = Some(cache);
+                    }
+                } else {
+                    self.cache = Some((cache, target));
+                }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(0),
-            Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "发送方未响应")),
         }
+        Ok(n)
     }
 }
+fn file_response(offer: &Offer, reader: Box<dyn Read + Send>) -> Response<Box<dyn Read + Send>> {
+    let mut response = Response::new(
+        StatusCode(200),
+        vec![crate::build_content_disposition(&offer.file.name)],
+        reader,
+        Some(offer.file.size as usize),
+        None,
+    );
+    if offer.file.encrypted {
+        response.add_header(Header::from_bytes("X-WenBox-Encryption", "v1").unwrap());
+    }
+    if let Ok(h) = Header::from_bytes("Content-Type", offer.file.mime_type.as_bytes()) {
+        response.add_header(h);
+    }
+    response
+}
+
 fn header(req: &Request, name: &'static str) -> String {
     req.headers()
         .iter()
@@ -247,7 +330,9 @@ pub fn route(
             Ok(v) => json_response(200, v),
             Err(e) => error(403, &e),
         }
-    } else if path == "/api/offers/revoke" && req.method() == &Method::Post {
+    } else if matches!(path, "/api/offers/revoke" | "/api/offers/detach")
+        && req.method() == &Method::Post
+    {
         let key = header(&req, "X-Share-Key");
         let file_id = header(&req, "X-Share-File");
         if !secret_valid(&key) {
@@ -255,6 +340,11 @@ pub fn route(
         } else {
             let mut s = repo.lock();
             s.offers.retain(|_, o| {
+                if path == "/api/offers/detach"
+                    && o.cache.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+                {
+                    return true;
+                }
                 if o.room == room && o.owner == key && (file_id.is_empty() || o.id == file_id) {
                     o.cancelled.store(true, Ordering::SeqCst);
                     false
@@ -267,6 +357,9 @@ pub fn route(
                     || p.offer.owner != key
                     || (!file_id.is_empty() && p.offer.id != file_id)
             });
+            if file_id.is_empty() {
+                s.owners.remove(&key);
+            }
             json_response(200, serde_json::json!({"success":true}))
         }
     } else if path.starts_with("/api/download/offer-") && req.method() == &Method::Get {
@@ -281,6 +374,15 @@ pub fn route(
                 .filter(|o| o.room == room)
                 .cloned()
                 .ok_or("文件分享已失效")?;
+            let cached = o
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .and_then(|entry| entry.file.reopen().ok());
+            if let Some(file) = cached {
+                return Ok((o, Some(file), None));
+            }
             if !s.owners.get(&o.owner).is_some_and(|t| t.elapsed() < ONLINE) {
                 return Err("发送方已离线，请让发送方保持 WenBox 打开后重试".into());
             }
@@ -307,33 +409,41 @@ pub fn route(
                     chunks: tx,
                 },
             );
-            Ok((o, job, rx, ready_rx))
+            Ok((o, None, Some((job, rx, ready_rx))))
         })();
         match setup {
             Err(e) => error(410, &e),
-            Ok((o, job, rx, ready)) => {
+            Ok((o, Some(file), _)) => file_response(
+                &o,
+                Box::new(CachedReader {
+                    file,
+                    offer: o.clone(),
+                }),
+            ),
+            Ok((o, _, Some((job, rx, ready)))) => {
                 if ready.recv_timeout(WAIT).is_err() {
                     repo.lock().pending.remove(&job.request_id);
                     error(504, "发送方未响应，请确认对方仍在线后重新下载")
                 } else {
-                    let mut r = Response::new(
-                        StatusCode(200),
-                        vec![crate::build_content_disposition(&o.file.name)],
+                    let cache = if o.file.encrypted {
+                        CachedOffer::reserve(o.file.size, &repo.cache_usage)
+                            .map(|entry| (entry, o.cache.clone()))
+                    } else {
+                        None
+                    };
+                    file_response(
+                        &o,
                         Box::new(Relay {
                             rx,
                             current: io::Cursor::new(Vec::new()),
-                            cancelled: o.cancelled,
-                        }) as Box<dyn Read + Send>,
-                        Some(o.file.size as usize),
-                        None,
-                    );
-                    if o.file.encrypted { r.add_header(Header::from_bytes("X-WenBox-Encryption", "v1").unwrap()); }
-                    if let Ok(h) = Header::from_bytes("Content-Type", o.file.mime_type.as_bytes()) {
-                        r.add_header(h)
-                    }
-                    r
+                            cancelled: o.cancelled.clone(),
+                            cache,
+                            remaining: o.file.size,
+                        }),
+                    )
                 }
             }
+            Ok(_) => unreachable!(),
         }
     } else if path.starts_with("/api/offers/transfer/") && req.method() == &Method::Post {
         let parts = path
@@ -362,7 +472,7 @@ pub fn route(
                     let _ = p.ready.send(());
                     let result = (|| -> Result<(), String> {
                         let mut left = p.offer.file.size;
-                        let mut buf = [0u8; 32768];
+                        let mut buf = vec![0u8; 256 * 1024];
                         while left > 0 {
                             if p.offer.cancelled.load(Ordering::SeqCst) {
                                 return Err("分享已取消".into());
@@ -411,7 +521,7 @@ mod tests {
         let port = crate::tests::spawn_test_server(state.clone());
         let base = format!("http://127.0.0.1:{port}");
         let key = "a".repeat(64);
-        let metadata = serde_json::json!({"ownerKey":key,"senderName":"发送方","scope":"room","files":[{"clientId":uuid::Uuid::new_v4().to_string(),"name":"测试.txt","size":5,"mimeType":"text/plain"}]}).to_string();
+        let metadata = serde_json::json!({"ownerKey":key,"senderName":"发送方","scope":"room","files":[{"clientId":uuid::Uuid::new_v4().to_string(),"name":"测试.txt","size":5,"plainSize":5,"encrypted":true,"mimeType":"text/plain"}]}).to_string();
         assert!(ureq::post(&format!("{base}/api/offers"))
             .set("Origin", "http://192.168.1.8:9527")
             .send_string(&metadata)
@@ -473,6 +583,22 @@ mod tests {
             .send_bytes(b"hello")
             .unwrap();
         assert_eq!(download.join().unwrap(), b"hello");
+        ureq::post(&format!("{base}/api/offers/detach"))
+            .set("X-Room-Token", "guest-token")
+            .set("X-Share-Key", &key)
+            .call()
+            .unwrap();
+        assert!(state.demand_files.lock().owners.is_empty());
+        let response = ureq::get(&format!("{base}/api/download/{id}"))
+            .set("X-Room-Token", "guest-token")
+            .call()
+            .unwrap();
+        assert_eq!(response.header("X-WenBox-Encryption"), Some("v1"));
+        let mut cached = Vec::new();
+        response.into_reader().read_to_end(&mut cached).unwrap();
+        assert_eq!(cached, b"hello");
+        assert!(state.demand_files.lock().pending.is_empty());
+
         assert!(
             state.received_files.lock().unwrap().is_empty(),
             "no automatic Downloads entry"

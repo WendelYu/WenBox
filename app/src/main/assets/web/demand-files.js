@@ -25,6 +25,7 @@
         }
         async function rawUpload(file, ctx, job, controller) {
             const context = { url: ctx.base + '/api/offers/transfer/' + job.requestId + '/' + job.secret, token: ctx.token };
+            if (file.forTransfer) file = file.forTransfer();
             if (options.nativeUpload) return options.nativeUpload(file, context, () => {}, controller.signal);
             if (file.virtualEncrypted) {
                 const parts = [];
@@ -72,7 +73,12 @@
             clearInterval(timer); timer = null;
             for (const controller of uploads.values()) controller.abort();
             uploads.clear();
-            if (old) { try { await request(old, '/api/offers/revoke', { method: 'POST' }); } catch (_) {} }
+            if (!old) return;
+            try {
+                const headers = { 'X-Room-Token': old.token || '', 'X-Share-Key': old.key };
+                const response = await options.fetch(old.base + '/api/offers/detach', { method: 'POST', headers }, 1800, 0);
+                if (response.status === 404) await request(old, '/api/offers/revoke', { method: 'POST' });
+            } catch (_) { /* The host also expires disconnected senders. */ }
         }
         return {
             async publish(list, scope) {
@@ -97,7 +103,7 @@
                     const entry = entries.find(e => e.clientId === offer.clientId);
                     if (entry) files.set(offer.clientId, { ...entry, id: offer.id });
                 }
-                if (!timer) timer = setInterval(poll, 1000);
+                if (!timer) timer = setInterval(poll, 400);
                 poll();
                 return response.files || [];
             },

@@ -15,6 +15,7 @@ async function main() {
     fs.mkdirSync(screenshots, { recursive: true });
     let active = false, serial = 0, discoveries = 0, offline = false, messageFailures = 0, expired = false, resumed = 0;
     let legacyUploads = 0;
+    const leaveTokens = [];
     const offers = [];
     const sendAttempts = new Map();
     const room = { roomId: 'fixture-room', roomName: '现场协作', hostDevice: '测试电脑', hostIp: '192.168.1.8', hostPort: 9527, needPassword: true, pin: '6888' };
@@ -51,7 +52,8 @@ async function main() {
         if (url.pathname === '/api/room/join') { if (json().resumeRoomId) { assert.equal(json().resumeRoomId, room.roomId); assert.equal(json().pin, '6888'); expired = false; resumed++; } if (json().pin === '0000') return send({ success: false, message: '尝试过于频繁', retryAfter: 3 }, 429); active = true; return send({ success: true, token: 'guest-token', memberId: 'guest-id', room: { ...room } }); }
         if (url.pathname === '/api/room/heartbeat') return send({ success: true, room: { ...room, isActive: active } });
         if (url.pathname === '/api/room/members') return send({ count: 2, members: [{ id: 'host-id', name: '测试电脑 (房主)', ip: '192.168.1.8', platform: 'macOS' }, { id: 'guest-id', name: '现场工程师', ip: '192.168.1.20', accessIp: '192.168.1.8:9527', platform: 'Android' }] });
-        if (url.pathname === '/api/room/leave' || url.pathname === '/api/room/set_ip') return send({ success: true });
+        if (url.pathname === '/api/room/leave') { leaveTokens.push(json().token); return send({ success: true }); }
+        if (url.pathname === '/api/room/set_ip') return send({ success: true });
         if (url.pathname === '/api/offers') {
             const input = json(); assert.equal(body.length < 65536, true);
             const added = input.files.map(f => ({ ...f, id: 'offer-' + (++serial), scope: input.scope, onDemand: true, online: true, ownerName: input.senderName }));
@@ -59,7 +61,7 @@ async function main() {
             return send({ success: true, files: added });
         }
         if (url.pathname === '/api/offers/requests') return send({ jobs: [] });
-        if (url.pathname === '/api/offers/revoke') return send({ success: true });
+        if (['/api/offers/revoke', '/api/offers/detach'].includes(url.pathname)) return send({ success: true });
         if (url.pathname === '/api/files') return send({ files: shared });
         if (url.pathname === '/api/received_files') return send({ files: received });
         if (url.pathname === '/api/messages' && req.method === 'GET') return send({ messages: messages.filter(m => m.timestamp > Number(url.searchParams.get('since') || 0)), isActive: active, roomId: room.roomId });
@@ -408,6 +410,17 @@ async function main() {
         await page.locator('.archive-file-choice input').first().check();
         await page.locator('#customFolderSuffix').fill('现场资料');
         assert.equal(await page.locator('#previewFolderName').textContent(), '现场资料');
+        await page.setViewportSize({ width: 1440, height: 560 });
+        const archiveButton = page.locator('#btnSelectReimburseDir');
+        await archiveButton.scrollIntoViewIfNeeded();
+        assert.ok(await page.locator('#filePanel').evaluate(panel => panel.scrollTop > 0), 'short windows scroll the room file panel');
+        assert.ok(await archiveButton.evaluate(button => {
+            const rect = button.getBoundingClientRect();
+            return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+        }), 'archive action is reachable without resizing the window');
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await page.screenshot({ path: path.join(screenshots, 'room-archive-short.png') });
+        await page.setViewportSize({ width: 1440, height: 900 });
         await page.screenshot({ path: path.join(screenshots, 'room-archive.png') });
         await page.evaluate(() => {
             window.savedArchive = [];
@@ -501,8 +514,18 @@ async function main() {
         await page.screenshot({path:path.join(screenshots,'download-complete-receipt.png')});
         await page.evaluate(() => { delete window.__TAURI__; });
         await page.locator('#closeDownloadActivity').click();
+        await page.locator('#webChatMessageInput').fill('旧房间草稿');
+        const leavesBeforeExit = leaveTokens.length;
         await page.locator('#btnLeaveRoom').click(); await page.locator('#appConfirmOkBtn').click();
         await page.waitForFunction(() => document.body.dataset.roomMode === 'client');
+        for (let retry = 0; retry < 100 && leaveTokens.length === leavesBeforeExit; retry++) {
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert.ok(leaveTokens.length > leavesBeforeExit, 'exit notifies old host');
+        assert.equal(leaveTokens.at(-1), 'guest-token');
+        assert.equal(await page.locator('#webChatMessageInput').inputValue(), '');
+        assert.equal(await page.locator('#archiveFileChoices').textContent(), '');
+        assert.equal(await page.evaluate(() => localStorage.getItem('wenbox_room_token')), null);
         assert.deepEqual(browserErrors, []); assert.deepEqual(failures, []);
         console.log('Browser regression passed: strict CSP, create/join/leave, PIN modes/reveal/429 cooldown, optimistic messages/retry/reconciliation/avatars, code copy, metadata-only publication, room/chat drop routing, restart identity/ownership recovery, download, tools, tablet drawer, mobile segments, and light/dark screenshots.');
     } catch (error) {
