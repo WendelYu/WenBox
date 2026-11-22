@@ -1506,14 +1506,14 @@
         }
         return false;
     }
-    function renderMemberCardsMarkup(members) {
+    function renderMemberCardsMarkup(members, cardClass = 'member-card') {
         if (!members || members.length === 0) {
             return `<div class="members-empty">暂无在线成员信息</div>`;
         }
         return members.map(member => {
             const isMe = roomState.memberId && member.id === roomState.memberId;
             const name = member.name || '未命名设备';
-            return `<div class="member-card"><span class="member-avatar">${escapeHtml(Array.from(name)[0].toUpperCase())}</span><div class="member-details"><strong>${escapeHtml(name)}${isMe ? '<small>你</small>' : ''}</strong><span class="text-2">${escapeHtml(member.platform || '设备')} <span class="member-online">在线</span></span><span class="mono text-3">${escapeHtml(member.ip || '地址未知')}</span></div><button type="button" class="btn btn--ghost btn--icon" title="复制 IP 地址" aria-label="复制 ${escapeHtml(name)} 的 IP 地址" data-action="copy-ip" data-value="${escapeHtml(member.ip || '')}" ${member.ip ? '' : 'disabled'}><svg class="icon"><use href="#i-copy"></use></svg></button></div>`;
+            return `<div class="${cardClass}"><span class="member-avatar">${escapeHtml(Array.from(name)[0].toUpperCase())}</span><div class="member-details"><strong>${escapeHtml(name)}${isMe ? '<small>你</small>' : ''}</strong><span class="text-2">${escapeHtml(member.platform || '设备')} <span class="member-online">在线</span></span><span class="mono text-3">${escapeHtml(member.ip || '地址未知')}</span></div><button type="button" class="btn btn--ghost btn--icon" title="复制 IP 地址" aria-label="复制 ${escapeHtml(name)} 的 IP 地址" data-action="copy-ip" data-value="${escapeHtml(member.ip || '')}" ${member.ip ? '' : 'disabled'}><svg class="icon"><use href="#i-copy"></use></svg></button></div>`;
         }).join('');
     }
     function updateRoomViewSurface() {
@@ -1538,7 +1538,7 @@
                 : `当前房间「${rName}」使用中；如需加入其他房间，请先解散当前房间。`;
         }
         if (exitBtn) exitBtn.textContent = roomState.mode === 'host' ? '解散房间' : '退出房间';
-        if (listEl) listEl.innerHTML = renderMemberCardsMarkup(latestRoomMembers);
+        if (listEl) listEl.innerHTML = renderMemberCardsMarkup(latestRoomMembers, 'room-member-card');
     }
     function updateRoomFeatureBadges() {
         const inRoom = roomState.mode !== 'client';

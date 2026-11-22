@@ -2389,7 +2389,8 @@ dialog.members-drawer .modal-card { height: 100%; max-height: none; padding: 20p
 dialog.members-drawer .modal-footer { margin-top: auto; }
 .presence-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success-fg); box-shadow: 0 0 0 3px var(--success-soft); }
 .member-count { margin-left: auto; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-3xs); }
-.member-card {
+.member-card,
+.room-member-card {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -2398,7 +2399,8 @@ dialog.members-drawer .modal-footer { margin-top: auto; }
     border-radius: 9px;
     background: var(--surface-2);
 }
-.member-card:hover { border-color: var(--border); }
+.member-card:hover,
+.room-member-card:hover { border-color: var(--border); }
 .member-details { display: grid; gap: 1px; flex: 1 1 auto; min-width: 0; }
 .member-details strong { font-size: var(--fs-xs); font-weight: var(--fw-medium); overflow-wrap: anywhere; }
 .member-details small { margin-left: 6px; padding: 1px 5px; border-radius: 4px; background: var(--primary-soft); color: var(--primary-fg); font-size: var(--fs-3xs); }

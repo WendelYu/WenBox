@@ -119,7 +119,7 @@ async function main() {
             const asset = lock.assets.find(a => a.name.endsWith('win-x64-portable.zip'));
             const zip = await download(asset.name, asset.browser_download_url, asset.digest.replace('sha256:', ''));
             const unpack = path.join(stage, 'unpack');
-            const ps = '$ErrorActionPreference="Stop"; Expand-Archive -LiteralPath $env:WENBOX_INPUT_ZIP -DestinationPath $env:WENBOX_INPUT_UNPACK';
+            const ps = '$ErrorActionPreference="Stop"; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:WENBOX_INPUT_ZIP, $env:WENBOX_INPUT_UNPACK)';
             run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { env: { ...process.env, WENBOX_INPUT_ZIP: zip, WENBOX_INPUT_UNPACK: unpack } });
             const core = files(unpack).find(f => path.basename(f).toLowerCase() === 'deskflow-core.exe');
             if (!core) throw new Error('Official input core not found in portable archive');
