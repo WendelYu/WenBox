@@ -163,7 +163,7 @@ pub fn monitor(
         let mut buffer = Vec::new();
         let mut verified = false;
         let mut pending_connection = false;
-        let handshake_until = Instant::now() + TIMEOUT;
+        let handshake_until = Instant::now() + Duration::from_secs(10);
         while !stop.load(Ordering::SeqCst) {
             if !verified && Instant::now() >= handshake_until {
                 break;
@@ -184,6 +184,8 @@ pub fn monitor(
                             .unwrap_or("")
                             .split(',')
                             .any(|s| s == peer);
+                    } else if !verified && message.starts_with("connectionState=") {
+                        pending_connection = message == "connectionState=Connected";
                     } else if !verified {
                         let version = message
                             .strip_prefix("hello=")
@@ -215,6 +217,11 @@ pub fn monitor(
                             .split(',')
                             .any(|s| s == peer);
                         *state.lock().unwrap_or_else(|e| e.into_inner()) = Some(connected);
+                    } else if let Some(conn_state) = message.strip_prefix("connectionState=") {
+                        let connected = conn_state == "Connected";
+                        if connected || matches!(conn_state, "Disconnected" | "Connecting") {
+                            *state.lock().unwrap_or_else(|e| e.into_inner()) = Some(connected);
+                        }
                     }
                     buffer.clear();
                 }

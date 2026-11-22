@@ -142,6 +142,9 @@ impl Clipboard {
             }),
         }
     }
+    pub fn has_preference(&self) -> bool {
+        self.file.is_file()
+    }
     pub fn notice(&self, message: &str) {
         self.lock().message = message.into();
     }
@@ -311,6 +314,10 @@ impl Clipboard {
                     }
                 }
             }
+        } else if l.observed.is_none()
+            || (l.pending.is_none() && l.observed.as_ref().is_some_and(|h| !h.is_empty()))
+        {
+            l.observed = Some(String::new());
         }
         if let Some(packet) = l.pending.clone() {
             if let Ok(value) = packet.decode(&self.local, &l.peer) {
@@ -439,5 +446,41 @@ mod tests {
         assert!(b.exchange("a", request).is_err());
         a.set_enabled(false).unwrap();
         assert!(!Clipboard::open(root.path().into(), "a".into()).enabled());
+    }
+    #[test]
+    fn non_text_or_empty_baseline_does_not_swallow_first_copied_text() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let ca = Clipboard::open(a.path().into(), "a".into());
+        let cb = Clipboard::open(b.path().into(), "b".into());
+        ca.set_enabled(true).unwrap();
+        cb.set_enabled(true).unwrap();
+        ca.activate("b");
+        cb.activate("a");
+        for _ in 0..3 {
+            round(&ca, &cb);
+            round(&cb, &ca);
+        }
+        // Baseline when clipboard initially contains an image/file or is empty (None).
+        ca.observe(None, |_| panic!("empty baseline must not write"));
+        cb.observe(None, |_| panic!("empty baseline must not write"));
+        // The very first copied text after connection must be synced, not swallowed as baseline.
+        ca.observe(Some("首次复制文本"), |_| panic!("local copy must not write"));
+        round(&ca, &cb);
+        let mut received = Vec::new();
+        cb.observe(None, |v| {
+            received.push(v);
+            Ok(())
+        });
+        assert_eq!(received, vec!["首次复制文本".to_string()]);
+        // If user later copies an image/file (None) and then copies the same text again, it syncs again.
+        ca.observe(None, |_| panic!());
+        ca.observe(Some("首次复制文本"), |_| panic!());
+        round(&ca, &cb);
+        cb.observe(None, |v| {
+            received.push(v);
+            Ok(())
+        });
+        assert_eq!(received.len(), 2);
     }
 }

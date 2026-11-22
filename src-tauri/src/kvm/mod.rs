@@ -46,6 +46,14 @@ pub fn initialize(
                 .values()
                 .filter_map(|p| p.ip.parse::<Ipv4Addr>().ok()),
         );
+        ips.extend(
+            state
+                .discovered_rooms
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+                .filter_map(|r| r.ip.parse::<Ipv4Addr>().ok()),
+        );
         ips
     });
     let resources = if cfg!(debug_assertions) {

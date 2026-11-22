@@ -85,10 +85,14 @@
         if (![...ownIps].some(isLinkLocal)) return null;
         const peers = new Map();
         for (const room of rooms || []) {
+            const primaryLink = isLinkLocal(room.ip) && !ownIps.has(room.ip);
+            const fallbackLink = !primaryLink && Array.isArray(room.ips)
+                ? room.ips.find(ip => isLinkLocal(ip) && !ownIps.has(ip))
+                : null;
             if (!room.roomId || room.roomId === local.roomId || !room.autoConnect || room.needPassword
-                || !isLinkLocal(room.ip) || ownIps.has(room.ip)
+                || (!primaryLink && !fallbackLink)
                 || !Number.isInteger(room.port) || room.port < 1 || room.port > 65535) continue;
-            peers.set(room.roomId, room);
+            peers.set(room.roomId, primaryLink ? room : { ...room, ip: fallbackLink });
         }
         if (peers.size !== 1) return null;
         const peer = [...peers.values()][0];

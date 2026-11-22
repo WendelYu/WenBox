@@ -172,6 +172,8 @@ pub struct DiscoveredRoom {
     pub auto_connect: bool,
     #[serde(rename = "canAutoConnect", default)]
     pub can_auto_connect: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ips: Vec<String>,
 }
 
 struct AppState {
@@ -659,6 +661,67 @@ async fn get_discovered_rooms_cmd(state: tauri::State<'_, Arc<AppState>>) -> Res
         .map_err(|e| format!("后台任务失败: {}", e))
 }
 
+fn score_discovered_ip(ip_str: &str, local_ifaces: &[(std::net::Ipv4Addr, std::net::Ipv4Addr)]) -> u8 {
+    let Ok(ip) = ip_str.parse::<std::net::Ipv4Addr>() else { return 0; };
+    if ip.is_loopback() { return 5; }
+    let matched = network::matching_interface(ip, local_ifaces).is_some();
+    if matched && !ip.is_link_local() { return 4; }
+    if matched && ip.is_link_local() { return 3; }
+    if ip.is_private() { return 2; }
+    if ip.is_link_local() { return 1; }
+    0
+}
+
+fn merge_discovered_rooms(rooms: Vec<DiscoveredRoom>) -> Vec<DiscoveredRoom> {
+    let local_ifaces: Vec<(std::net::Ipv4Addr, std::net::Ipv4Addr)> = get_network_interfaces()
+        .into_iter()
+        .map(|(_, ip, mask)| (ip, mask))
+        .collect();
+    let mut grouped: Vec<(String, DiscoveredRoom, Vec<String>)> = Vec::new();
+    for room in rooms {
+        let key = if !room.room_id.is_empty() {
+            format!("id:{}:{}", room.room_id, room.port)
+        } else {
+            format!("host:{}:{}:{}", room.host_device, room.room_name, room.port)
+        };
+        let mut room_ips = vec![room.ip.clone()];
+        for extra in &room.ips {
+            if !extra.is_empty() && !room_ips.contains(extra) {
+                room_ips.push(extra.clone());
+            }
+        }
+        if let Some((_, existing, ips)) = grouped.iter_mut().find(|(k, _, _)| *k == key) {
+            for ip in room_ips {
+                if !ip.is_empty() && !ips.contains(&ip) {
+                    ips.push(ip);
+                }
+            }
+            if room.last_seen >= existing.last_seen {
+                existing.last_seen = room.last_seen;
+                existing.room_name = room.room_name;
+                existing.host_device = room.host_device;
+                existing.host_platform = room.host_platform;
+                existing.need_password = room.need_password;
+            }
+            existing.auto_connect |= room.auto_connect;
+            existing.can_auto_connect |= room.can_auto_connect;
+        } else {
+            grouped.push((key, room, room_ips));
+        }
+    }
+    grouped
+        .into_iter()
+        .map(|(_, mut room, mut ips)| {
+            ips.sort_by(|a, b| score_discovered_ip(b, &local_ifaces).cmp(&score_discovered_ip(a, &local_ifaces)));
+            if let Some(best) = ips.first() {
+                room.ip = best.clone();
+            }
+            room.ips = ips;
+            room
+        })
+        .collect()
+}
+
 fn get_discovered_rooms_cmd_blocking(state: Arc<AppState>) -> Vec<DiscoveredRoom> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     let self_ips: HashSet<String> = get_all_lan_ips().into_iter().map(|i| i.ip).collect();
@@ -696,9 +759,10 @@ fn get_discovered_rooms_cmd_blocking(state: Arc<AppState>) -> Vec<DiscoveredRoom
             last_seen: now,
             auto_connect: false,
             can_auto_connect: false,
+            ips: vec!["127.0.0.1".into()],
         });
     }
-    list
+    merge_discovered_rooms(list)
 }
 
 #[tauri::command]
@@ -743,13 +807,13 @@ fn clear_chat_messages_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, S
     Ok(true)
 }
 
-/// The startup room is a convenience host, not a permanent second room.
-/// Joining another device must dissolve it so the peer's LAN scan can no
-/// longer offer this device as a second host.
+/// Joining another device must dissolve this device's active local room
+/// (whether startup default or manually created) so it disappears from LAN
+/// discovery and cannot accept a second set of guests.
 fn close_default_room_if_active(state: &Arc<AppState>) -> Option<String> {
     let old_room_id = {
         let mut room = state.room.lock().unwrap_or_else(|e| e.into_inner());
-        if !room.is_active || !room.auto_connect {
+        if !room.is_active {
             return None;
         }
         let id = room.room_id.clone();
@@ -762,6 +826,7 @@ fn close_default_room_if_active(state: &Arc<AppState>) -> Option<String> {
     state.members.lock().unwrap_or_else(|e| e.into_inner()).clear();
     state.auth_tokens.lock().unwrap_or_else(|e| e.into_inner()).clear();
     state.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    state.demand_files.clear();
     broadcast_room_closed(old_room_id.clone());
     session_store::remember(state);
     publish_event(state, "room", r#"{"action":"closed"}"#);
@@ -788,8 +853,7 @@ fn join_remote_room_cmd_blocking(host_url: String, pin: String, my_name: String,
 }
 
 fn join_remote_room_expected(host_url: String, pin: String, my_name: String, state: Arc<AppState>, expected: Option<String>) -> Result<serde_json::Value, String> {
-    let clean = host_url.trim().trim_end_matches('/');
-    let url = format!("{}/api/room/join", clean);
+    let clean = host_url.trim().trim_end_matches('/').to_string();
     let dev_name = if my_name.trim().is_empty() {
         whoami_device_name()
     } else {
@@ -803,22 +867,93 @@ fn join_remote_room_expected(host_url: String, pin: String, my_name: String, sta
         "expectedRoomId": expected,
     });
 
-    let exchange = key_exchange::Exchange::new()?;
+    // Collect fallback URLs from other NICs of the same discovered room.
+    let mut candidate_bases = vec![clean.clone()];
+    {
+        let parsed_target = url::Url::parse(&clean).ok();
+        let target_host = parsed_target.as_ref().and_then(|u| u.host_str()).unwrap_or("");
+        let target_port = parsed_target.as_ref().and_then(|u| u.port_or_known_default()).unwrap_or(9527);
+        let disc = state.discovered_rooms.lock().unwrap_or_else(|e| e.into_inner());
+        let matched_room_id = expected.clone().filter(|s| !s.is_empty()).or_else(|| {
+            disc.values()
+                .find(|r| r.ip == target_host && r.port == target_port && !r.room_id.is_empty())
+                .map(|r| r.room_id.clone())
+        });
+        if let Some(rid) = matched_room_id {
+            let local_ifaces: Vec<(std::net::Ipv4Addr, std::net::Ipv4Addr)> = get_network_interfaces()
+                .into_iter()
+                .map(|(_, ip, mask)| (ip, mask))
+                .collect();
+            let mut alt_ips: Vec<(String, u16)> = disc
+                .values()
+                .filter(|r| r.room_id == rid)
+                .map(|r| (r.ip.clone(), r.port))
+                .collect();
+            alt_ips.sort_by(|a, b| score_discovered_ip(&b.0, &local_ifaces).cmp(&score_discovered_ip(&a.0, &local_ifaces)));
+            for (ip, port) in alt_ips {
+                let base = format!("http://{}:{}", ip, port);
+                if !candidate_bases.contains(&base) {
+                    candidate_bases.push(base);
+                }
+            }
+        }
+    }
+
     let client = get_http_client();
-    let resp = client.post(&url)
-        .set("X-WenBox-Key", &exchange.public)
-        .set("Content-Type", "application/json; charset=utf-8")
-        .send_string(&body.to_string());
-    let resp = match resp {
-        Ok(response) | Err(ureq::Error::Status(_, response)) => response,
-        Err(error) => return Err(format!("无法连接 {}。请确认对端 WenBox 已打开、该地址属于当前网卡，且 Windows 防火墙允许 WenBox 的 TCP 9527 / UDP 9528（包括网线直连使用的公用网络）。详细原因: {}", clean, error)),
+    let mut last_err = None;
+    let mut succeeded = None;
+    for base in &candidate_bases {
+        let exchange = key_exchange::Exchange::new()?;
+        let url = format!("{}/api/room/join", base);
+        let resp = client.post(&url)
+            .set("X-WenBox-Key", &exchange.public)
+            .set("Content-Type", "application/json; charset=utf-8")
+            .send_string(&body.to_string());
+        match resp {
+            Ok(response) | Err(ureq::Error::Status(_, response)) => {
+                succeeded = Some((base.clone(), exchange, response));
+                break;
+            }
+            Err(error) => {
+                last_err = Some(error);
+            }
+        }
+    }
+
+    let (active_base, exchange, resp) = match succeeded {
+        Some(tuple) => tuple,
+        None => {
+            let error = last_err.map(|e| e.to_string()).unwrap_or_else(|| "连接超时".into());
+            return Err(format!("无法连接 {}。请确认对端 WenBox 已打开、该地址属于当前网卡，且 Windows 防火墙允许 WenBox 的 TCP 9527 / UDP 9528（包括网线直连使用的公用网络）。详细原因: {}", clean, error));
+        }
     };
 
     let mut val: serde_json::Value = resp.into_json().map_err(|e| format!("解析房间响应失败: {}", e))?;
     if val["success"].as_bool() == Some(true) {
         exchange.open(&mut val)?;
+        if let Ok(parsed) = url::Url::parse(&active_base) {
+            if let Some(host_ip) = parsed.host_str().filter(|ip| !ip.starts_with("127.")) {
+                let port = parsed.port_or_known_default().unwrap_or(9527);
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                let host_dev = val["room"]["hostDevice"].as_str().unwrap_or("房主").to_string();
+                let room_name = val["room"]["roomName"].as_str().unwrap_or("房间").to_string();
+                let key = format!("{}:{}", host_ip, port);
+                state.devices.lock().unwrap_or_else(|e| e.into_inner()).insert(key, LanDevice {
+                    name: format!("{} [{}]", host_dev, room_name),
+                    ip: host_ip.to_string(),
+                    port,
+                    platform: "Desktop".into(),
+                    last_seen: now,
+                });
+            }
+        }
+        if let Some(object) = val.as_object_mut() {
+            if active_base != clean {
+                object.insert("resolvedHostUrl".into(), serde_json::Value::String(active_base));
+            }
+        }
         // Joining another device means this device is no longer a host.  Close
-        // the automatic startup room so it disappears from LAN discovery and
+        // any active local room so it disappears from LAN discovery and
         // cannot accept a second set of guests.
         if let Some(closed_room_id) = close_default_room_if_active(&state) {
             if let Some(object) = val.as_object_mut() {
@@ -2549,14 +2684,25 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                                 member_id = new_member_id.clone();
                                 let member = RoomMember {
                                     id: new_member_id,
-                                    name: display_name,
+                                    name: display_name.clone(),
                                     ip: client_ip.clone(),
-                                    platform: plat,
+                                    platform: plat.clone(),
                                     access_ip: access_host,
                                     joined_at: now,
                                     last_seen: now,
                                 };
-                                state.members.lock().unwrap_or_else(|e| e.into_inner()).insert(token, member);
+                                {
+                                    let mut members_map = state.members.lock().unwrap_or_else(|e| e.into_inner());
+                                    let stale_tokens: Vec<String> = members_map
+                                        .iter()
+                                        .filter(|(k, m)| *k != "host" && m.name == display_name && m.platform == plat)
+                                        .map(|(k, _)| k.clone())
+                                        .collect();
+                                    for old_token in &stale_tokens {
+                                        members_map.remove(old_token);
+                                    }
+                                    members_map.insert(token, member);
+                                }
 
                                 let host_ip_to_show = state.selected_ip.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(get_primary_ip);
                                 room_info = serde_json::json!({
@@ -2779,15 +2925,17 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                         room_name: my_room.room_name,
                         host_device: host_dev,
                         host_platform: host_plat,
-                        ip: primary_ip,
+                        ip: primary_ip.clone(),
                         port,
                         need_password: my_room.need_password,
                         last_seen: now,
                         auto_connect: false,
                         can_auto_connect: false,
+                        ips: vec![primary_ip],
                     });
                 }
 
+                let list = merge_discovered_rooms(list);
                 let json = serde_json::json!({ "rooms": list }).to_string();
                 let mut resp = Response::from_string(json);
                 resp = with_cors!(resp);
@@ -3328,6 +3476,7 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                     last_seen: now,
                                     auto_connect: val["autoConnect"].as_bool().unwrap_or(false),
                                     can_auto_connect: val["canAutoConnect"].as_bool().unwrap_or(true),
+                                    ips: vec![ip.clone()],
                                 };
                                 state_recv.discovered_rooms.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone(), disc);
 
@@ -3387,6 +3536,23 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                                 let reply_socket = reply_socket.as_ref().unwrap_or(&socket);
                                 let _ = reply_socket.send_to(reply.as_bytes(), src);
                                 let _ = reply_socket.send_to(reply.as_bytes(), (src.ip(), DISCOVERY_PORT));
+                            } else {
+                                let interfaces = get_network_interfaces().into_iter()
+                                    .map(|(_, ip, mask)| (ip, mask)).collect::<Vec<_>>();
+                                let matched = match src.ip() {
+                                    std::net::IpAddr::V4(ip) => network::matching_interface(ip, &interfaces),
+                                    _ => None,
+                                };
+                                let reply = serde_json::json!({
+                                    "action": "wenbox_discovery",
+                                    "device": whoami_device_name(),
+                                    "platform": desktop_platform(),
+                                    "port": my_port,
+                                }).to_string();
+                                let reply_socket = matched.and_then(|ip| network::discovery_sender(ip).ok());
+                                let reply_socket = reply_socket.as_ref().unwrap_or(&socket);
+                                let _ = reply_socket.send_to(reply.as_bytes(), src);
+                                let _ = reply_socket.send_to(reply.as_bytes(), (src.ip(), DISCOVERY_PORT));
                             }
                         }
 
@@ -3395,10 +3561,14 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                             let closed_room_id = val["roomId"].as_str().unwrap_or("");
                             let sender_ip = src.ip().to_string();
                             let mut rooms = state_recv.discovered_rooms.lock().unwrap_or_else(|e| e.into_inner());
-                            // 只移除"该 room_id 且来自该发送方"的条目，避免误删同名房间 (S6)
-                            rooms.retain(|_k, v| !(v.room_id == closed_room_id && v.ip == sender_ip));
-                            let mut devs = state_recv.devices.lock().unwrap_or_else(|e| e.into_inner());
-                            devs.retain(|_k, v| v.ip != sender_ip);
+                            // 移除该 closed_room_id 关联的所有多网卡房间条目，同时保留设备节点以维持流转重连发现
+                            rooms.retain(|_k, v| {
+                                if !closed_room_id.is_empty() {
+                                    v.room_id != closed_room_id
+                                } else {
+                                    v.ip != sender_ip
+                                }
+                            });
                         }
 
                         // 4. 传统设备节点探测广播
@@ -4169,7 +4339,48 @@ mod tests {
         let other_port = spawn_test_server(protected_state());
         let joined = join_remote_room_cmd_blocking(format!("http://127.0.0.1:{}", other_port), "246810".into(), "访客".into(), local.clone()).unwrap();
         assert_eq!(joined["success"], true);
-        assert_eq!(local.messages.lock().unwrap().len(), 1);
+        assert_eq!(joined["localRoomClosed"], true);
+        assert!(!local.room.lock().unwrap().is_active);
+        assert!(local.messages.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_merge_discovered_rooms_combines_multiple_nics_of_same_room() {
+        let rooms = vec![
+            DiscoveredRoom {
+                room_id: "same-room-uuid".into(),
+                room_name: "多网卡房间".into(),
+                host_device: "Win主机".into(),
+                host_platform: "Windows".into(),
+                ip: "169.254.10.20".into(),
+                port: 9527,
+                need_password: false,
+                last_seen: 100,
+                auto_connect: true,
+                can_auto_connect: true,
+                ips: vec!["169.254.10.20".into()],
+            },
+            DiscoveredRoom {
+                room_id: "same-room-uuid".into(),
+                room_name: "多网卡房间".into(),
+                host_device: "Win主机".into(),
+                host_platform: "Windows".into(),
+                ip: "192.168.1.50".into(),
+                port: 9527,
+                need_password: false,
+                last_seen: 102,
+                auto_connect: false,
+                can_auto_connect: true,
+                ips: vec!["192.168.1.50".into()],
+            },
+        ];
+        let merged = merge_discovered_rooms(rooms);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].room_id, "same-room-uuid");
+        assert_eq!(merged[0].ips.len(), 2);
+        assert!(merged[0].ips.contains(&"192.168.1.50".to_string()));
+        assert!(merged[0].ips.contains(&"169.254.10.20".to_string()));
+        assert!(merged[0].auto_connect);
     }
 
     #[test]
@@ -4635,7 +4846,7 @@ mod tests {
     }
 
     #[test]
-    fn joining_another_room_preserves_a_manual_hosted_room() {
+    fn joining_another_room_dissolves_a_manual_hosted_room() {
         let host = protected_state();
         let host_port = spawn_test_server(host);
         let local = protected_state();
@@ -4654,9 +4865,10 @@ mod tests {
             None,
         ).unwrap();
         assert_eq!(response["success"], true);
-        assert!(response.get("localRoomClosed").is_none());
-        assert!(local.room.lock().unwrap().is_active);
-        assert_eq!(local.room.lock().unwrap().room_id, "manual-room");
+        assert_eq!(response["localRoomClosed"], true);
+        assert_eq!(response["localRoomId"], "manual-room");
+        assert!(!local.room.lock().unwrap().is_active);
+        assert!(local.room.lock().unwrap().room_id.is_empty());
     }
 
     #[test]

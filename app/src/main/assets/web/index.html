@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
-    <meta name="wenbox-version" content="1.4.16">
+    <meta name="wenbox-version" content="1.4.17">
     <title>WenBox · 文件与消息直传</title>
     <script src="theme.js"></script>
     <link rel="icon" type="image/png" href="logo.png">
@@ -141,6 +141,19 @@
                             <button class="btn btn--primary btn--sm" data-action="openCreateRoomModal" type="button"> 创建房间</button>
                         </div>
                     </div>
+                </div>
+                <div class="card lobby" id="roomActiveMembersCard" hidden>
+                    <div class="section-title row row--between mb-2">
+                        <div>
+                            <span class="fs-md fw-semibold text-1"> 房间成员 (<span id="roomActiveMembersCount">1</span>)</span>
+                            <p id="roomActiveMembersHint" class="fs-xs text-2 mt-1">当前已在房间中；如需重新加入其他房间，请先退出当前房间。</p>
+                        </div>
+                        <div class="row gap-2">
+                            <button id="btnRefreshRoomViewMembers" class="btn btn--ghost btn--sm" type="button">刷新成员</button>
+                            <button id="btnExitFromRoomView" class="btn btn--secondary btn--sm" type="button">退出房间</button>
+                        </div>
+                    </div>
+                    <div id="roomViewMembersList" class="mt-3 flex-col gap-2"></div>
                 </div></main><main id="view-room" class="primary-view" aria-label="快传" hidden><section class="card quick-transfer-empty only-client"><h2>快传会话</h2><p>加入或创建房间后，在这里发送消息、图片和文件。</p><button type="button" class="btn btn--primary" data-view="view-rooms">打开房间</button></section><div class="segmented room-mobile-tabs only-in-room" aria-label="房间内容"><button type="button" data-room-page="chat" class="active" aria-pressed="true">聊天</button><button type="button" data-room-page="files" aria-pressed="false">文件</button></div><div class="room-workspace only-in-room"><section id="chatActiveContent" class="card chat-card">
                 <div class="conversation-heading"><div><svg class="icon icon--sm" aria-hidden="true"><use href="#i-message-square"></use></svg><h2>会话</h2></div><span>消息 · 截图 · 文件</span></div>
 

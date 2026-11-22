@@ -18,6 +18,7 @@ pub struct Engine {
     runtime: Option<tempfile::TempDir>,
     started: Option<Instant>,
     failed: Option<String>,
+    failed_at: Option<Instant>,
     source: bool,
     pointer_speed: u16,
     scroll_speed: u16,
@@ -62,6 +63,7 @@ impl Engine {
             runtime: None,
             started: None,
             failed: None,
+            failed_at: None,
             source: false,
             connected: Arc::new(Mutex::new(None)),
             monitor_stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -104,6 +106,7 @@ impl Engine {
                 self.child = None;
                 self.running = false;
                 self.failed = self.applied.take();
+                self.failed_at = Some(Instant::now());
                 self.started = None;
                 self.runtime = None;
                 let detail = self.diagnostics();
@@ -157,6 +160,7 @@ impl Engine {
                 let failed = self.applied.clone();
                 let _ = self.stop();
                 self.failed = failed;
+                self.failed_at = Some(Instant::now());
                 self.message = "输入核心启动超时，尚未就绪；请检查诊断后停止并重新启动流转".into();
             }
         }
@@ -272,7 +276,18 @@ impl Engine {
         let stamp = fingerprint(&serde_json::to_vec(profile).map_err(|e| e.to_string())?);
         self.view();
         if self.failed.as_ref() == Some(&stamp) {
-            return Err(self.message.clone());
+            let permanent = self.message.contains("macOS 尚未信任")
+                || self.message.contains("要求 macOS 14")
+                || self.message.contains("缺少");
+            if permanent
+                || self
+                    .failed_at
+                    .is_none_or(|t| t.elapsed() < Duration::from_secs(3))
+            {
+                return Err(self.message.clone());
+            }
+            self.failed = None;
+            self.failed_at = None;
         }
         if (self.running || self.child.is_some()) && self.applied.as_ref() == Some(&stamp) {
             return Ok(());
@@ -348,14 +363,12 @@ impl Engine {
             }
             self.connected = Arc::new(Mutex::new(None));
             self.monitor_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            if profile.role == Role::Source {
-                super::ipc::monitor(
-                    runtime.path().into(),
-                    screen(&profile.peer.id)?,
-                    self.connected.clone(),
-                    self.monitor_stop.clone(),
-                );
-            }
+            super::ipc::monitor(
+                runtime.path().into(),
+                screen(&profile.peer.id)?,
+                self.connected.clone(),
+                self.monitor_stop.clone(),
+            );
             self.child = Some(child);
             self.runtime = Some(runtime);
             self.started = Some(Instant::now());
@@ -436,9 +449,14 @@ impl Engine {
         self.runtime = None;
         self.started = None;
         self.failed = None;
+        self.failed_at = None;
         self.applied = None;
         self.message = "流转已停止".into();
         Ok(())
+    }
+    pub fn clear_failed(&mut self) {
+        self.failed = None;
+        self.failed_at = None;
     }
 }
 impl Drop for Engine {

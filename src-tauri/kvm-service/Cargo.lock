@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "wenbox-kvm-service"
-version = "1.4.16"
+version = "1.4.17"
 dependencies = [
  "base64 0.21.7",
  "rcgen",

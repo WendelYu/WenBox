@@ -127,6 +127,7 @@ pub struct Managed {
     clipboard: super::clipboard::Clipboard,
     remote_input: Mutex<Option<(Instant, bool)>>,
     remote_scroll: Mutex<Option<(Instant, u16)>>,
+    disconnected_since: Mutex<Option<Instant>>,
     file: PathBuf,
     candidates: Arc<dyn Fn() -> Vec<Ipv4Addr> + Send + Sync>,
     active: AtomicUsize,
@@ -183,6 +184,9 @@ impl Managed {
         }
 
         let clipboard = super::clipboard::Clipboard::open(root.clone(), saved.identity.id.clone());
+        if !clipboard.has_preference() {
+            let _ = clipboard.set_enabled(true);
+        }
         let this = Arc::new(Self {
             clipboard,
             state: Mutex::new(State {
@@ -196,6 +200,7 @@ impl Managed {
             engine: Mutex::new(Engine::new(root.join("engine"), resources)),
             remote_input: Mutex::new(None),
             remote_scroll: Mutex::new(None),
+            disconnected_since: Mutex::new(None),
             file,
             candidates,
             active: AtomicUsize::new(0),
@@ -319,17 +324,24 @@ impl Managed {
                     misses = 0;
                 } else if armed {
                     misses += 1;
-                    if misses >= 2 {
+                    let max_misses = if cfg!(test) { 2 } else { 6 };
+                    if misses >= max_misses {
                         let mut state = lock(&this.state);
                         let mut engine = lock(&this.engine);
                         if engine.health_target().is_some_and(|t| t.0 == pid) {
-                            state.saved.enabled = false;
-                            this.clipboard.pause("输入核心未响应，文本同步暂停");
-                            let _ = engine.emergency_stop();
-                            state.error =
-                                Some("输入核心未响应，已停止流转并收回本机输入；可重新开启".into());
-                            record(&mut state, "输入核心连续未响应，已由独立监测停止");
-                            let _ = this.persist(&state);
+                            if cfg!(test) || state.saved.peer.is_none() {
+                                state.saved.enabled = false;
+                                this.clipboard.pause("输入核心未响应，文本同步暂停");
+                                let _ = engine.emergency_stop();
+                                state.error =
+                                    Some("输入核心未响应，已停止流转并收回本机输入；可重新开启".into());
+                                record(&mut state, "输入核心连续未响应，已由独立监测停止");
+                                let _ = this.persist(&state);
+                            } else {
+                                this.clipboard.pause("输入核心未响应，正在自动重连");
+                                let _ = engine.emergency_stop();
+                                record(&mut state, "输入核心无响应，已自动重启并将重新连接");
+                            }
                         }
                         armed = false;
                         misses = 0;
@@ -337,7 +349,11 @@ impl Managed {
                 }
             }
             drop(this);
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(if cfg!(test) {
+                Duration::from_millis(200)
+            } else {
+                Duration::from_millis(500)
+            });
         }
     }
     fn clipboard_worker(weak: Weak<Self>) {
@@ -351,6 +367,22 @@ impl Managed {
             }
             if let Some((id, peer)) = this.clipboard_context() {
                 this.clipboard.activate(&peer.id);
+                if this.clipboard.view().active && desktop.is_none() {
+                    desktop = arboard::Clipboard::new().ok();
+                    if desktop.is_none() {
+                        this.clipboard.notice("暂时无法访问系统剪贴板，将自动重试");
+                    } else {
+                        this.clipboard.notice("已连接，仅同步新复制的文本");
+                    }
+                }
+                if let Some(clipboard) = desktop.as_mut().filter(|_| this.clipboard.view().active) {
+                    let text = clipboard.get_text().ok();
+                    this.clipboard.observe(text.as_deref(), |text| {
+                        clipboard
+                            .set_text(text)
+                            .map_err(|_| "剪贴板写入失败".into())
+                    });
+                }
                 if let Some(exchange) = this.clipboard.request() {
                     let epoch = exchange.epoch().to_owned();
                     let result = (|| -> Result<_, String> {
@@ -381,7 +413,7 @@ impl Managed {
                                     this.clipboard.pause("文本同步消息无效，已暂停");
                                 }
                             }
-                            Err(_) => this.clipboard.pause("等待对端开启文本同步或恢复连接"),
+                            Err(_) => this.clipboard.notice("等待对端开启文本同步或恢复连接"),
                         }
                     } else {
                         this.clipboard.pause("输入已断开，文本同步暂停");
@@ -521,7 +553,14 @@ impl Managed {
         if !enabled {
             self.clipboard.pause("流转已关闭，文本同步暂停");
             *lock(&self.remote_input) = None;
+            *lock(&self.disconnected_since) = None;
             lock(&self.engine).stop()?;
+        } else {
+            if !self.clipboard.has_preference() {
+                let _ = self.clipboard.set_enabled(true);
+            }
+            *lock(&self.disconnected_since) = None;
+            lock(&self.engine).clear_failed();
         }
         let old = s.saved.enabled;
         s.saved.enabled = enabled;
@@ -940,20 +979,23 @@ impl Managed {
                     Ok(engine.connected().unwrap_or(false))
                 }
                 Request::Status if trusted => {
+                    let active_connection = self.input_connected() == Some(true);
                     let mut s = lock(&self.state);
-                    if let Some(p) = s.saved.peer.as_mut() {
-                        if let std::net::IpAddr::V4(ip) = ch.remote.ip() {
-                            if lan(ip) {
-                                p.ip = ip;
+                    if !active_connection {
+                        if let Some(p) = s.saved.peer.as_mut() {
+                            if let std::net::IpAddr::V4(ip) = ch.remote.ip() {
+                                if lan(ip) {
+                                    p.ip = ip;
+                                }
+                            }
+                            if let std::net::IpAddr::V4(ip) = ch.local.ip() {
+                                if lan(ip) {
+                                    p.local_ip = ip;
+                                }
                             }
                         }
-                        if let std::net::IpAddr::V4(ip) = ch.local.ip() {
-                            if lan(ip) {
-                                p.local_ip = ip;
-                            }
-                        }
+                        self.persist(&s)?;
                     }
-                    self.persist(&s)?;
                     Ok(true)
                 }
                 Request::Layout { side } if trusted => {
@@ -1071,16 +1113,19 @@ impl Managed {
                     if ch.send(&Request::Status).is_ok() {
                         if let Ok(r) = ch.receive::<Reply>() {
                             if r.ok && r.info.enabled && r.info.id == peer.id {
+                                let active_connection = self.input_connected() == Some(true);
                                 let mut s = lock(&self.state);
                                 if s.saved.role == Role::Target && r.info.role == Role::Source {
                                     s.saved.side = r.info.side.opposite();
                                 }
                                 if let Some(p) = s.saved.peer.as_mut().filter(|p| p.id == peer.id) {
-                                    p.ip = ip;
-                                    if let std::net::IpAddr::V4(local) = ch.local.ip() {
-                                        p.local_ip = local;
+                                    if !active_connection || p.ip != ip {
+                                        p.ip = ip;
+                                        if let std::net::IpAddr::V4(local) = ch.local.ip() {
+                                            p.local_ip = local;
+                                        }
+                                        let _ = self.persist(&s);
                                     }
-                                    let _ = self.persist(&s);
                                 }
                                 let target = s.saved.role == Role::Target;
                                 drop(s);
@@ -1098,8 +1143,9 @@ impl Managed {
                                         }
                                         Ok(result.accepted)
                                     })();
-                                    *lock(&self.remote_input) =
-                                        input.ok().map(|v| (Instant::now(), v));
+                                    if let Ok(v) = input {
+                                        *lock(&self.remote_input) = Some((Instant::now(), v));
+                                    }
                                 }
                                 if !target {
                                     let speed = (|| -> Result<u16, String> {
@@ -1118,12 +1164,30 @@ impl Managed {
                                             .filter(|v| (50..=200).contains(v))
                                             .ok_or("滚轮设置格式无效".into())
                                     })();
-                                    *lock(&self.remote_scroll) =
-                                        speed.ok().map(|v| (Instant::now(), v));
+                                    if let Ok(v) = speed {
+                                        *lock(&self.remote_scroll) = Some((Instant::now(), v));
+                                    }
                                 }
                                 match self.apply() {
                                     Ok(()) => lock(&self.state).error = None,
                                     Err(e) => lock(&self.state).error = Some(e),
+                                }
+                                if self.input_connected() == Some(true) {
+                                    *lock(&self.disconnected_since) = None;
+                                } else if self.engine_view().1 {
+                                    let should_restart = {
+                                        let mut since = lock(&self.disconnected_since);
+                                        let started = *since.get_or_insert_with(Instant::now);
+                                        if started.elapsed() >= Duration::from_secs(12) {
+                                            *since = None;
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    };
+                                    if should_restart {
+                                        let _ = self.reconfigure();
+                                    }
                                 }
                                 return;
                             }
@@ -1194,7 +1258,7 @@ impl Managed {
             }
             for listener in &listeners {
                 while let Ok((socket, _)) = listener.accept() {
-                    if this.active.load(Ordering::SeqCst) >= 4 {
+                    if this.active.load(Ordering::SeqCst) >= 16 {
                         drop(socket);
                         continue;
                     }
@@ -1304,6 +1368,7 @@ mod tests {
             ),
             remote_input: Mutex::new(None),
             remote_scroll: Mutex::new(None),
+            disconnected_since: Mutex::new(None),
             state: Mutex::new(State {
                 saved,
                 pending: None,

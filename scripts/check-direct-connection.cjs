@@ -104,9 +104,9 @@ async function main() {
         await busy.evaluate(() => { fixture.local.canAutoConnect = false; });
         await busy.waitForTimeout(1000);
         assert.equal(await busy.evaluate(() => document.body.dataset.roomMode), 'host');
-        // Hosts can browse WiFi peers without dissolving; duplicate room IDs keep their endpoint.
+        // Hosts can browse WiFi peers without dissolving; same-room multi-NIC entries merge into one row with preferred NIC.
         const manual = await client('manual', '192.168.8.2');
-        await manual.evaluate(rooms => { fixture.rooms = rooms; }, [peer('win', '169.254.18.3'), peer('win', '192.168.8.9')]);
+        await manual.evaluate(rooms => { fixture.rooms = rooms; }, [peer('win', '192.168.8.9'), peer('win', '169.254.18.3'), peer('other', '192.168.8.10')]);
         await manual.locator('#btnBrowseRooms').click();
         await manual.locator('[data-action="join-room"]').nth(1).waitFor();
         assert.equal(await manual.evaluate(() => document.body.dataset.roomMode), 'host');

@@ -34,6 +34,8 @@ test('manual, password, occupied or closed local rooms keep their current sessio
 test('multiple default peers require manual choice; duplicate packets do not', () => {
     assert.equal(selectDirectPeer(b, [aRoom, { ...aRoom, roomId: 'ccc', ip: '169.254.9.9' }], [bRoom.ip]), null);
     assert.equal(selectDirectPeer(b, [aRoom, aRoom], [bRoom.ip]), aRoom);
+    const mergedMultiNic = { ...aRoom, ip: '192.168.1.8', ips: ['192.168.1.8', aRoom.ip] };
+    assert.equal(selectDirectPeer(b, [mergedMultiNic], [bRoom.ip])?.ip, aRoom.ip);
 });
 test('restarted end rejoins a host with existing conversation regardless of new ID ordering', () => {
     const usedHost = { ...bRoom, canAutoConnect: false };
