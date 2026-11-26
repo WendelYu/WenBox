@@ -160,6 +160,8 @@ fn spawn(
         entry.dwSize = std::mem::size_of_val(&entry) as u32;
         let mut more = Process32FirstW(snapshot.0, &mut entry);
         // Never steal or terminate a separately running input application.
+        // Only reap orphaned deskflow-core.exe instances launched from WenBox's own binary path.
+        let expected_core = std::fs::canonicalize(core).ok();
         while more != 0 {
             let n = entry
                 .szExeFile
@@ -169,7 +171,39 @@ fn spawn(
             if String::from_utf16_lossy(&entry.szExeFile[..n])
                 .eq_ignore_ascii_case("deskflow-core.exe")
             {
-                return Err("独立 Deskflow 输入核心仍在运行，请先停止它".into());
+                let mut terminated_wenbox_orphan = false;
+                let raw_proc = OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+                    0,
+                    entry.th32ProcessID,
+                );
+                if !raw_proc.is_null() {
+                    let proc_handle = Handle(raw_proc);
+                    let mut path_buf = vec![0u16; 32768];
+                    let mut path_len = path_buf.len() as u32;
+                    if QueryFullProcessImageNameW(
+                        proc_handle.0,
+                        0,
+                        path_buf.as_mut_ptr(),
+                        &mut path_len,
+                    ) != 0
+                    {
+                        let running_path =
+                            PathBuf::from(String::from_utf16_lossy(&path_buf[..path_len as usize]));
+                        let matches_wenbox = expected_core.as_ref().is_some_and(|exp| {
+                            std::fs::canonicalize(&running_path).is_ok_and(|act| {
+                                act.to_string_lossy().eq_ignore_ascii_case(&exp.to_string_lossy())
+                            })
+                        });
+                        if matches_wenbox && TerminateProcess(proc_handle.0, 0) != 0 {
+                            WaitForSingleObject(proc_handle.0, 1000);
+                            terminated_wenbox_orphan = true;
+                        }
+                    }
+                }
+                if !terminated_wenbox_orphan {
+                    return Err("独立 Deskflow 输入核心仍在运行，请先停止它".into());
+                }
             }
             more = Process32NextW(snapshot.0, &mut entry);
         }
@@ -232,7 +266,7 @@ fn spawn(
         let core_text = core.to_str().ok_or("输入组件路径无效")?;
         let config_text = config.to_str().ok_or("输入配置路径无效")?;
         let mut line = wide(&format!(
-            "\"{core_text}\" {} --settings \"{config_text}\"",
+            "\"{core_text}\" {} --new-instance --settings \"{config_text}\"",
             if role == Role::Source {
                 "server"
             } else {

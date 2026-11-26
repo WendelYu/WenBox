@@ -156,6 +156,10 @@ pub fn clipboard_files() -> Result<Vec<ClipboardFile>, String> {
         .collect())
 }
 
+pub fn resolve_path(id: &str) -> Option<PathBuf> {
+    files().lock().ok()?.get(id).cloned()
+}
+
 #[tauri::command]
 pub async fn clipboard_file_chunk(
     id: String,

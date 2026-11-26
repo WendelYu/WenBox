@@ -18,6 +18,16 @@ async function main() {
     const leaveTokens = [];
     const offers = [];
     const sendAttempts = new Map();
+    const sseClients = new Set();
+    let fixtureMembers = [
+        { id: 'host-id', name: '测试电脑 (房主)', ip: '192.168.1.8', platform: 'macOS' },
+        { id: 'guest-id', name: '现场工程师', ip: '192.168.1.20', accessIp: '192.168.1.8:9527', platform: 'Android' }
+    ];
+    const pushSse = (event, data = '{}') => {
+        for (const client of sseClients) {
+            try { client.write(`event: ${event}\ndata: ${data}\n\n`); } catch (_) { sseClients.delete(client); }
+        }
+    };
     const room = { roomId: 'fixture-room', roomName: '现场协作', hostDevice: '测试电脑', hostIp: '192.168.1.8', hostPort: 9527, needPassword: true, pin: '6888' };
     const messages = [], received = [], attempts = new Map();
     const failures = [], browserErrors = [];
@@ -42,7 +52,9 @@ async function main() {
         if (url.pathname === '/api/events') {
             res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });
             res.write('retry: 60000\nevent: ready\ndata: {}\n\n');
-            return res.end();
+            sseClients.add(res);
+            req.on('close', () => sseClients.delete(res));
+            return;
         }
         if (url.pathname === '/api/status') return send({ running: true, version: require('../package.json').version, ip: '192.168.1.8', all_ips: ['192.168.1.8', '192.168.2.8'], device: '测试电脑', port: 9527, platform: 'macOS' });
         if (url.pathname === '/api/room/status') return send({ ...room, isActive: active, isHost: req.headers['x-host-token'] === 'host-token' });
@@ -51,7 +63,7 @@ async function main() {
         if (url.pathname === '/api/room/close') { active = false; return send({ success: true }); }
         if (url.pathname === '/api/room/join') { if (json().resumeRoomId) { assert.equal(json().resumeRoomId, room.roomId); assert.equal(json().pin, '6888'); expired = false; resumed++; } if (json().pin === '0000') return send({ success: false, message: '尝试过于频繁', retryAfter: 3 }, 429); active = true; return send({ success: true, token: 'guest-token', memberId: 'guest-id', room: { ...room } }); }
         if (url.pathname === '/api/room/heartbeat') return send({ success: true, room: { ...room, isActive: active } });
-        if (url.pathname === '/api/room/members') return send({ count: 2, members: [{ id: 'host-id', name: '测试电脑 (房主)', ip: '192.168.1.8', platform: 'macOS' }, { id: 'guest-id', name: '现场工程师', ip: '192.168.1.20', accessIp: '192.168.1.8:9527', platform: 'Android' }] });
+        if (url.pathname === '/api/room/members') return send({ count: fixtureMembers.length, members: fixtureMembers });
         if (url.pathname === '/api/room/leave') { leaveTokens.push(json().token); return send({ success: true }); }
         if (url.pathname === '/api/room/set_ip') return send({ success: true });
         if (url.pathname === '/api/offers') {
@@ -312,6 +324,17 @@ async function main() {
         await page.locator('#modalBtnConfirmJoinPin').click();
         await page.waitForFunction(() => document.body.dataset.roomMode === 'joined');
         await page.locator('#joinRoomPinModal').waitFor({ state: 'hidden' });
+        await page.waitForFunction(() => document.getElementById('roomRealtimeBadge')?.textContent === '实时同步');
+        await page.locator('#chatOnlineMemberBadge').click();
+        await page.locator('#onlineMembersModal[open]').waitFor();
+        fixtureMembers = [...fixtureMembers, { id: 'third-id', name: '新加入平板', ip: '192.168.1.33', platform: 'Android' }];
+        pushSse('members');
+        await page.waitForFunction(() => document.getElementById('memberCount')?.textContent === '3 台在线');
+        fixtureMembers = fixtureMembers.slice(0, 2);
+        pushSse('members');
+        await page.waitForFunction(() => document.getElementById('memberCount')?.textContent === '2 台在线');
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => !document.getElementById('onlineMembersModal').open);
         for (const width of [1280, 1440]) {
             await page.setViewportSize({ width, height: 900 });
             const heading = await page.locator('#currentViewingDeviceTitle').boundingBox();
@@ -528,15 +551,44 @@ async function main() {
         assert.equal(await page.locator('#webChatMessageInput').inputValue(), '');
         assert.equal(await page.locator('#archiveFileChoices').textContent(), '');
         assert.equal(await page.evaluate(() => localStorage.getItem('wenbox_room_token')), null);
+        // Host close notification immediately dissolves guest back to discovery lobby.
+        await page.locator('#btnBrowseRooms').click();
+        await page.locator('[data-action="join-room"]').waitFor();
+        await page.locator('[data-action="join-room"]').click();
+        await page.locator('#modalInputJoinPin').fill('6888');
+        await page.locator('#modalBtnConfirmJoinPin').click();
+        await page.waitForFunction(() => document.body.dataset.roomMode === 'joined');
+        active = false;
+        pushSse('room', JSON.stringify({ action: 'closed' }));
+        await page.waitForFunction(() => document.body.dataset.roomMode === 'client');
+        // Sustained host offline (beyond brief retrying tolerance) auto-dissolves the dead room.
+        await page.locator('[data-action="join-room"]').waitFor();
+        await page.locator('[data-action="join-room"]').click();
+        await page.locator('#modalInputJoinPin').fill('6888');
+        await page.locator('#modalBtnConfirmJoinPin').click();
+        await page.waitForFunction(() => document.body.dataset.roomMode === 'joined');
+        offline = true;
+        for (const client of sseClients) { try { client.end(); } catch (_) {} sseClients.delete(client); }
+        const deadline = Date.now() + 20000;
+        while (await page.evaluate(() => document.body.dataset.roomMode === 'joined') && Date.now() < deadline) {
+            await page.evaluate(() => WenBox.scheduler.runNow());
+            await page.waitForTimeout(1600);
+        }
+        assert.equal(await page.evaluate(() => document.body.dataset.roomMode), 'client', 'sustained host offline must dissolve room');
+        offline = false; active = false;
         assert.deepEqual(browserErrors, []); assert.deepEqual(failures, []);
-        console.log('Browser regression passed: strict CSP, create/join/leave, PIN modes/reveal/429 cooldown, optimistic messages/retry/reconciliation/avatars, code copy, metadata-only publication, room/chat drop routing, restart identity/ownership recovery, download, tools, tablet drawer, mobile segments, and light/dark screenshots.');
+        console.log('Browser regression passed: strict CSP, create/join/leave, live SSE badge/members, host-offline auto-dissolve, PIN modes/reveal/429 cooldown, optimistic messages/retry/reconciliation/avatars, code copy, metadata-only publication, room/chat drop routing, restart identity/ownership recovery, download, tools, tablet drawer, mobile segments, and light/dark screenshots.');
     } catch (error) {
         await page?.screenshot({ path: path.join(screenshots, 'failure.png'), fullPage: true }).catch(() => {});
         console.error('Browser errors:', browserErrors);
         console.error('Fixture routes:', failures);
         throw error;
     } finally {
-        await browser?.close(); await new Promise(resolve => server.close(resolve));
+        for (const client of sseClients) { try { client.destroy(); } catch (_) {} }
+        sseClients.clear();
+        await browser?.close();
+        server.closeAllConnections?.();
+        await new Promise(resolve => server.close(resolve));
     }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

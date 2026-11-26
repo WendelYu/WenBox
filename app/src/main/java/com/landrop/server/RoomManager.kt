@@ -221,7 +221,7 @@ object RoomManager {
         val iterator = members.entries.iterator()
         while (iterator.hasNext()) {
             val item = iterator.next()
-            if (now - item.value.lastSeen > 15000 && item.key != HOST_MEMBER_KEY) {
+            if (now - item.value.lastSeen > 8000 && item.key != HOST_MEMBER_KEY) {
                 expiredTokens.add(item.key)
                 iterator.remove()
             }
@@ -229,6 +229,8 @@ object RoomManager {
         // 成员超时清理时同步回收 auth token，避免已退出成员的旧令牌永久有效 (S3)
         if (expiredTokens.isNotEmpty()) {
             authTokens.removeAll(expiredTokens.toSet())
+            onMembersChangedListener?.invoke(members.values.toList())
+            SseHub.publish("members")
         }
         return members.values.toList()
     }

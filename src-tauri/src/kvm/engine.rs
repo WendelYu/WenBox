@@ -317,13 +317,14 @@ impl Engine {
         }
         #[cfg(target_os = "macos")]
         {
+            cleanup_stale_wenbox_core(&self.binary());
             // Keep M0's independent software untouched; a separate instance must be stopped by its user.
             if super::ipc::request(super::ipc::Endpoint::Core, super::ipc::Action::Probe).is_ok() {
                 return Err("独立 Deskflow 会话仍在运行，请先停止它，再从 WenBox 启动".into());
             }
             let path = render_profile(&self.root, profile)?;
-            // Qt derives its single-instance semaphore and local socket from TMPDIR.
-            // A private short path avoids stale global Deskflow locks and AF_UNIX path limits.
+            // TMPDIR isolates Qt's QLocalServer AF_UNIX socket, while --new-instance skips
+            // Qt 6's global QSharedMemory check (exit status 5) after WenBox's own conflict guards.
             let runtime = tempfile::Builder::new()
                 .prefix("wb-kvm-")
                 .tempdir_in("/tmp")
@@ -343,6 +344,7 @@ impl Engine {
                 } else {
                     "client"
                 })
+                .arg("--new-instance")
                 .env("TMPDIR", runtime.path())
                 .env(
                     "DESKFLOW_MOUSE_ADJUSTMENT",
@@ -465,6 +467,100 @@ impl Drop for Engine {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn matching_stale_core_pids(ps_output: &str, binary_candidates: &[String], self_pid: u32) -> Vec<u32> {
+    let mut pids = Vec::new();
+    for line in ps_output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(split_idx) = trimmed.find(char::is_whitespace) else {
+            continue;
+        };
+        let Ok(pid) = trimmed[..split_idx].parse::<u32>() else {
+            continue;
+        };
+        if pid == 0 || pid == self_pid {
+            continue;
+        }
+        let cmd = trimmed[split_idx..].trim_start();
+        let matched = binary_candidates.iter().any(|candidate| {
+            !candidate.is_empty()
+                && (cmd == candidate
+                    || (cmd.starts_with(candidate)
+                        && cmd[candidate.len()..]
+                            .chars()
+                            .next()
+                            .is_some_and(char::is_whitespace)))
+        });
+        if matched {
+            pids.push(pid);
+        }
+    }
+    pids
+}
+
+#[cfg(target_os = "macos")]
+fn cleanup_stale_wenbox_core(binary: &std::path::Path) {
+    let mut candidates = vec![binary.to_string_lossy().into_owned()];
+    if let Ok(canon) = std::fs::canonicalize(binary) {
+        candidates.push(canon.to_string_lossy().into_owned());
+    }
+    candidates.sort();
+    candidates.dedup();
+    let Ok(output) = Command::new("/bin/ps")
+        .args(["-axo", "pid=,command="])
+        .output()
+    else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    let ps_text = String::from_utf8_lossy(&output.stdout);
+    let pids = matching_stale_core_pids(&ps_text, &candidates, std::process::id());
+    for pid in pids {
+        let pid_str = pid.to_string();
+        let _ = Command::new("/bin/kill").args(["-TERM", &pid_str]).status();
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            let alive = Command::new("/bin/kill")
+                .args(["-0", &pid_str])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            if !alive {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let still_alive = Command::new("/bin/kill")
+            .args(["-0", &pid_str])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if still_alive {
+            let _ = Command::new("/bin/kill").args(["-KILL", &pid_str]).status();
+            let kill_deadline = Instant::now() + Duration::from_millis(300);
+            while Instant::now() < kill_deadline {
+                let alive = Command::new("/bin/kill")
+                    .args(["-0", &pid_str])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success());
+                if !alive {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod output_tests {
     use super::*;
@@ -575,5 +671,19 @@ mod output_tests {
             String::from_utf8_lossy(&tail.iter().copied().collect::<Vec<_>>())
                 .ends_with("assistive devices does not trust this process\n")
         );
+    }
+
+    #[test]
+    fn matching_stale_core_pids_only_targets_wenbox_binary() {
+        let wenbox_bin = "/Applications/WenBox.app/Contents/Resources/resources/kvm/Deskflow.app/Contents/MacOS/deskflow-core";
+        let ps = format!(
+            "  123 /Applications/Deskflow.app/Contents/MacOS/deskflow-core server\n\
+               456 {wenbox_bin} client --new-instance --settings /tmp/wb-kvm-1/core.conf\n\
+               789 {wenbox_bin}\n\
+               999 {wenbox_bin}-other\n\
+              1001 /usr/bin/sleep 30\n"
+        );
+        let pids = matching_stale_core_pids(&ps, &[wenbox_bin.to_string()], 789);
+        assert_eq!(pids, vec![456]);
     }
 }

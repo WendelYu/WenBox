@@ -44,6 +44,10 @@ const PIN_MAX_FAILURES: u32 = 5;
 const PIN_LOCK_SECS: u64 = 60;
 /// 浏览器房主心跳超时后自动关房 (S6/Rust 其它)
 const BROWSER_HOST_TIMEOUT_SECS: u64 = 30;
+/// 房间成员心跳超时阈值（秒），超时即从在线成员清理并通过 SSE 推送通知
+const MEMBER_TIMEOUT_SECS: u64 = 8;
+/// 局域网发现房间超时阈值（秒），房主离线后尽快从大厅移除
+const DISCOVERED_ROOM_TIMEOUT_SECS: u64 = 10;
 
 #[derive(RustEmbed)]
 #[folder = "../app/src/main/assets/web"]
@@ -176,9 +180,22 @@ pub struct DiscoveredRoom {
     pub ips: Vec<String>,
 }
 
+#[derive(Clone)]
+struct P2pShare {
+    id: String,
+    path: PathBuf,
+    name: String,
+    size: u64,
+    mime_type: String,
+    secret: String,
+    content_key: String,
+    room_id: String,
+}
+
 struct AppState {
     files: Mutex<HashMap<String, SharedFile>>,
     demand_files: Arc<demand_files::DemandFiles>,
+    p2p_shares: Mutex<HashMap<String, P2pShare>>,
     received_files: Mutex<Vec<SharedFile>>,
     // Native-only download history: never included in room HTTP file indexes.
     local_downloads: Mutex<Vec<SharedFile>>,
@@ -344,9 +361,18 @@ fn set_room_host_ip_cmd(ip: String, state: tauri::State<Arc<AppState>>) -> Resul
     let mut room = state.room.lock().map_err(|e| e.to_string())?;
     room.host_ip = clean.clone();
     let host_port = room.host_port;
+    drop(room);
+    let mut changed = false;
     if let Some(host_member) = state.members.lock().unwrap().get_mut("host") {
-        host_member.ip = clean.clone();
-        host_member.access_ip = format!("{}:{}", clean, host_port);
+        let next_access = format!("{}:{}", clean, host_port);
+        if host_member.ip != clean || host_member.access_ip != next_access {
+            host_member.ip = clean;
+            host_member.access_ip = next_access;
+            changed = true;
+        }
+    }
+    if changed {
+        publish_event(&state, "members", "{}");
     }
     Ok(())
 }
@@ -400,6 +426,271 @@ fn clear_share_files(state: tauri::State<Arc<AppState>>) {
     state.files.lock().unwrap().clear();
     session_store::remember(&state);
     publish_event(&state, "files", r#"{"action":"cleared"}"#);
+}
+
+fn validate_lan_p2p_url(raw: &str) -> Result<url::Url, String> {
+    let target = url::Url::parse(raw).map_err(|e| e.to_string())?;
+    let local = match target.host_str().unwrap_or("").parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
+        }
+        _ => false,
+    };
+    if target.scheme() != "http"
+        || !local
+        || !target.username().is_empty()
+        || target.password().is_some()
+        || !target.path().starts_with("/api/p2p/download/")
+        || target.fragment().is_some()
+        || target.query().is_some()
+    {
+        return Err("无效的局域网直连地址".into());
+    }
+    Ok(target)
+}
+
+fn prioritized_p2p_ips(state: &AppState) -> Vec<String> {
+    let selected = state
+        .selected_ip
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let mut link_local = Vec::new();
+    let mut others = Vec::new();
+    for info in get_all_lan_ips() {
+        if info.ip.starts_with("169.254.") {
+            link_local.push(info.ip);
+        } else if Some(&info.ip) != selected.as_ref() {
+            others.push(info.ip);
+        }
+    }
+    let mut ordered = Vec::new();
+    // Prefer link-local direct cable (USB/Ethernet) first, then user-selected NIC, then remaining LAN NICs.
+    ordered.extend(link_local);
+    if let Some(ip) = selected {
+        if !ordered.contains(&ip) {
+            ordered.push(ip);
+        }
+    }
+    for ip in others {
+        if !ordered.contains(&ip) {
+            ordered.push(ip);
+        }
+    }
+    ordered.truncate(8);
+    ordered
+}
+
+fn register_p2p_files_blocking(
+    paths: Vec<PathBuf>,
+    room_id: String,
+    content_key: Option<String>,
+    state: Arc<AppState>,
+    port: u16,
+) -> Result<serde_json::Value, String> {
+    if paths.is_empty() {
+        return Ok(serde_json::json!({ "shares": [] }));
+    }
+    if paths.len() > 32 {
+        return Err("每次最多分享 32 个文件".into());
+    }
+    let key = content_key.unwrap_or_default().trim().to_string();
+    let encrypted = !key.is_empty();
+    let ips = prioritized_p2p_ips(&state);
+    let mut pending = Vec::with_capacity(paths.len());
+    for path in paths {
+        let meta = std::fs::metadata(&path).map_err(|_| "文件不存在或无法读取".to_string())?;
+        if !meta.is_file() {
+            return Err("暂不支持直接分享文件夹，请先压缩成 ZIP 后再发送".into());
+        }
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        if name.is_empty() {
+            return Err("文件名无效".into());
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let secret = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let mime_type = mime_guess::from_path(&path)
+            .first_or_octet_stream()
+            .to_string();
+        let plain_size = meta.len();
+        let wire_size = if encrypted {
+            content_crypto::encrypted_size(plain_size)
+        } else {
+            plain_size
+        };
+        let direct_urls: Vec<String> = ips
+            .iter()
+            .map(|ip| format!("http://{}:{}/api/p2p/download/{}", ip, port, id))
+            .collect();
+        let share = P2pShare {
+            id: id.clone(),
+            path,
+            name: name.clone(),
+            size: plain_size,
+            mime_type: mime_type.clone(),
+            secret: secret.clone(),
+            content_key: key.clone(),
+            room_id: room_id.clone(),
+        };
+        let descriptor = serde_json::json!({
+            "shareId": id,
+            "name": name,
+            "size": wire_size,
+            "plainSize": plain_size,
+            "encrypted": encrypted,
+            "mimeType": mime_type,
+            "directUrls": direct_urls,
+            "directSecret": secret,
+        });
+        pending.push((share, descriptor));
+    }
+    let mut map = state
+        .p2p_shares
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if map.len() + pending.len() > 512 {
+        return Err("本机直连分享文件过多，请先移除不需要的分享".into());
+    }
+    let mut descriptors = Vec::with_capacity(pending.len());
+    for (share, descriptor) in pending {
+        map.insert(share.id.clone(), share);
+        descriptors.push(descriptor);
+    }
+    Ok(serde_json::json!({ "shares": descriptors }))
+}
+
+#[tauri::command]
+async fn register_p2p_files_cmd(
+    paths: Vec<String>,
+    room_id: String,
+    content_key: Option<String>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<serde_json::Value, String> {
+    let state = state.inner().clone();
+    let buf_paths = paths.into_iter().map(PathBuf::from).collect();
+    tauri::async_runtime::spawn_blocking(move || {
+        register_p2p_files_blocking(buf_paths, room_id, content_key, state, 9527)
+    })
+    .await
+    .map_err(|e| format!("后台任务失败: {}", e))?
+}
+
+#[tauri::command]
+async fn register_clipboard_p2p_files_cmd(
+    clipboard_ids: Vec<String>,
+    room_id: String,
+    content_key: Option<String>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<serde_json::Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut paths = Vec::with_capacity(clipboard_ids.len());
+        for id in clipboard_ids {
+            let path = clipboard_files::resolve_path(&id)
+                .ok_or_else(|| "剪贴板文件已失效，请重新复制".to_string())?;
+            paths.push(path);
+        }
+        register_p2p_files_blocking(paths, room_id, content_key, state, 9527)
+    })
+    .await
+    .map_err(|e| format!("后台任务失败: {}", e))?
+}
+
+#[tauri::command]
+fn revoke_p2p_file_cmd(id: Option<String>, state: tauri::State<Arc<AppState>>) {
+    let mut map = state
+        .p2p_shares
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    match id.filter(|s| !s.trim().is_empty()) {
+        Some(share_id) => {
+            map.remove(&share_id);
+        }
+        None => {
+            map.clear();
+        }
+    }
+}
+
+#[tauri::command]
+async fn p2p_relay_upload_cmd(
+    share_id: String,
+    upload_url: String,
+    token: Option<String>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<serde_json::Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let parsed = url::Url::parse(&upload_url).map_err(|e| e.to_string())?;
+        let local = match parsed.host_str().unwrap_or("").parse::<std::net::IpAddr>() {
+            Ok(std::net::IpAddr::V4(ip)) => {
+                ip.is_private()
+                    || ip.is_loopback()
+                    || ip.is_link_local()
+                    || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
+            }
+            _ => parsed.host_str() == Some("localhost"),
+        };
+        if parsed.scheme() != "http"
+            || !local
+            || !parsed.path().starts_with("/api/offers/transfer/")
+        {
+            return Err("无效的中转上传地址".into());
+        }
+        let share = state
+            .p2p_shares
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&share_id)
+            .cloned()
+            .ok_or_else(|| "分享文件已移除".to_string())?;
+        let file = File::open(&share.path).map_err(|_| "源文件不存在或无法读取".to_string())?;
+        let plain_size = file.metadata().map_err(|e| e.to_string())?.len();
+        let encrypted = !share.content_key.is_empty();
+        let wire_size = if encrypted {
+            content_crypto::encrypted_size(plain_size)
+        } else {
+            plain_size
+        };
+        let mut req = get_stream_client()
+            .post(parsed.as_str())
+            .set("Content-Type", "application/octet-stream")
+            .set("Content-Length", &wire_size.to_string());
+        if let Some(ref t) = token {
+            if !t.is_empty() {
+                req = req.set("X-Room-Token", t);
+            }
+        }
+        let resp = if encrypted {
+            let reader = content_crypto::EncryptReader::new(file, &share.content_key, &share.room_id)?;
+            req.send(reader)
+        } else {
+            req.send(std::io::BufReader::with_capacity(512 * 1024, file))
+        };
+        match resp {
+            Ok(r) => r
+                .into_json()
+                .or_else(|_| Ok(serde_json::json!({ "success": true }))),
+            Err(ureq::Error::Status(code, r)) => {
+                let text = r.into_string().unwrap_or_default();
+                Err(format!("中转上传失败 ({code}): {text}"))
+            }
+            Err(e) => Err(format!("中转上传失败: {e}")),
+        }
+    })
+    .await
+    .map_err(|e| format!("后台任务失败: {}", e))?
 }
 
 #[tauri::command]
@@ -729,7 +1020,7 @@ fn get_discovered_rooms_cmd_blocking(state: Arc<AppState>) -> Vec<DiscoveredRoom
     let mut disc = state.discovered_rooms.lock().unwrap_or_else(|e| e.into_inner());
     disc.retain(|_, r| {
         // 过滤自身广播：按本机网卡 IP 判断，不再依赖 room_id (S6)
-        now.saturating_sub(r.last_seen) < 15
+        now.saturating_sub(r.last_seen) < DISCOVERED_ROOM_TIMEOUT_SECS
             && !self_ips.contains(&r.ip)
             && (cur_room_id.is_empty() || r.room_id != cur_room_id)
     });
@@ -765,11 +1056,37 @@ fn get_discovered_rooms_cmd_blocking(state: Arc<AppState>) -> Vec<DiscoveredRoom
     merge_discovered_rooms(list)
 }
 
+fn prune_expired_members(state: &AppState) -> bool {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let expired: Vec<String> = {
+        let mut mem = state.members.lock().unwrap_or_else(|e| e.into_inner());
+        let expired: Vec<String> = mem.iter()
+            .filter(|(k, m)| *k != "host" && now.saturating_sub(m.last_seen) >= MEMBER_TIMEOUT_SECS)
+            .map(|(k, _)| k.clone())
+            .collect();
+        if !expired.is_empty() {
+            mem.retain(|k, m| k == "host" || now.saturating_sub(m.last_seen) < MEMBER_TIMEOUT_SECS);
+        }
+        expired
+    };
+    if expired.is_empty() {
+        return false;
+    }
+    {
+        let mut tokens = state.auth_tokens.lock().unwrap_or_else(|e| e.into_inner());
+        for token in &expired {
+            tokens.remove(token);
+        }
+    }
+    session_store::remember(state);
+    publish_event(state, "members", "{}");
+    true
+}
+
 #[tauri::command]
 fn get_room_members_cmd(state: tauri::State<Arc<AppState>>) -> Vec<RoomMember> {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    let mut mem = state.members.lock().unwrap();
-    mem.retain(|k, m| k == "host" || now.saturating_sub(m.last_seen) < 15);
+    prune_expired_members(&state);
+    let mem = state.members.lock().unwrap_or_else(|e| e.into_inner());
     mem.values().cloned().collect()
 }
 
@@ -1696,20 +2013,203 @@ fn fetch_node_files_blocking(base_url: String, token: Option<String>, state: Arc
     Ok(list)
 }
 
-#[tauri::command]
-async fn save_remote_file_to_directory(download_url: String, dir_path: String, folder_name: String, file_name: String, token: Option<String>, content_key: Option<String>, room_id: Option<String>, state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
-    let state=state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let path=save_remote_file_to_directory_blocking(download_url, dir_path, folder_name, file_name, token, content_key, room_id)?;
-        let metadata=std::fs::metadata(&path).map_err(|e| e.to_string())?;
-        let file=SharedFile { id:uuid::Uuid::new_v4().to_string(), name:PathBuf::from(&path).file_name().unwrap_or_default().to_string_lossy().into_owned(), size:metadata.len(), path:path.clone(), mime_type:mime_guess::from_path(&path).first_or_octet_stream().to_string() };
-        { let mut saved=state.local_downloads.lock().unwrap_or_else(|e| e.into_inner());saved.insert(0,file);saved.truncate(500); }
-        session_store::remember(&state);
-        Ok(path)
-    }).await.map_err(|e| format!("后台任务失败: {}", e))?
+struct ProgressReader<R, F> {
+    inner: R,
+    loaded: u64,
+    total: u64,
+    last_emit: std::time::Instant,
+    emitted_once: bool,
+    on_progress: F,
 }
 
-fn save_remote_file_to_directory_blocking(download_url: String, dir_path: String, folder_name: String, file_name: String, token: Option<String>, content_key: Option<String>, room_id: Option<String>) -> Result<String, String> {
+impl<R: Read, F: FnMut(u64, u64)> ProgressReader<R, F> {
+    fn new(inner: R, total: u64, on_progress: F) -> Self {
+        Self {
+            inner,
+            loaded: 0,
+            total,
+            last_emit: std::time::Instant::now(),
+            emitted_once: false,
+            on_progress,
+        }
+    }
+
+    fn flush_progress(&mut self) {
+        (self.on_progress)(self.loaded, self.total);
+        self.emitted_once = true;
+        self.last_emit = std::time::Instant::now();
+    }
+}
+
+impl<R: Read, F: FnMut(u64, u64)> Read for ProgressReader<R, F> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.inner.read(buf)?;
+        if count > 0 {
+            self.loaded = self.loaded.saturating_add(count as u64);
+            if !self.emitted_once || self.last_emit.elapsed() >= Duration::from_millis(120) {
+                self.flush_progress();
+            }
+        }
+        Ok(count)
+    }
+}
+
+fn get_fast_p2p_client() -> ureq::Agent {
+    static CLIENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            ureq::AgentBuilder::new()
+                .redirects(0)
+                .try_proxy_from_env(false)
+                .timeout_connect(Duration::from_millis(800))
+                .timeout_read(Duration::from_secs(30))
+                .timeout_write(Duration::from_secs(120))
+                .build()
+        })
+        .clone()
+}
+
+fn fetch_offer_direct_metadata(
+    download_url: &str,
+    token: Option<&str>,
+) -> Option<(Vec<String>, String)> {
+    let parsed = url::Url::parse(download_url).ok()?;
+    let offer_id = parsed.path().strip_prefix("/api/download/")?;
+    if !offer_id.starts_with("offer-") {
+        return None;
+    }
+    let meta_url = format!(
+        "{}://{}{}/api/offers/direct/{}",
+        parsed.scheme(),
+        parsed.host_str()?,
+        parsed.port().map(|p| format!(":{p}")).unwrap_or_default(),
+        offer_id
+    );
+    let mut req = ureq::AgentBuilder::new()
+        .redirects(0)
+        .try_proxy_from_env(false)
+        .timeout(Duration::from_millis(900))
+        .build()
+        .get(&meta_url);
+    if let Some(t) = token.filter(|t| !t.is_empty()) {
+        req = req.set("X-Room-Token", t).set("X-Host-Token", t);
+    }
+    let resp = req.call().ok()?;
+    let value: serde_json::Value = resp.into_json().ok()?;
+    let urls: Vec<String> = value["directUrls"]
+        .as_array()?
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+    let secret = value["directSecret"].as_str()?.to_string();
+    if urls.is_empty() || secret.is_empty() {
+        return None;
+    }
+    Some((urls, secret))
+}
+
+#[tauri::command]
+async fn save_remote_file_to_directory(
+    window: tauri::Window,
+    download_url: String,
+    dir_path: String,
+    folder_name: String,
+    file_name: String,
+    token: Option<String>,
+    content_key: Option<String>,
+    room_id: Option<String>,
+    download_id: Option<String>,
+    direct_urls: Option<Vec<String>>,
+    direct_secret: Option<String>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let progress_id = download_id.filter(|s| !s.trim().is_empty());
+        let path = save_remote_file_to_directory_blocking_with_progress(
+            download_url,
+            dir_path,
+            folder_name,
+            file_name,
+            token,
+            content_key,
+            room_id,
+            direct_urls,
+            direct_secret,
+            move |loaded, total| {
+                if let Some(ref id) = progress_id {
+                    let _ = window.emit(
+                        "download-progress",
+                        serde_json::json!({ "id": id, "loaded": loaded, "total": total }),
+                    );
+                }
+            },
+        )?;
+        let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        let file = SharedFile {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: PathBuf::from(&path)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            size: metadata.len(),
+            path: path.clone(),
+            mime_type: mime_guess::from_path(&path)
+                .first_or_octet_stream()
+                .to_string(),
+        };
+        {
+            let mut saved = state
+                .local_downloads
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            saved.insert(0, file);
+            saved.truncate(500);
+        }
+        session_store::remember(&state);
+        Ok(path)
+    })
+    .await
+    .map_err(|e| format!("后台任务失败: {}", e))?
+}
+
+#[allow(dead_code)]
+fn save_remote_file_to_directory_blocking(
+    download_url: String,
+    dir_path: String,
+    folder_name: String,
+    file_name: String,
+    token: Option<String>,
+    content_key: Option<String>,
+    room_id: Option<String>,
+) -> Result<String, String> {
+    save_remote_file_to_directory_blocking_with_progress(
+        download_url,
+        dir_path,
+        folder_name,
+        file_name,
+        token,
+        content_key,
+        room_id,
+        None,
+        None,
+        |_, _| {},
+    )
+}
+
+fn save_remote_file_to_directory_blocking_with_progress<F: FnMut(u64, u64)>(
+    download_url: String,
+    dir_path: String,
+    folder_name: String,
+    file_name: String,
+    token: Option<String>,
+    content_key: Option<String>,
+    room_id: Option<String>,
+    direct_urls: Option<Vec<String>>,
+    direct_secret: Option<String>,
+    on_progress: F,
+) -> Result<String, String> {
     validate_archive_folder(&folder_name)?;
     let base_dir = PathBuf::from(&dir_path);
     let target_dir = if folder_name.trim().is_empty() {
@@ -1721,24 +2221,62 @@ fn save_remote_file_to_directory_blocking(download_url: String, dir_path: String
         std::fs::create_dir_all(&target_dir).map_err(|e| format!("创建目标目录失败: {}", e))?;
     }
 
-    // 请求加密文件流；旧握手服务端会忽略该头并返回明文。
-    let mut download_url = download_url;
-    if !download_url.contains("enc=1") {
-        download_url.push(if download_url.contains('?') { '&' } else { '?' });
-        download_url.push_str("enc=1");
-    }
-    // 携带房间令牌，否则受密码保护房间的下载会被 401 拒绝
-    let mut request = get_stream_client()
-        .get(&download_url)
-        .set("X-WenBox-Encryption", "v1");
-    if let Some(ref t) = token {
-        if !t.is_empty() {
-            request = request
-                .set("X-Room-Token", t)
-                .set("X-Host-Token", t);
+    // Attempt direct P2P first (1 hop, zero host relay/cache) for room and chat offers.
+    let (resolved_urls, resolved_secret) = match (direct_urls, direct_secret) {
+        (Some(urls), Some(secret)) if !urls.is_empty() && !secret.is_empty() => (urls, Some(secret)),
+        _ => match fetch_offer_direct_metadata(&download_url, token.as_deref()) {
+            Some((urls, secret)) => (urls, Some(secret)),
+            None => (Vec::new(), None),
+        },
+    };
+    let mut direct_resp: Option<ureq::Response> = None;
+    if let Some(ref secret) = resolved_secret {
+        let p2p_client = get_fast_p2p_client();
+        for raw in &resolved_urls {
+            let Ok(valid) = validate_lan_p2p_url(raw) else {
+                continue;
+            };
+            let req = p2p_client
+                .get(valid.as_str())
+                .set("X-P2P-Secret", secret)
+                .set("X-WenBox-Encryption", "v1");
+            if let Ok(resp) = req.call() {
+                if resp.status() == 200 {
+                    direct_resp = Some(resp);
+                    break;
+                }
+            }
         }
     }
-    let resp = request.call().map_err(|e| format!("下载远端文件流失败: {}", e))?;
+
+    let resp = if let Some(resp) = direct_resp {
+        resp
+    } else {
+        // Fallback to host download/relay stream.
+        let mut download_url = download_url;
+        if !download_url.contains("enc=1") {
+            download_url.push(if download_url.contains('?') { '&' } else { '?' });
+            download_url.push_str("enc=1");
+        }
+        let mut request = get_stream_client()
+            .get(&download_url)
+            .set("X-WenBox-Encryption", "v1");
+        if let Some(ref t) = token {
+            if !t.is_empty() {
+                request = request
+                    .set("X-Room-Token", t)
+                    .set("X-Host-Token", t);
+            }
+        }
+        request
+            .call()
+            .map_err(|e| format!("下载远端文件流失败: {}", e))?
+    };
+
+    let total = resp
+        .header("Content-Length")
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(0);
     let encrypted = resp
         .header("X-WenBox-Encryption")
         .map(|value| value.eq_ignore_ascii_case("v1"))
@@ -1747,26 +2285,39 @@ fn save_remote_file_to_directory_blocking(download_url: String, dir_path: String
     let safe_name = sanitize_file_name(&file_name);
     // Keep the final filename absent until the stream and authentication finish.
     let mut staged = tempfile::Builder::new().prefix(".wenbox-download-").suffix(".partial").tempfile_in(&target_dir).map_err(|e|format!("创建临时下载文件失败: {e}"))?;
-    let dest_file = staged.as_file_mut();
+    let mut writer = std::io::BufWriter::with_capacity(512 * 1024, staged.as_file_mut());
 
-    let mut reader = resp.into_reader();
+    let mut reader = ProgressReader::new(resp.into_reader(), total, on_progress);
     let result = if encrypted {
         match content_key.filter(|key| !key.is_empty()) {
             Some(key) => content_crypto::stream_decrypt(
                 &key,
                 room_id.as_deref().unwrap_or(""),
                 &mut reader,
-                dest_file,
+                &mut writer,
             )
             .map(|_| ()),
             None => Err("接收端缺少房间密钥，无法解密下载文件".to_string()),
         }
     } else {
-        std::io::copy(&mut reader, &mut *dest_file)
-            .map(|_| ())
-            .map_err(|e| format!("写入文件失败: {}", e))
+        let mut buf = vec![0u8; 512 * 1024];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break Ok(()),
+                Ok(n) => {
+                    if let Err(e) = writer.write_all(&buf[..n]) {
+                        break Err(format!("写入文件失败: {}", e));
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => break Err(format!("读取远端文件失败: {}", e)),
+            }
+        }
     };
     result?;
+    writer.flush().map_err(|e| format!("写入文件缓冲失败: {}", e))?;
+    reader.flush_progress();
+    drop(writer);
     staged.as_file().sync_all().map_err(|e|format!("完成文件保存失败: {e}"))?;
     // persist_noclobber atomically publishes the completed file and preserves
     // concurrent downloads/existing same-name files.
@@ -2221,7 +2772,7 @@ fn serve_http_requests(server: Arc<Server>, state: Arc<AppState>, port: u16) {
             });
             continue;
         }
-        let transfer = if request.method() == &Method::Options { 0 } else if request.url().starts_with("/api/download/") { 1 } else if request.url().split('?').next()==Some("/api/upload") || request.url().starts_with("/api/offers/transfer/") { 2 } else { 0 };
+        let transfer = if request.method() == &Method::Options { 0 } else if request.url().starts_with("/api/download/") || request.url().starts_with("/api/p2p/download/") { 1 } else if request.url().split('?').next()==Some("/api/upload") || request.url().starts_with("/api/offers/transfer/") { 2 } else { 0 };
         if let Err(TrySendError::Full(request) | TrySendError::Disconnected(request)) = queues[transfer].try_send(request) {
             // 队列已满：回显已校验的 Origin，并提示前端退避重试
             let (allow, vary) = cors_headers_for(&request);
@@ -2244,7 +2795,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
     // CORS: 只回显已通过校验的 Origin，不再使用 `*` (S1)
     let (cors_origin, cors_vary) = cors_headers_for(&req);
     let cors_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS, PUT, DELETE"[..]).unwrap();
-    let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization, X-Room-Token, X-Host-Token, X-WenBox-Key, X-WenBox-Encryption, X-Share-Key, X-Share-File"[..]).unwrap();
+    let cors_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-File-Name, Range, Authorization, X-Room-Token, X-Host-Token, X-WenBox-Key, X-WenBox-Encryption, X-Share-Key, X-Share-File, X-P2P-Secret"[..]).unwrap();
 
     // 统一拦截：Origin 不属于本机/局域网的浏览器请求，以及 Host 指向外部域名的
     // 请求 (DNS rebinding)，全部 403。非浏览器客户端 (Android 原生、Rust 客户端、
@@ -2350,6 +2901,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
 
             // 0. 房间系统接口 (公开接口：查看状态、加入房间、心跳、成员与已发现房间)
             if (url == "/api/room/status" || url == "/api/room/info") && method == Method::Get {
+                prune_expired_members(&state);
                 let room = state.room.lock().unwrap().clone();
                 let members_count = state.members.lock().unwrap_or_else(|e| e.into_inner()).len();
                 let primary_ip = state.selected_ip.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(get_primary_ip);
@@ -2620,9 +3172,17 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     let mut room = state.room.lock().unwrap_or_else(|e| e.into_inner());
                     room.host_ip = clean.clone();
                 }
+                let mut host_changed = false;
                 if let Some(host_member) = state.members.lock().unwrap_or_else(|e| e.into_inner()).get_mut("host") {
-                    host_member.ip = clean.clone();
-                    host_member.access_ip = format!("{}:{}", clean, port);
+                    let next_access = format!("{}:{}", clean, port);
+                    if host_member.ip != clean || host_member.access_ip != next_access {
+                        host_member.ip = clean;
+                        host_member.access_ip = next_access;
+                        host_changed = true;
+                    }
+                }
+                if host_changed {
+                    publish_event(&state, "members", "{}");
                 }
                 let mut resp = Response::from_string("{\"success\":true}");
                 resp = with_cors!(resp);
@@ -2764,6 +3324,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 let room = state.room.lock().unwrap_or_else(|e| e.into_inner()).clone();
                 let mut members = state.members.lock().unwrap_or_else(|e| e.into_inner());
                 let mut member_id = String::new();
+                let mut members_changed = false;
 
                 if let Some(ref t) = client_token {
                     // 保留键 "host" 绝不能被当成普通成员 token 覆盖 (S3)
@@ -2777,26 +3338,36 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                             if let Some(m) = members.get_mut("host") {
                                 m.last_seen = now;
                                 member_id = m.id.clone();
-                                if !is_loopback_ip(&client_ip) {
+                                if !is_loopback_ip(&client_ip) && m.ip != client_ip {
                                     m.ip = client_ip.clone();
+                                    members_changed = true;
                                 }
                                 if let Some(ref n) = client_name {
                                     let clean_n = n.trim();
                                     if !clean_n.is_empty() {
-                                        m.name = if clean_n.contains("房主") { clean_n.to_string() } else { format!("{} (房主)", clean_n) };
+                                        let next_name = if clean_n.contains("房主") { clean_n.to_string() } else { format!("{} (房主)", clean_n) };
+                                        if m.name != next_name {
+                                            m.name = next_name;
+                                            members_changed = true;
+                                        }
                                     }
                                 }
                             }
                         } else if let Some(m) = members.get_mut(t) {
                             m.last_seen = now;
                             member_id = m.id.clone();
-                            if !access_host.is_empty() {
+                            if !is_loopback_ip(&client_ip) && m.ip != client_ip {
+                                m.ip = client_ip.clone();
+                                members_changed = true;
+                            }
+                            if !access_host.is_empty() && m.access_ip != access_host {
                                 m.access_ip = access_host.clone();
                             }
                             if let Some(ref n) = client_name {
                                 let clean_n = n.trim();
-                                if !clean_n.is_empty() {
+                                if !clean_n.is_empty() && m.name != clean_n {
                                     m.name = clean_n.to_string();
+                                    members_changed = true;
                                 }
                             }
                         } else if state.auth_tokens.lock().unwrap_or_else(|e| e.into_inner()).contains(t) {
@@ -2814,10 +3385,14 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                                 last_seen: now,
                             };
                             members.insert(t.clone(), member);
+                            members_changed = true;
                         }
                     }
                 }
                 drop(members);
+                if members_changed {
+                    publish_event(&state, "members", "{}");
+                }
 
                 let json = serde_json::json!({
                     "success": true,
@@ -2863,25 +3438,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
             }
 
             if url == "/api/room/members" && method == Method::Get {
-                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-                // 成员超时清理时同时回收 auth_tokens，避免已退出成员的旧令牌永久有效 (S3)
-                let expired: Vec<String> = {
-                    let mut members_map = state.members.lock().unwrap_or_else(|e| e.into_inner());
-                    let expired: Vec<String> = members_map.iter()
-                        .filter(|(k, m)| *k != "host" && now.saturating_sub(m.last_seen) >= 15)
-                        .map(|(k, _)| k.clone())
-                        .collect();
-                    members_map.retain(|k, m| k == "host" || now.saturating_sub(m.last_seen) < 15);
-                    expired
-                };
-                if !expired.is_empty() {
-                    let mut tokens = state.auth_tokens.lock().unwrap_or_else(|e| e.into_inner());
-                    for token in expired {
-                        tokens.remove(&token);
-                    }
-                    drop(tokens);
-                    session_store::remember(&state);
-                }
+                prune_expired_members(&state);
 
                 // 成员 id 已与 auth token 解耦，但密码房仍只向已加入的客户端返回详细列表，
                 // 未授权访客只能拿到在线人数 (S2)。
@@ -2904,7 +3461,7 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
             if url == "/api/discovered_rooms" && method == Method::Get {
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                 let mut rooms_map = state.discovered_rooms.lock().unwrap();
-                rooms_map.retain(|_, r| now.saturating_sub(r.last_seen) < 15);
+                rooms_map.retain(|_, r| now.saturating_sub(r.last_seen) < DISCOVERED_ROOM_TIMEOUT_SECS);
                 let mut list: Vec<DiscoveredRoom> = rooms_map.values().cloned().collect();
 
                 let my_room = state.room.lock().unwrap().clone();
@@ -3048,6 +3605,96 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                 return;
             }
 
+            // 点对点直连文件下载：由发送方桌面端直接流式输出源文件，经 256-bit 随机 secret 鉴权，不经过房主中转或临时缓存
+            if url.starts_with("/api/p2p/download/") && method == Method::Get {
+                let share_id = percent_decode_strict(url.trim_start_matches("/api/p2p/download/"));
+                let provided_secret = header_val(&req, "X-P2P-Secret")
+                    .or_else(|| {
+                        raw_url
+                            .split_once('?')
+                            .and_then(|(_, q)| {
+                                q.split('&')
+                                    .find_map(|kv| kv.strip_prefix("secret="))
+                                    .map(percent_decode_strict)
+                            })
+                    })
+                    .unwrap_or_default();
+                let share = state
+                    .p2p_shares
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&share_id)
+                    .cloned();
+                let Some(share) = share else {
+                    let mut resp = Response::from_string("{\"success\":false,\"message\":\"直连分享已失效\"}")
+                        .with_status_code(404);
+                    resp = with_cors!(resp);
+                    let _ = req.respond(resp);
+                    return;
+                };
+                if provided_secret.is_empty()
+                    || !constant_time_eq(provided_secret.as_bytes(), share.secret.as_bytes())
+                {
+                    let mut resp = Response::from_string("{\"success\":false,\"message\":\"直连访问凭据无效\"}")
+                        .with_status_code(403);
+                    resp = with_cors!(resp);
+                    let _ = req.respond(resp);
+                    return;
+                }
+                if let Ok(file) = File::open(&share.path) {
+                    if !share.content_key.is_empty()
+                        && (wants_content_encryption(&req) || !is_trusted_loopback(&req))
+                    {
+                        let encrypted_len = file
+                            .metadata()
+                            .ok()
+                            .and_then(|m| usize::try_from(content_crypto::encrypted_size(m.len())).ok());
+                        if let Ok(reader) =
+                            content_crypto::EncryptReader::new(file, &share.content_key, &share.room_id)
+                        {
+                            let headers = vec![
+                                build_content_disposition(&share.name),
+                                Header::from_bytes(&b"Content-Type"[..], &b"application/octet-stream"[..]).unwrap(),
+                                Header::from_bytes(&b"X-WenBox-Encryption"[..], &b"v1"[..]).unwrap(),
+                            ];
+                            let resp = Response::new(
+                                tiny_http::StatusCode(200),
+                                headers,
+                                reader,
+                                encrypted_len,
+                                None,
+                            )
+                            .with_chunked_threshold(usize::MAX);
+                            let _ = req.respond(with_cors!(resp));
+                            return;
+                        }
+                    } else {
+                        let plain_len = file
+                            .metadata()
+                            .ok()
+                            .and_then(|m| usize::try_from(m.len()).ok());
+                        let mut headers = vec![build_content_disposition(&share.name)];
+                        if let Ok(ct) = Header::from_bytes(&b"Content-Type"[..], share.mime_type.as_bytes()) {
+                            headers.push(ct);
+                        }
+                        let resp = Response::new(
+                            tiny_http::StatusCode(200),
+                            headers,
+                            file,
+                            plain_len,
+                            None,
+                        )
+                        .with_chunked_threshold(usize::MAX);
+                        let _ = req.respond(with_cors!(resp));
+                        return;
+                    }
+                }
+                let mut resp = Response::from_string("File Not Found").with_status_code(404);
+                resp = with_cors!(resp);
+                let _ = req.respond(resp);
+                return;
+            }
+
             // 鉴权拦截检查 (当房间处于活跃且设置密码保护时，未授权的客户端拒绝访问敏感文件与消息接口)
             let is_protected = url.starts_with("/api/files")
                 || url.starts_with("/api/download/")
@@ -3068,7 +3715,11 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
             if url.starts_with("/api/offers") || url.starts_with("/api/download/offer-") {
                 let room_id = state.room.lock().unwrap_or_else(|e|e.into_inner()).room_id.clone();
                 let cors = [cors_origin.clone(),cors_vary.clone()].into_iter().flatten().collect();
-                demand_files::route(req,state.demand_files.clone(),room_id,&url,cors);return;
+                let notify_state = state.clone();
+                demand_files::route(req, state.demand_files.clone(), room_id, &url, cors, move || {
+                    publish_event(&notify_state, "offer_request", "{}");
+                });
+                return;
             }
 
             // 3. 待发文件列表 (对外清空绝对路径，避免泄露本机用户名与目录结构)
@@ -3135,9 +3786,13 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                     if let Ok(file) = File::open(&info.path) {
                         if wants_content_encryption(&req) || !is_trusted_loopback(&req) {
                             if let Some(key) = key {
+                                let encrypted_len = file
+                                    .metadata()
+                                    .ok()
+                                    .and_then(|m| usize::try_from(content_crypto::encrypted_size(m.len())).ok());
                                 let encrypted_reader = File::open(&info.path)
                                     .ok()
-                                    .and_then(|file| content_crypto::EncryptReader::new(file, &key, &room_id).ok());
+                                    .and_then(|enc_file| content_crypto::EncryptReader::new(enc_file, &key, &room_id).ok());
                                 if let Some(reader) = encrypted_reader {
                                     let headers = vec![
                                         build_content_disposition(&info.name),
@@ -3148,9 +3803,10 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                                         tiny_http::StatusCode(200),
                                         headers,
                                         reader,
+                                        encrypted_len,
                                         None,
-                                        None,
-                                    );
+                                    )
+                                    .with_chunked_threshold(usize::MAX);
                                     let _ = req.respond(with_cors!(resp));
                                     return;
                                 }
@@ -3163,13 +3819,23 @@ fn handle_http_request(mut req: tiny_http::Request, state: Arc<AppState>, port: 
                                 return;
                             }
                         }
-                        let mut resp = Response::from_file(file);
-                        resp.add_header(build_content_disposition(&info.name));
+                        let plain_len = file
+                            .metadata()
+                            .ok()
+                            .and_then(|m| usize::try_from(m.len()).ok());
+                        let mut headers = vec![build_content_disposition(&info.name)];
                         if let Ok(ct) = Header::from_bytes(&b"Content-Type"[..], info.mime_type.as_bytes()) {
-                            resp.add_header(ct);
+                            headers.push(ct);
                         }
-                        resp = with_cors!(resp);
-                        let _ = req.respond(resp);
+                        let resp = Response::new(
+                            tiny_http::StatusCode(200),
+                            headers,
+                            file,
+                            plain_len,
+                            None,
+                        )
+                        .with_chunked_threshold(usize::MAX);
+                        let _ = req.respond(with_cors!(resp));
                         return;
                     }
                 }
@@ -3600,6 +4266,7 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
         loop {
             // Probe even while hosting. Both clients start as hosts, and adapters may arrive later.
             let _ = send_room_probe_cmd_blocking();
+            let _ = prune_expired_members(&state_bcast);
             // 浏览器建房的场景：房主关掉页面后没有人再发心跳，房间会永远挂着。
             // 非 Tauri 房主超过 BROWSER_HOST_TIMEOUT_SECS 未心跳即自动关房。
             {
@@ -3623,6 +4290,8 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                     state_bcast.auth_tokens.lock().unwrap_or_else(|e| e.into_inner()).clear();
                     state_bcast.messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
                     broadcast_room_closed(closed_id);
+                    publish_event(&state_bcast, "room", r#"{"action":"closed"}"#);
+                    publish_event(&state_bcast, "members", "{}");
                     session_store::remember(&state_bcast);
                 }
             }
@@ -3705,7 +4374,7 @@ fn start_udp_discovery(state: Arc<AppState>, my_port: u16) {
                     }
                 }
             }
-            thread::sleep(Duration::from_millis(2500));
+            thread::sleep(Duration::from_millis(2000));
         }
     });
 }
@@ -3794,6 +4463,7 @@ fn main() {
     if !windows_runtime::ensure_available() { return; }
     let state = Arc::new(AppState {
         files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
+        p2p_shares: Mutex::new(HashMap::new()),
         received_files: Mutex::new(Vec::new()), local_downloads: Mutex::new(Vec::new()),
         messages: Mutex::new(Vec::new()),
         devices: Mutex::new(HashMap::new()),
@@ -3895,6 +4565,10 @@ fn main() {
         add_share_file,
         remove_share_file,
         clear_share_files,
+        register_p2p_files_cmd,
+        register_clipboard_p2p_files_cmd,
+        revoke_p2p_file_cmd,
+        p2p_relay_upload_cmd,
         get_received_files,
         open_download_folder,
         reveal_received_file,
@@ -3907,6 +4581,7 @@ fn main() {
         send_room_probe_cmd,
         clear_chat_messages_cmd
     ];
+    let exit_state = state.clone();
     builder
         .manage(state)
         .invoke_handler(move |invoke: tauri::Invoke| {
@@ -3919,10 +4594,16 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("error while building wenbox application")
-        .run(|_app, _event| {
-            #[cfg(not(feature = "portable"))]
+        .run(move |_app, _event| {
             if matches!(_event, tauri::RunEvent::Exit) {
+                exit_state.p2p_shares.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                let closed = close_default_room_if_active(&exit_state).is_some();
+                #[cfg(not(feature = "portable"))]
                 kvm::shutdown();
+                if closed {
+                    // Allow UDP close broadcast and SSE room-closed frames to flush before exit.
+                    std::thread::sleep(Duration::from_millis(80));
+                }
             }
         });
 }
@@ -4159,6 +4840,7 @@ mod tests {
     pub(super) fn protected_state() -> Arc<AppState> {
         let state = Arc::new(AppState {
             files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
+            p2p_shares: Mutex::new(HashMap::new()),
             received_files: Mutex::new(Vec::new()), local_downloads: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()),
             devices: Mutex::new(HashMap::new()),
@@ -4434,7 +5116,7 @@ mod tests {
         let path = dir.join("large.bin");
         File::create(&path).unwrap().set_len(16 * 1024 * 1024).unwrap();
         let state = Arc::new(AppState {
-            files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()), received_files: Mutex::new(Vec::new()), local_downloads: Mutex::new(Vec::new()),
+            files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()), p2p_shares: Mutex::new(HashMap::new()), received_files: Mutex::new(Vec::new()), local_downloads: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()), devices: Mutex::new(HashMap::new()),
             room: Mutex::new(RoomConfig::default()), members: Mutex::new(HashMap::new()),
             discovered_rooms: Mutex::new(HashMap::new()), auth_tokens: Mutex::new(HashSet::new()),
@@ -4556,6 +5238,7 @@ mod tests {
         // 否则会覆盖设备原生端的房间, 原房主解散时误伤新房间
         let state = Arc::new(AppState {
             files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
+            p2p_shares: Mutex::new(HashMap::new()),
             received_files: Mutex::new(Vec::new()), local_downloads: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()),
             devices: Mutex::new(HashMap::new()),
@@ -4624,6 +5307,7 @@ mod tests {
 
         let state = Arc::new(AppState {
             files: Mutex::new(HashMap::new()), demand_files: Arc::new(demand_files::DemandFiles::default()),
+            p2p_shares: Mutex::new(HashMap::new()),
             received_files: Mutex::new(Vec::new()), local_downloads: Mutex::new(Vec::new()),
             messages: Mutex::new(Vec::new()),
             devices: Mutex::new(HashMap::new()),
@@ -4889,5 +5573,132 @@ mod tests {
         assert_eq!(value["success"], true);
         assert_eq!(value["closed"], true);
         assert!(!state.room.lock().unwrap().is_active);
+    }
+
+    #[test]
+    fn prune_expired_members_revokes_tokens_and_notifies_sse() {
+        let state = protected_state();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let stale_seen = now.saturating_sub(MEMBER_TIMEOUT_SECS + 1);
+        state.auth_tokens.lock().unwrap().insert("stale-token".into());
+        state.auth_tokens.lock().unwrap().insert("fresh-token".into());
+        {
+            let mut mem = state.members.lock().unwrap();
+            mem.insert("host".into(), RoomMember {
+                id: "host-id".into(), name: "房主 (房主)".into(), ip: "192.168.1.10".into(),
+                platform: "Windows".into(), access_ip: "192.168.1.10:9527".into(),
+                joined_at: 1, last_seen: 1,
+            });
+            mem.insert("stale-token".into(), RoomMember {
+                id: "stale-id".into(), name: "离线成员".into(), ip: "192.168.1.20".into(),
+                platform: "macOS".into(), access_ip: "192.168.1.10:9527".into(),
+                joined_at: 2, last_seen: stale_seen,
+            });
+            mem.insert("fresh-token".into(), RoomMember {
+                id: "fresh-id".into(), name: "在线成员".into(), ip: "192.168.1.21".into(),
+                platform: "macOS".into(), access_ip: "192.168.1.10:9527".into(),
+                joined_at: 3, last_seen: now,
+            });
+        }
+        let (_client_id, rx) = register_event_client(&state).unwrap();
+        assert!(prune_expired_members(&state));
+        {
+            let mem = state.members.lock().unwrap();
+            assert!(mem.contains_key("host"));
+            assert!(!mem.contains_key("stale-token"));
+            assert!(mem.contains_key("fresh-token"));
+        }
+        {
+            let tokens = state.auth_tokens.lock().unwrap();
+            assert!(!tokens.contains("stale-token"));
+            assert!(tokens.contains("fresh-token"));
+        }
+        let event = rx.recv_timeout(Duration::from_millis(200)).unwrap();
+        assert!(event.contains("event: members"), "expected SSE members event, got: {event}");
+        assert!(!prune_expired_members(&state));
+    }
+
+    #[test]
+    fn p2p_direct_encrypted_download_and_fallback_work() {
+        let sender_state = protected_state();
+        let sender_port = spawn_test_server(sender_state.clone());
+        let src_dir = tempfile::tempdir().unwrap();
+        let src_path = src_dir.path().join("sample.bin");
+        let payload: Vec<u8> = (0..(1024 * 1024 + 123)).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&src_path, &payload).unwrap();
+
+        let key = content_crypto::generate_key().unwrap();
+        let reg = register_p2p_files_blocking(
+            vec![src_path.clone()],
+            "room-p2p".into(),
+            Some(key.clone()),
+            sender_state.clone(),
+            sender_port,
+        )
+        .unwrap();
+        let share = &reg["shares"][0];
+        let share_id = share["shareId"].as_str().unwrap();
+        let secret = share["directSecret"].as_str().unwrap().to_string();
+        let direct_url = format!("http://127.0.0.1:{sender_port}/api/p2p/download/{share_id}");
+
+        // Wrong secret must be rejected with 403.
+        let bad_res = ureq::get(&direct_url).set("X-P2P-Secret", &"0".repeat(64)).call();
+        assert!(matches!(bad_res, Err(ureq::Error::Status(403, _))));
+
+        // Direct P2P download succeeds even when the host relay URL is unreachable, and reports exact progress.
+        let out_dir = tempfile::tempdir().unwrap();
+        let mut last_loaded = 0u64;
+        let mut last_total = 0u64;
+        let saved = save_remote_file_to_directory_blocking_with_progress(
+            "http://127.0.0.1:1/api/download/unreachable".into(),
+            out_dir.path().to_string_lossy().into_owned(),
+            String::new(),
+            "sample.bin".into(),
+            None,
+            Some(key.clone()),
+            Some("room-p2p".into()),
+            Some(vec![direct_url]),
+            Some(secret),
+            |loaded, total| {
+                last_loaded = loaded;
+                last_total = total;
+            },
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&saved).unwrap(), payload);
+        let expected_wire = content_crypto::encrypted_size(payload.len() as u64);
+        assert_eq!(last_total, expected_wire);
+        assert_eq!(last_loaded, expected_wire);
+
+        // Fallback to host /api/download/<id> succeeds transparently when direct URL is unreachable.
+        let host_state = protected_state();
+        let host_room_id = host_state.room.lock().unwrap().room_id.clone();
+        let host_key = host_state.room.lock().unwrap().content_key.clone();
+        host_state.files.lock().unwrap().insert(
+            "host-file-1".into(),
+            SharedFile {
+                id: "host-file-1".into(),
+                name: "sample.bin".into(),
+                size: payload.len() as u64,
+                path: src_path.to_string_lossy().into_owned(),
+                mime_type: "application/octet-stream".into(),
+            },
+        );
+        let host_port = spawn_test_server(host_state);
+        let out_dir_2 = tempfile::tempdir().unwrap();
+        let saved_fallback = save_remote_file_to_directory_blocking_with_progress(
+            format!("http://127.0.0.1:{host_port}/api/download/host-file-1"),
+            out_dir_2.path().to_string_lossy().into_owned(),
+            String::new(),
+            "fallback.bin".into(),
+            Some("guest-token".into()),
+            Some(host_key),
+            Some(host_room_id),
+            Some(vec!["http://127.0.0.1:1/api/p2p/download/dead".into()]),
+            Some("a".repeat(64)),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&saved_fallback).unwrap(), payload);
     }
 }

@@ -122,6 +122,7 @@
     async function clipboardFiles() {
         const entries = await nativeInvoke('clipboard_files', {});
         return entries.map(entry => ({
+            clipboardId: entry.id,
             name: entry.name, size: entry.size, type: entry.mime,
             slice(start, end) {
                 return { async arrayBuffer() {

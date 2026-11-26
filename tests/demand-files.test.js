@@ -80,3 +80,63 @@ test('publishes metadata without reading File bytes; reset revokes the owner and
         assert.equal(calls.at(-1).init.headers['X-Share-File'], 'offer-id');
     } finally { await service.reset(); }
 });
+
+test('nativeP2p shares publish directUrls, retry without direct metadata on older hosts, and stream via p2pRelayUpload', async () => {
+    const offersBodies = [];
+    const relayCalls = [];
+    const revoked = [];
+    let jobs = [];
+    const service = fixture(async (url, init) => {
+        if (url.endsWith('/api/offers')) {
+            const body = JSON.parse(init.body);
+            offersBodies.push(body);
+            if (body.files[0].directUrls) {
+                return new Response(JSON.stringify({ message: '分享信息格式无效' }), { status: 400 });
+            }
+            return Response.json({ files: body.files.map(f => ({ ...f, id: 'offer-p2p' })) });
+        }
+        if (url.endsWith('/api/offers/requests')) {
+            const out = jobs;
+            jobs = [];
+            return Response.json({ jobs: out });
+        }
+        return Response.json({ success: true });
+    }, {
+        prepare: () => { throw Error('nativeP2p files must not be JS-encrypted'); },
+        p2pRelayUpload: async (shareId, url, token) => { relayCalls.push({ shareId, url, token }); },
+        revokeP2p: async (id) => { revoked.push(id); }
+    });
+    try {
+        const share = {
+            nativeP2p: true,
+            shareId: 'share-1',
+            name: 'video.mp4',
+            size: 1024 + 61,
+            plainSize: 1024,
+            encrypted: true,
+            mimeType: 'video/mp4',
+            directUrls: ['http://192.168.1.5:9527/api/p2p/download/share-1'],
+            directSecret: 'a'.repeat(64)
+        };
+        const published = await service.publish([share], 'room');
+        assert.equal(published.length, 1);
+        assert.equal(offersBodies.length, 2);
+        assert.deepEqual(offersBodies[0].files[0].directUrls, share.directUrls);
+        assert.equal(offersBodies[1].files[0].directUrls, undefined);
+        assert.equal(offersBodies[1].files[0].encrypted, true);
+        assert.equal(offersBodies[1].files[0].plainSize, 1024);
+
+        jobs = [{ requestId: 'req-1', secret: 'b'.repeat(64), clientId: offersBodies[1].files[0].clientId, fileId: 'offer-p2p' }];
+        service.nudge();
+        await new Promise(resolve => setTimeout(resolve, 30));
+        assert.equal(relayCalls.length, 1);
+        assert.equal(relayCalls[0].shareId, 'share-1');
+        assert.ok(relayCalls[0].url.endsWith('/api/offers/transfer/req-1/' + 'b'.repeat(64)));
+
+        await service.remove('offer-p2p');
+        assert.deepEqual(revoked, ['share-1']);
+    } finally {
+        await service.reset();
+        assert.equal(revoked.at(-1), null);
+    }
+});

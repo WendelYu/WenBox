@@ -21,6 +21,12 @@ const MIN_CHUNK_LEN: usize = 1024;
 const MAX_CHUNK_LEN: usize = 8 * 1024 * 1024;
 const HEADER_LEN: usize = FILE_MAGIC.len() + NONCE_LEN + 4;
 
+/// Exact wire byte length produced by `stream_encrypt` / `EncryptReader` for a plaintext of `plain_size` bytes.
+pub fn encrypted_size(plain_size: u64) -> u64 {
+    let chunks = plain_size.div_ceil(CHUNK_LEN as u64);
+    HEADER_LEN as u64 + plain_size + (chunks + 1) * (4 + TAG_LEN as u64)
+}
+
 pub fn generate_key() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     SystemRandom::new()
@@ -178,6 +184,7 @@ pub fn stream_decrypt<R: Read, W: Write>(
     }
     let mut total = 0u64;
     let mut index = 0u64;
+    let mut data = Vec::with_capacity(chunk_len + TAG_LEN);
     loop {
         let mut len = [0u8; 4];
         match reader.read_exact(&mut len) {
@@ -191,7 +198,7 @@ pub fn stream_decrypt<R: Read, W: Write>(
         if !(TAG_LEN..=chunk_len + TAG_LEN).contains(&len) {
             return Err("加密文件分块长度无效".into());
         }
-        let mut data = vec![0u8; len];
+        data.resize(len, 0);
         reader
             .read_exact(&mut data)
             .map_err(|_| "加密文件分块不完整".to_string())?;
@@ -253,7 +260,7 @@ impl<R: Read> EncryptReader<R> {
             room_id: room_id.to_string(),
             base: random_nonce()?,
             index: 0,
-            pending: Vec::new(),
+            pending: Vec::with_capacity(4 + CHUNK_LEN + TAG_LEN),
             offset: 0,
             header_sent: false,
             finished: false,
@@ -262,7 +269,7 @@ impl<R: Read> EncryptReader<R> {
 
     fn fill(&mut self) -> io::Result<()> {
         if !self.header_sent {
-            self.pending = Vec::with_capacity(HEADER_LEN);
+            self.pending.clear();
             self.pending.extend_from_slice(FILE_MAGIC);
             self.pending.extend_from_slice(&self.base);
             self.pending
@@ -274,25 +281,26 @@ impl<R: Read> EncryptReader<R> {
             self.pending.clear();
             return Ok(());
         }
-        let mut chunk = vec![0u8; CHUNK_LEN];
-        let count = read_chunk(&mut self.reader, &mut chunk).map_err(io::Error::other)?;
+        // Reuse a single pre-allocated buffer: [4-byte len][plaintext -> ciphertext][16-byte tag].
+        self.pending.resize(4 + CHUNK_LEN, 0);
+        let count = read_chunk(&mut self.reader, &mut self.pending[4..]).map_err(io::Error::other)?;
         if count == 0 {
             self.finished = true;
         }
-        chunk.truncate(count);
+        self.pending.truncate(4 + count);
         let aad = format!("{}:{}", file_aad(&self.room_id), self.index);
-        self.key
-            .seal_in_place_append_tag(
+        let tag = self
+            .key
+            .seal_in_place_separate_tag(
                 Nonce::assume_unique_for_key(chunk_nonce(&self.base, self.index)),
                 Aad::from(aad.as_bytes()),
-                &mut chunk,
+                &mut self.pending[4..],
             )
             .map_err(|_| io::Error::other("文件加密失败"))?;
+        self.pending.extend_from_slice(tag.as_ref());
+        let cipher_len = (self.pending.len() - 4) as u32;
+        self.pending[..4].copy_from_slice(&cipher_len.to_be_bytes());
         self.index += 1;
-        let mut framed = Vec::with_capacity(4 + chunk.len());
-        framed.extend_from_slice(&(chunk.len() as u32).to_be_bytes());
-        framed.extend_from_slice(&chunk);
-        self.pending = framed;
         Ok(())
     }
 }
@@ -373,6 +381,22 @@ mod tests {
             stream_decrypt(&key, "room-a", &mut encrypted.as_slice(), &mut decrypted).unwrap();
         assert_eq!(read, input.len() as u64);
         assert_eq!(decrypted, input);
+    }
+
+    #[test]
+    fn encrypted_size_matches_reader_and_stream_for_boundary_sizes() {
+        let key = generate_key().unwrap();
+        for size in [0usize, 1, 1024, CHUNK_LEN, CHUNK_LEN + 7] {
+            let input = vec![0x5a; size];
+            let expected = encrypted_size(size as u64) as usize;
+            let mut reader = EncryptReader::new(input.as_slice(), &key, "room-sz").unwrap();
+            let mut reader_out = Vec::new();
+            reader.read_to_end(&mut reader_out).unwrap();
+            assert_eq!(reader_out.len(), expected, "EncryptReader length mismatch for size {size}");
+            let mut stream_out = Vec::new();
+            stream_encrypt(&key, "room-sz", &mut input.as_slice(), &mut stream_out).unwrap();
+            assert_eq!(stream_out.len(), expected, "stream_encrypt length mismatch for size {size}");
+        }
     }
 
     #[test]

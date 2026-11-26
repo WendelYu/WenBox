@@ -3,7 +3,7 @@
     'use strict';
     function create(options) {
         const files = new Map(), uploads = new Map();
-        let session = null, timer = null, polling = false, generation = 0;
+        let session = null, timer = null, polling = false, repoll = false, generation = 0;
         const key = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), n => n.toString(16).padStart(2, '0')).join('');
         const uuid = () => {
             const b = crypto.getRandomValues(new Uint8Array(16)); b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
@@ -25,6 +25,9 @@
         }
         async function rawUpload(file, ctx, job, controller) {
             const context = { url: ctx.base + '/api/offers/transfer/' + job.requestId + '/' + job.secret, token: ctx.token };
+            if (file.nativeP2p && options.p2pRelayUpload) {
+                return options.p2pRelayUpload(file.shareId, context.url, ctx.token, controller.signal);
+            }
             if (file.forTransfer) file = file.forTransfer();
             if (options.nativeUpload) return options.nativeUpload(file, context, () => {}, controller.signal);
             if (file.virtualEncrypted) {
@@ -50,7 +53,8 @@
             });
         }
         async function poll() {
-            if (!session || !files.size || polling) return;
+            if (!session || !files.size) return;
+            if (polling) { repoll = true; return; }
             polling = true;
             const ctx = session, current = generation;
             const latest = options.context();
@@ -65,7 +69,13 @@
                     rawUpload(entry.file, ctx, job, controller).catch(error => { if (!controller.signal.aborted) options.error?.(error); }).finally(() => uploads.delete(job.requestId));
                 }
             } catch (_) { /* Network recovery is automatic; no repeated toast. */ }
-            finally { polling = false; }
+            finally {
+                polling = false;
+                if (repoll) {
+                    repoll = false;
+                    poll();
+                }
+            }
         }
         async function reset() {
             const old = session;
@@ -73,6 +83,7 @@
             clearInterval(timer); timer = null;
             for (const controller of uploads.values()) controller.abort();
             uploads.clear();
+            try { await options.revokeP2p?.(null); } catch (_) {}
             if (!old) return;
             try {
                 const headers = { 'X-Room-Token': old.token || '', 'X-Share-Key': old.key };
@@ -87,17 +98,50 @@
                 if (!session) session = { ...ctx, key: key() };
                 session.token = ctx.token;
                 const current = generation, active = session;
-                const entries = Array.from(list, file => ({ file: options.prepare ? options.prepare(file, ctx) : file, original: file, clientId: uuid() }));
+                const entries = Array.from(list, file => ({
+                    file: file?.nativeP2p ? file : (options.prepare ? options.prepare(file, ctx) : file),
+                    original: file,
+                    clientId: uuid()
+                }));
                 if (!entries.length) return [];
                 if (entries.length > 32) throw new Error('每次最多分享 32 个文件');
-                const metadata = entries.map(e => ({
-                    clientId: e.clientId, name: e.file.name, size: e.file.size,
-                    mimeType: e.original.type || 'application/octet-stream',
-                    // Older hosts reject unknown fields. Plain files need only the
-                    // original schema; encrypted files must retain their metadata.
-                    ...(e.file.virtualEncrypted ? { plainSize: e.original.size, encrypted: true } : {})
-                }));
-                const response = await request(active, '/api/offers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ownerKey: active.key, senderName: options.sender(), scope, files: metadata }) });
+                const buildMetadata = (includeDirect) => entries.map(e => {
+                    const item = {
+                        clientId: e.clientId,
+                        name: e.file.name,
+                        size: e.file.size,
+                        mimeType: e.file.mimeType || e.original.type || 'application/octet-stream'
+                    };
+                    if (e.file.virtualEncrypted || e.file.encrypted) {
+                        item.plainSize = e.file.plainSize ?? e.original.size;
+                        item.encrypted = true;
+                    }
+                    if (includeDirect && Array.isArray(e.file.directUrls) && e.file.directUrls.length && e.file.directSecret) {
+                        item.directUrls = e.file.directUrls;
+                        item.directSecret = e.file.directSecret;
+                    }
+                    return item;
+                });
+                const hasDirect = entries.some(e => Array.isArray(e.file.directUrls) && e.file.directUrls.length && e.file.directSecret);
+                let response;
+                try {
+                    response = await request(active, '/api/offers', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ownerKey: active.key, senderName: options.sender(), scope, files: buildMetadata(true) })
+                    });
+                } catch (err) {
+                    // Older hosts with deny_unknown_fields reject directUrls/directSecret; retry cleanly without P2P metadata while preserving encryption metadata.
+                    if (hasDirect && /\(400\)/.test(String(err?.message || ''))) {
+                        response = await request(active, '/api/offers', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ownerKey: active.key, senderName: options.sender(), scope, files: buildMetadata(false) })
+                        });
+                    } else {
+                        throw err;
+                    }
+                }
                 if (current !== generation) { await request(active, '/api/offers/revoke', { method: 'POST' }); return []; }
                 for (const offer of response.files || []) {
                     const entry = entries.find(e => e.clientId === offer.clientId);
@@ -111,8 +155,16 @@
             async remove(id) {
                 if (!session) return;
                 await request(session, '/api/offers/revoke', { method: 'POST', headers: { 'X-Share-File': id } });
-                for (const [key, entry] of files) if (entry.id === id) files.delete(key);
+                for (const [key, entry] of files) {
+                    if (entry.id === id) {
+                        if (entry.file?.nativeP2p && entry.file.shareId) {
+                            try { await options.revokeP2p?.(entry.file.shareId); } catch (_) {}
+                        }
+                        files.delete(key);
+                    }
+                }
             },
+            nudge() { poll(); },
             reset
         };
     }

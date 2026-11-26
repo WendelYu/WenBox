@@ -12,7 +12,9 @@ use std::{
 };
 use tiny_http::{Header, Method, Request, Response, StatusCode};
 const WAIT: Duration = Duration::from_secs(20);
-const CACHE_LIMIT: u64 = 1024 * 1024 * 1024;
+const CACHE_LIMIT: u64 = 256 * 1024 * 1024;
+/// Only cache small relay transfers (images/docs) on the host; larger files stream purely in memory without duplicate temp copies.
+const CACHE_MAX_FILE_SIZE: u64 = 32 * 1024 * 1024;
 const ONLINE: Duration = Duration::from_secs(12);
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -25,6 +27,10 @@ struct FileInput {
     #[serde(default)]
     encrypted: bool,
     mime_type: String,
+    #[serde(default)]
+    direct_urls: Vec<String>,
+    #[serde(default)]
+    direct_secret: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -124,7 +130,14 @@ impl DemandFiles {
     }
     fn public(o: &Offer, online: bool) -> serde_json::Value {
         let cached = o.cache.lock().unwrap_or_else(|e| e.into_inner()).is_some();
-        serde_json::json!({"id":o.id,"clientId":o.file.client_id,"name":o.file.name,"size":o.file.plain_size.unwrap_or(o.file.size),"mimeType":o.file.mime_type,"path":"","onDemand":true,"ownerName":o.sender,"online":online || cached,"cached":cached})
+        let mut obj = serde_json::json!({"id":o.id,"clientId":o.file.client_id,"name":o.file.name,"size":o.file.plain_size.unwrap_or(o.file.size),"mimeType":o.file.mime_type,"path":"","onDemand":true,"ownerName":o.sender,"online":online || cached,"cached":cached});
+        if !o.file.direct_urls.is_empty() && online {
+            obj["directUrls"] = serde_json::json!(o.file.direct_urls);
+            if let Some(ref secret) = o.file.direct_secret {
+                obj["directSecret"] = serde_json::json!(secret);
+            }
+        }
+        obj
     }
     pub fn clear(&self) {
         let mut s = self.lock();
@@ -151,6 +164,10 @@ impl DemandFiles {
                 || f.name.chars().any(|c| c == '\0' || c == '\r' || c == '\n')
                 || f.size > 1_099_511_627_776
                 || f.mime_type.len() > 128
+                || f.direct_urls.len() > 8
+                || !f.direct_urls.iter().all(|u| direct_url_valid(u))
+                || f.direct_secret.as_deref().is_some_and(|sec| !secret_valid(sec))
+                || (!f.direct_urls.is_empty() && f.direct_secret.is_none())
             {
                 return Err("文件信息无效".into());
             }
@@ -202,6 +219,29 @@ impl DemandFiles {
 }
 fn secret_valid(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit())
+}
+fn direct_url_valid(raw: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw) else {
+        return false;
+    };
+    if url.scheme() != "http"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !url.path().starts_with("/api/p2p/download/")
+        || url.fragment().is_some()
+        || url.query().is_some()
+    {
+        return false;
+    }
+    match url.host_str().unwrap_or("").parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
+        }
+        _ => false,
+    }
 }
 fn json_response(status: u16, value: serde_json::Value) -> Response<Box<dyn Read + Send>> {
     Response::from_string(value.to_string())
@@ -285,7 +325,8 @@ fn file_response(offer: &Offer, reader: Box<dyn Read + Send>) -> Response<Box<dy
         reader,
         Some(offer.file.size as usize),
         None,
-    );
+    )
+    .with_chunked_threshold(usize::MAX);
     if offer.file.encrypted {
         response.add_header(Header::from_bytes("X-WenBox-Encryption", "v1").unwrap());
     }
@@ -313,12 +354,13 @@ fn read_json(req: &mut Request) -> Result<Publish, String> {
     }
     serde_json::from_slice(&b).map_err(|_| "分享信息格式无效".into())
 }
-pub fn route(
+pub fn route<F: Fn()>(
     mut req: Request,
     repo: Arc<DemandFiles>,
     room: String,
     path: &str,
     cors: Vec<Header>,
+    notify_job: F,
 ) {
     let response = if path == "/api/offers" && req.method() == &Method::Post {
         match read_json(&mut req).and_then(|p| repo.publish(&room, p)) {
@@ -329,6 +371,26 @@ pub fn route(
         match repo.jobs(&room, &header(&req, "X-Share-Key")) {
             Ok(v) => json_response(200, v),
             Err(e) => error(403, &e),
+        }
+    } else if path.starts_with("/api/offers/direct/offer-") && req.method() == &Method::Get {
+        let id = path.trim_start_matches("/api/offers/direct/");
+        let s = repo.lock();
+        if let Some(o) = s.offers.get(id).filter(|o| o.room == room) {
+            let online = s.owners.get(&o.owner).is_some_and(|t| t.elapsed() < ONLINE);
+            if online && !o.file.direct_urls.is_empty() {
+                json_response(
+                    200,
+                    serde_json::json!({
+                        "directUrls": o.file.direct_urls,
+                        "directSecret": o.file.direct_secret,
+                        "size": o.file.plain_size.unwrap_or(o.file.size)
+                    }),
+                )
+            } else {
+                error(404, "暂无直连地址")
+            }
+        } else {
+            error(404, "文件分享已失效")
         }
     } else if matches!(path, "/api/offers/revoke" | "/api/offers/detach")
         && req.method() == &Method::Post
@@ -396,7 +458,7 @@ pub fn route(
                 client_id: o.file.client_id.clone(),
                 file_id: o.id.clone(),
             };
-            let (tx, rx) = mpsc::sync_channel(4);
+            let (tx, rx) = mpsc::sync_channel(16);
             let (ready_tx, ready_rx) = mpsc::channel();
             s.pending.insert(
                 job.request_id.clone(),
@@ -421,11 +483,14 @@ pub fn route(
                 }),
             ),
             Ok((o, _, Some((job, rx, ready)))) => {
+                notify_job();
                 if ready.recv_timeout(WAIT).is_err() {
                     repo.lock().pending.remove(&job.request_id);
                     error(504, "发送方未响应，请确认对方仍在线后重新下载")
                 } else {
-                    let cache = if o.file.encrypted {
+                    // Only cache small encrypted files (e.g., chat images/docs) on the host;
+                    // large files stream strictly through bounded memory with zero temp copies.
+                    let cache = if o.file.encrypted && o.file.size <= CACHE_MAX_FILE_SIZE {
                         CachedOffer::reserve(o.file.size, &repo.cache_usage)
                             .map(|entry| (entry, o.cache.clone()))
                     } else {
@@ -472,7 +537,7 @@ pub fn route(
                     let _ = p.ready.send(());
                     let result = (|| -> Result<(), String> {
                         let mut left = p.offer.file.size;
-                        let mut buf = vec![0u8; 256 * 1024];
+                        let mut buf = vec![0u8; 512 * 1024];
                         while left > 0 {
                             if p.offer.cancelled.load(Ordering::SeqCst) {
                                 return Err("分享已取消".into());
@@ -628,6 +693,8 @@ mod tests {
             plain_size: None,
             encrypted: false,
             mime_type: "text/plain".into(),
+            direct_urls: Vec::new(),
+            direct_secret: None,
         };
         assert!(repo
             .publish(
@@ -637,6 +704,21 @@ mod tests {
                     sender_name: "s".into(),
                     scope: "room".into(),
                     files: vec![input()]
+                }
+            )
+            .is_err());
+        // Reject non-LAN or malformed direct P2P URLs (SSRF protection).
+        let mut bad_direct = input();
+        bad_direct.direct_urls = vec!["http://example.com:9527/api/p2p/download/123".into()];
+        bad_direct.direct_secret = Some("b".repeat(64));
+        assert!(repo
+            .publish(
+                "r",
+                Publish {
+                    owner_key: key.clone(),
+                    sender_name: "s".into(),
+                    scope: "room".into(),
+                    files: vec![bad_direct]
                 }
             )
             .is_err());
