@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
-    <meta name="wenbox-version" content="1.4.18">
+    <meta name="wenbox-version" content="1.4.19">
     <title>WenBox · 文件与消息直传</title>
     <script src="theme.js"></script>
     <link rel="icon" type="image/png" href="logo.png">
@@ -69,6 +69,7 @@
   <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></symbol>
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></symbol>
+  <symbol id="i-package" viewBox="0 0 24 24"><path d="M16.5 9.4 7.55 4.24"></path><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.29 7 12 12 20.71 7"></polyline><line x1="12" y1="22" x2="12" y2="12"></line></symbol>
   <symbol id="i-alert-triangle" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></symbol>
   <symbol id="i-message-square" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></symbol>
   <symbol id="i-hard-drive" viewBox="0 0 24 24"><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/></symbol>
@@ -113,6 +114,7 @@
                 <button type="button" class="nav-tab" data-view="view-room" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-message-square"></use></svg><span>快传</span></button>
                 <button type="button" class="nav-tab" data-view="view-kvm" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-link"></use></svg><span>流转</span></button>
                 <button type="button" class="nav-tab" data-view="view-tools" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-braces"></use></svg><span>工具</span></button>
+                <button type="button" class="nav-tab" data-view="view-about" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg><span>关于</span><span id="aboutUpdateDot" class="nav-update-dot" hidden aria-label="有可用更新"></span></button>
             </nav>
             <div class="rail-footer"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-shield"></use></svg><span>局域网 · 离线可用</span></div>
         </aside>
@@ -589,7 +591,74 @@
   </div>
   <section class="card api-history"><div class="api-history-top"><h3>最近请求 <span class="api-hint">· 本次会话，最多 20 条</span></h3><button id="apiClearHistory" class="btn btn--ghost btn--sm" type="button">清空</button></div><p id="apiHistoryEmpty" class="api-hint">发送过的请求会出现在这里，点击即可重新编辑。</p><div id="apiHistory"></div></section>
 </section>
-</main></div>
+</main>
+<main id="view-about" class="primary-view" aria-label="关于" hidden>
+  <div class="about-stack">
+    <section class="card about-card" aria-label="版本与自动更新">
+      <div class="about-hero-row">
+        <div class="about-brand-group">
+          <img src="logo.png" alt="WenBox Logo" class="about-logo" width="48" height="48">
+          <div class="about-brand-meta">
+            <div class="about-title-row">
+              <strong>WenBox</strong>
+              <span id="aboutVersionBadge" class="about-version-pill">v1.4.19</span>
+            </div>
+            <div id="aboutUpdateStatus" class="about-status-line" data-state="latest">已是最新版本</div>
+          </div>
+        </div>
+        <div class="about-hero-actions">
+          <button id="btnInstallUpdate" type="button" class="btn btn--primary btn--sm" hidden>立即更新并重启</button>
+          <button id="btnCheckUpdate" type="button" class="btn btn--secondary btn--sm">检查更新</button>
+        </div>
+      </div>
+      <div id="aboutUpdatePanel" class="about-update-panel" hidden>
+        <div id="aboutUpdateTitle" class="about-update-title"></div>
+        <pre id="aboutUpdateNotes" class="about-update-notes"></pre>
+        <progress id="aboutUpdateProgress" class="about-update-progress" max="1" value="0" hidden></progress>
+        <div id="aboutUpdateProgressText" class="about-progress-text"></div>
+      </div>
+      <label class="about-toggle-row" for="toggleAutoCheckUpdate">
+        <span class="about-toggle-label">自动检查更新</span>
+        <span class="about-switch-wrap">
+          <input id="toggleAutoCheckUpdate" type="checkbox" role="switch" class="about-switch-input" checked>
+          <span class="about-switch-track" aria-hidden="true"></span>
+        </span>
+      </label>
+    </section>
+
+    <div class="about-section-label">运行信息</div>
+    <section class="card about-card about-card--list" aria-label="运行信息">
+      <div class="about-info-row">
+        <div class="about-info-left">
+          <span class="about-icon-box about-icon-box--purple"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-monitor"></use></svg></span>
+          <span class="about-info-title">运行环境</span>
+        </div>
+        <span id="aboutRuntimeEnv" class="about-info-value">桌面客户端</span>
+      </div>
+      <div class="about-info-row">
+        <div class="about-info-left">
+          <span class="about-icon-box about-icon-box--amber"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-folder"></use></svg></span>
+          <span class="about-info-title">WenBox 数据目录</span>
+        </div>
+        <div class="about-info-right">
+          <span id="aboutDataDir" class="mono about-info-path"></span>
+          <button id="btnOpenDataDir" type="button" class="btn btn--secondary btn--sm">在访达中显示</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card about-card about-card--list" aria-label="开源与发布">
+      <div class="about-info-row">
+        <div class="about-info-left">
+          <span class="about-icon-box about-icon-box--blue"><svg class="icon icon--sm" aria-hidden="true"><use href="#i-package"></use></svg></span>
+          <span class="about-info-title">GitHub Releases</span>
+        </div>
+        <button id="btnOpenGithubReleases" type="button" class="btn btn--secondary btn--sm">GitHub ↗</button>
+      </div>
+    </section>
+  </div>
+</main>
+</div>
 
 
     <dialog id="createRoomModal" class="modal" aria-labelledby="createRoomModalTitle">
@@ -809,6 +878,7 @@
     <script src="upload-queue.js"></script><script src="ui-state.js"></script>
     <script src="demand-files.js"></script><script src="app.js"></script>
     <script src="service-health.js"></script>
+    <script src="updater.js"></script>
     <script src="kvm.js"></script>
     <script defer src="api-debug.js"></script>
 </body>

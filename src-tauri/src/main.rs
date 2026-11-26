@@ -11,6 +11,7 @@ mod network;
 mod native_transport;
 mod clipboard_files;
 mod session_store;
+mod updater;
 #[cfg(windows)]
 mod windows_network;
 #[cfg(windows)]
@@ -192,7 +193,7 @@ struct P2pShare {
     room_id: String,
 }
 
-struct AppState {
+pub(crate) struct AppState {
     files: Mutex<HashMap<String, SharedFile>>,
     demand_files: Arc<demand_files::DemandFiles>,
     p2p_shares: Mutex<HashMap<String, P2pShare>>,
@@ -1127,7 +1128,7 @@ fn clear_chat_messages_cmd(state: tauri::State<Arc<AppState>>) -> Result<bool, S
 /// Joining another device must dissolve this device's active local room
 /// (whether startup default or manually created) so it disappears from LAN
 /// discovery and cannot accept a second set of guests.
-fn close_default_room_if_active(state: &Arc<AppState>) -> Option<String> {
+pub(crate) fn close_default_room_if_active(state: &Arc<AppState>) -> Option<String> {
     let old_room_id = {
         let mut room = state.room.lock().unwrap_or_else(|e| e.into_inner());
         if !room.is_active {
@@ -4579,7 +4580,11 @@ fn main() {
         fetch_node_messages,
         send_node_message,
         send_room_probe_cmd,
-        clear_chat_messages_cmd
+        clear_chat_messages_cmd,
+        updater::get_app_runtime_info_cmd,
+        updater::open_data_dir_cmd,
+        updater::updater_check_cmd,
+        updater::updater_install_cmd
     ];
     let exit_state = state.clone();
     builder

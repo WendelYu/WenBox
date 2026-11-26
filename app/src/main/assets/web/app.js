@@ -65,6 +65,9 @@
         clearTimeout(toastTimer);
         if (!error) toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
     }
+    document.addEventListener('wenbox:update-available', event => {
+        if (event.detail?.message) showToast(event.detail.message);
+    });
 
     async function copyWithFeedback(text, message = '已复制到剪贴板') {
         try {
@@ -115,8 +118,8 @@
             }
         }
         document.body.dataset.activeView = id;
-        setText(document.getElementById('workspaceTitle'), id === 'view-rooms' ? '房间' : id === 'view-kvm' ? '键鼠流转' : id === 'view-tools' ? '随手工具' : '快传工作台');
-        setText(document.getElementById('workspaceSubtitle'), id === 'view-rooms' ? '发现、加入和管理局域网房间' : id === 'view-kvm' ? '键鼠跟随光标，在两台电脑间切换' : id === 'view-tools' ? '常用的小工具，离线也顺手' : '文件与消息，在设备间轻松流转');
+        setText(document.getElementById('workspaceTitle'), id === 'view-rooms' ? '房间' : id === 'view-kvm' ? '键鼠流转' : id === 'view-tools' ? '随手工具' : id === 'view-about' ? '关于' : '快传工作台');
+        setText(document.getElementById('workspaceSubtitle'), id === 'view-rooms' ? '发现、加入和管理局域网房间' : id === 'view-kvm' ? '键鼠跟随光标，在两台电脑间切换' : id === 'view-tools' ? '常用的小工具，离线也顺手' : id === 'view-about' ? '版本检查、应用内自动更新与运行信息' : '文件与消息，在设备间轻松流转');
         document.querySelectorAll('.primary-view').forEach(view => { view.hidden = view.id !== id; });
         document.querySelectorAll('[data-view]').forEach(button => {
             const selected = button.dataset.view === id;

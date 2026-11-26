@@ -286,6 +286,12 @@ async function main() {
             assert.equal(await page.locator(`#${tool}`).isVisible(), true);
             assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, tool);
         }
+        await page.locator('[data-view="view-about"]').click();
+        assert.equal(await page.locator('#view-about').isVisible(), true);
+        assert.match(await page.locator('#aboutVersionBadge').innerText(), /^v\d+\.\d+\.\d+/);
+        assert.equal(await page.locator('#toggleAutoCheckUpdate').isChecked(), true);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'about mobile layout');
+        await page.locator('[data-view="view-tools"]').click();
         await page.setViewportSize({ width: 1100, height: 780 });
         for (const theme of ['light', 'dark']) {
             await page.evaluate(theme => window.WenBoxTheme.set(theme), theme);
