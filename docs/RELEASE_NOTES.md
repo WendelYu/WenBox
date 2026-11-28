@@ -1,3 +1,11 @@
+## WenBox v1.4.21 · 修复桌面端扫描权限校验并升级双栏 API Studio 界面
+
+- 修复 macOS / Windows 桌面端调用本地接口目录或 JAR 扫描（及本机调试请求）时因 `tauri://localhost` 空路径与 `/index.html` 路径被误判拒绝而报错“仅允许本机桌面工具扫描本地接口目录或文件”的问题。
+- 移除旧版“粘贴即填入 VTO”面板，将接口调试全面重构为左目录、右调试的双栏 API Studio 工作台：左侧常驻项目导入引导与可搜索/按方法筛选的分组接口目录，右侧支持激活接口行内编辑 `{path}` 路径参数并实时同步 URL、请求参数计数徽章、URL 粘贴 cURL 导入与一键复制 cURL。
+- 精简 `api-debug.js` 前端打包产物（不再打包旧版 `java-parser`），优化默认桌面窗口下的编辑与响应排版空间。
+
+---
+
 ## WenBox v1.4.20 · 接口调试支持项目目录/JAR 自动扫描与参数智能模拟
 
 - 接口调试升级支持选择本地 Java / Spring Boot 项目目录、普通 `.jar`、Spring Boot Fat JAR（自动解析 `BOOT-INF/classes` 与 `BOOT-INF/lib/*.jar` 字节码）以及 OpenAPI 3.x / Swagger 2.0 JSON，离线自动提取全部接口并按 Controller 分组展示。

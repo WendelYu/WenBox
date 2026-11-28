@@ -41,7 +41,7 @@ pub struct ApiResponse {
 
 pub(crate) fn allowed_window(label: &str, url: &url::Url) -> bool {
     label == "main"
-        && url.path() == "/"
+        && matches!(url.path(), "" | "/" | "/index.html")
         && url.username().is_empty()
         && url.password().is_none()
         && ((url.scheme() == "tauri" && url.host_str() == Some("localhost"))
@@ -220,10 +220,19 @@ mod tests {
     }
     #[test]
     fn validates_desktop_origin_and_request_boundaries() {
-        assert!(allowed_window(
-            "main",
-            &url::Url::parse("tauri://localhost/").unwrap()
-        ));
+        for address in [
+            "tauri://localhost",
+            "tauri://localhost/",
+            "tauri://localhost/index.html",
+            "https://tauri.localhost/",
+            "https://tauri.localhost/index.html",
+            "http://tauri.localhost/",
+        ] {
+            assert!(
+                allowed_window("main", &url::Url::parse(address).unwrap()),
+                "expected allowed desktop window URL: {address}"
+            );
+        }
         for address in [
             "http://127.0.0.1:9527/",
             "https://example.com/",

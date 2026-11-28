@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
-    <meta name="wenbox-version" content="1.4.20">
+    <meta name="wenbox-version" content="1.4.21">
     <title>WenBox · 文件与消息直传</title>
     <script src="theme.js"></script>
     <link rel="icon" type="image/png" href="logo.png">
@@ -569,61 +569,115 @@
                 </div>
             </section>
         </section><section id="tab-api" class="tool-pane api-tool" hidden>
-  <div class="api-title"><div><span class="api-eyebrow">API WORKSPACE</span><h2>接口调试</h2><span id="apiTransport" class="api-hint">HTTP / HTTPS</span></div><button id="apiNew" class="btn btn--secondary btn--sm" type="button">新建请求</button></div>
-  <section class="card api-source-bar" aria-label="项目与接口导入">
-    <div class="api-source-controls">
-      <div class="api-source-buttons">
-        <button id="apiPickDir" type="button" class="btn btn--secondary btn--sm">选择项目目录</button>
-        <button id="apiPickFile" type="button" class="btn btn--secondary btn--sm">选择 JAR / 文件</button>
-        <button id="apiRescan" type="button" class="btn btn--ghost btn--sm" hidden>重新扫描</button>
-        <input id="apiDirInput" type="file" webkitdirectory multiple hidden>
-        <input id="apiFileInput" type="file" accept=".jar,.war,.java,.json,.yml,.yaml,.properties" multiple hidden>
-      </div>
-      <div class="api-source-settings">
-        <label class="api-inline-field" for="apiBaseUrl"><span>Base URL</span><input id="apiBaseUrl" type="text" placeholder="http://127.0.0.1:8080" autocomplete="off" spellcheck="false"></label>
-        <label class="api-inline-field" for="apiMockMode"><span>模拟策略</span><select id="apiMockMode"><option value="smart">智能模拟值</option><option value="empty">空默认值</option></select></label>
-        <button id="apiRemock" type="button" class="btn btn--ghost btn--sm" disabled>重新模拟</button>
-      </div>
-    </div>
-    <p id="apiCatalogStatus" class="api-catalog-status" role="status">支持选择 Spring Boot 项目目录、JAR/Fat-JAR 包或 OpenAPI/Swagger JSON，自动识别接口并生成模拟参数。</p>
-  </section>
-  <div id="apiLayout" class="api-layout">
-    <aside id="apiCatalogPanel" class="card api-catalog" aria-label="项目接口目录" hidden>
-      <div class="api-catalog-head">
-        <input id="apiCatalogSearch" type="search" placeholder="搜索路径、接口名、Controller…" aria-label="搜索项目接口" autocomplete="off" spellcheck="false">
-        <div class="api-method-filters" role="group" aria-label="按 HTTP 方法筛选">
-          <button type="button" class="api-filter-chip is-active" data-api-method-filter="ALL" aria-pressed="true">全部</button>
-          <button type="button" class="api-filter-chip" data-api-method-filter="GET" aria-pressed="false">GET</button>
-          <button type="button" class="api-filter-chip" data-api-method-filter="POST" aria-pressed="false">POST</button>
-          <button type="button" class="api-filter-chip" data-api-method-filter="PUT" aria-pressed="false">PUT</button>
-          <button type="button" class="api-filter-chip" data-api-method-filter="DELETE" aria-pressed="false">DELETE</button>
+  <header class="api-studio-header">
+    <div class="api-studio-title">
+      <div>
+        <span class="api-eyebrow">API STUDIO</span>
+        <div class="api-title-line">
+          <h2>接口调试</h2>
+          <span id="apiTransport" class="api-transport-pill">HTTP / HTTPS</span>
         </div>
       </div>
-      <div id="apiCatalogList" class="api-catalog-list"></div>
-      <p id="apiCatalogEmpty" class="api-hint api-catalog-empty" hidden></p>
+    </div>
+    <div class="api-studio-toolbar">
+      <label class="api-env-pill" for="apiBaseUrl">
+        <span>Base URL</span>
+        <input id="apiBaseUrl" type="text" placeholder="http://127.0.0.1:8080" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="api-mock-group">
+        <select id="apiMockMode" aria-label="参数模拟策略">
+          <option value="smart">智能模拟</option>
+          <option value="empty">空默认值</option>
+        </select>
+        <button id="apiRemock" type="button" class="btn btn--ghost btn--sm" disabled>重新模拟</button>
+      </div>
+      <button id="apiNew" class="btn btn--secondary btn--sm" type="button">新建请求</button>
+    </div>
+  </header>
+  <div id="apiLayout" class="api-studio-grid">
+    <aside id="apiCatalogPanel" class="card api-sidebar" aria-label="项目接口目录">
+      <input id="apiDirInput" type="file" webkitdirectory multiple hidden>
+      <input id="apiFileInput" type="file" accept=".jar,.war,.java,.json,.yml,.yaml,.properties" multiple hidden>
+      <div id="apiCatalogWelcome" class="api-catalog-welcome">
+        <div class="api-welcome-icon" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="m9.5 14.5-2-2 2-2"/><path d="m14.5 10.5 2 2-2 2"/></svg>
+        </div>
+        <h3>自动读取项目接口</h3>
+        <p class="api-hint">选择 Spring Boot 项目目录、JAR/Fat JAR 包或 OpenAPI JSON，离线解析全部接口并智能模拟请求参数。</p>
+        <div class="api-welcome-actions">
+          <button id="apiPickDir" type="button" class="btn btn--primary btn--sm">选择项目目录</button>
+          <button id="apiPickFile" type="button" class="btn btn--secondary btn--sm">选择 JAR / 文件</button>
+        </div>
+        <div class="api-format-badges">
+          <span>Spring Boot</span>
+          <span>JAR / Fat JAR</span>
+          <span>OpenAPI 3</span>
+        </div>
+      </div>
+      <div id="apiCatalogLoaded" class="api-catalog-loaded" hidden>
+        <div class="api-source-summary">
+          <div class="api-source-title-row">
+            <strong id="apiSourceTitle" class="api-source-title">项目接口</strong>
+            <span id="apiSourceMeta" class="api-source-meta">0 接口</span>
+          </div>
+          <div class="api-source-mini-actions">
+            <button id="apiPickDirMini" type="button" class="btn btn--ghost btn--xs">换目录</button>
+            <button id="apiPickFileMini" type="button" class="btn btn--ghost btn--xs">换文件</button>
+            <button id="apiRescan" type="button" class="btn btn--ghost btn--xs" hidden>刷新</button>
+            <button id="apiClearCatalog" type="button" class="btn btn--ghost btn--xs">清空</button>
+          </div>
+        </div>
+        <div class="api-catalog-head">
+          <div class="api-search-wrap">
+            <input id="apiCatalogSearch" type="search" placeholder="搜索路径、名称或 Controller…" aria-label="搜索项目接口" autocomplete="off" spellcheck="false">
+            <span id="apiCatalogCount" class="api-catalog-count">0</span>
+          </div>
+          <div class="api-method-filters" role="group" aria-label="按 HTTP 方法筛选">
+            <button type="button" class="api-filter-chip is-active" data-api-method-filter="ALL" aria-pressed="true">全部</button>
+            <button type="button" class="api-filter-chip" data-api-method-filter="GET" aria-pressed="false">GET</button>
+            <button type="button" class="api-filter-chip" data-api-method-filter="POST" aria-pressed="false">POST</button>
+            <button type="button" class="api-filter-chip" data-api-method-filter="PUT" aria-pressed="false">PUT</button>
+            <button type="button" class="api-filter-chip" data-api-method-filter="DELETE" aria-pressed="false">DELETE</button>
+            <button type="button" class="api-filter-chip" data-api-method-filter="PATCH" aria-pressed="false">PATCH</button>
+          </div>
+        </div>
+        <div id="apiCatalogList" class="api-catalog-list"></div>
+        <p id="apiCatalogEmpty" class="api-hint api-catalog-empty" hidden></p>
+      </div>
+      <p id="apiCatalogStatus" class="api-catalog-status" role="status" hidden></p>
     </aside>
     <div class="api-main">
       <div id="apiSelectedEndpoint" class="card api-selected-endpoint" hidden></div>
-      <details class="card api-import" open>
-        <summary>粘贴即填入<span>VTO / DTO 字段、JSON、URL 或 cURL</span></summary>
-        <div class="api-import-grid"><label class="api-field" for="apiImport">粘贴内容<textarea id="apiImport" rows="6" spellcheck="false" placeholder="String name;&#10;String code;&#10;private List&lt;ShelfTierVto&gt; tierList;"></textarea></label><div><label for="apiPreview">生成预览</label><pre id="apiPreview" class="api-preview" aria-live="polite">等待粘贴…</pre></div></div>
-        <div class="api-import-actions"><label for="apiImportTarget">填入位置</label><select id="apiImportTarget"><option value="Body">JSON 请求体</option><option value="Query">Query 参数</option></select><button id="apiApply" type="button" class="btn btn--primary btn--sm" disabled>填入并替换</button><button id="apiSample" type="button" class="btn btn--ghost btn--sm">试试字段示例</button></div>
-        <p id="apiImportStatus" class="api-import-status" role="status">支持字段片段、完整 Java class、JSON、URL、键值参数和常用 cURL。URL / cURL 会替换请求配置。</p>
-      </details>
-      <div class="api-request-bar"><select id="apiMethod" aria-label="HTTP 方法"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select><input id="apiUrl" type="text" aria-label="请求 URL" placeholder="https://api.example.com/items 或 {{baseUrl}}/items" autocomplete="off" spellcheck="false"><button id="apiSend" type="button" class="btn btn--primary" title="⌘ / Ctrl + Enter">发送请求</button></div>
+      <div class="api-request-bar"><select id="apiMethod" data-method="GET" aria-label="HTTP 方法"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select><input id="apiUrl" type="text" aria-label="请求 URL" placeholder="输入请求 URL，或直接粘贴 cURL 命令（如 {{baseUrl}}/orders）" autocomplete="off" spellcheck="false"><button id="apiSend" type="button" class="btn btn--primary" title="⌘ / Ctrl + Enter">发送请求</button></div>
       <p id="apiNotice" class="api-notice" role="status" hidden></p>
       <div class="api-workbench">
         <section class="card api-editor" aria-label="请求配置">
-          <div class="api-tabs" role="tablist" aria-label="请求参数类型"><button type="button" role="tab" data-api-tab="Query" aria-controls="apiQueryPanel">Query</button><button type="button" role="tab" data-api-tab="Header" aria-controls="apiHeaderPanel">Headers</button><button type="button" role="tab" data-api-tab="Body" aria-controls="apiBodyPanel">Body</button><button type="button" role="tab" data-api-tab="Auth" aria-controls="apiAuthPanel">认证</button><button type="button" role="tab" data-api-tab="Settings" aria-controls="apiSettingsPanel">变量与超时</button></div>
+          <div class="api-tabs-bar">
+            <div class="api-tabs" role="tablist" aria-label="请求参数类型">
+              <button type="button" role="tab" data-api-tab="Query" aria-controls="apiQueryPanel">Query <span id="apiQueryBadge" class="api-tab-badge" hidden>0</span></button>
+              <button type="button" role="tab" data-api-tab="Header" aria-controls="apiHeaderPanel">Headers <span id="apiHeaderBadge" class="api-tab-badge" hidden>0</span></button>
+              <button type="button" role="tab" data-api-tab="Body" aria-controls="apiBodyPanel">Body <span id="apiBodyBadge" class="api-tab-badge" hidden>JSON</span></button>
+              <button type="button" role="tab" data-api-tab="Auth" aria-controls="apiAuthPanel">认证</button>
+              <button type="button" role="tab" data-api-tab="Settings" aria-controls="apiSettingsPanel">变量与超时</button>
+            </div>
+            <button id="apiCopyCurl" type="button" class="btn btn--ghost btn--xs">复制 cURL</button>
+          </div>
           <div id="apiQueryPanel" role="tabpanel" aria-label="Query 参数" hidden><div id="apiQueryRows"></div><button id="apiAddQuery" type="button" class="btn btn--secondary btn--sm">＋ 添加参数</button><p class="api-hint">自动编码中文和特殊字符，允许同名参数。URL 中原有的参数会一同发送。</p></div>
           <div id="apiHeaderPanel" role="tabpanel" aria-label="请求头" hidden><div id="apiHeaderRows"></div><button id="apiAddHeader" type="button" class="btn btn--secondary btn--sm">＋ 添加请求头</button><p class="api-hint">Content-Type 会随 Body 类型补全，也可手动指定。</p></div>
-          <div id="apiBodyPanel" role="tabpanel" aria-label="请求体"><div class="api-panel-actions"><label for="apiBodyMode">类型</label><select id="apiBodyMode"><option value="none">无请求体</option><option value="json">JSON</option><option value="form">x-www-form-urlencoded</option><option value="text">纯文本</option></select><button id="apiFormat" type="button" class="btn btn--ghost btn--sm">格式化 JSON</button></div><textarea id="apiBody" class="api-body" aria-label="请求体内容" spellcheck="false" placeholder="可在空白 JSON 请求体中直接粘贴 Java 字段，自动生成参数。"></textarea><p class="api-hint">支持按类型与字段语义智能模拟，也可随时手动修改。表单格式：name=value&amp;code=001。</p></div>
+          <div id="apiBodyPanel" role="tabpanel" aria-label="请求体"><div class="api-panel-actions"><label for="apiBodyMode">类型</label><select id="apiBodyMode"><option value="none">无请求体</option><option value="json">JSON</option><option value="form">x-www-form-urlencoded</option><option value="text">纯文本</option></select><button id="apiFormat" type="button" class="btn btn--ghost btn--sm">格式化 JSON</button></div><textarea id="apiBody" class="api-body" aria-label="请求体内容" spellcheck="false" placeholder="选择左侧接口后自动填充模拟 JSON，或直接输入请求体。"></textarea><p class="api-hint">切换“智能模拟 / 空默认值”或点击“重新模拟”可实时更新参数，也可随时手动修改。</p></div>
           <div id="apiAuthPanel" role="tabpanel" aria-label="认证" hidden><label class="api-field" for="apiBearer">Bearer Token<input id="apiBearer" type="password" autocomplete="off" placeholder="token 或 {{token}}"></label><p class="api-hint">自动生成 Authorization: Bearer 请求头。其他认证可在 Headers 中填写。</p></div>
           <div id="apiSettingsPanel" role="tabpanel" aria-label="变量与超时" hidden><label class="api-field" for="apiVariables">变量（每行 name=value）<textarea id="apiVariables" rows="6" spellcheck="false" placeholder="baseUrl=https://api.example.com&#10;token=your-token"></textarea></label><label class="api-timeout" for="apiTimeout">超时<input id="apiTimeout" type="number" min="1" max="120" value="30">秒</label><p class="api-hint">在 URL、参数、请求头和 Body 中使用 {{变量名}}。变量与历史仅保留在当前页面会话中。</p></div>
         </section>
         <section class="card api-response" aria-label="接口响应"><div class="api-response-heading"><h3>响应</h3><button id="apiCopyResponse" type="button" class="btn btn--ghost btn--sm" disabled>复制正文</button></div><div id="apiResponseMeta" class="api-response-meta" hidden><span id="apiStatus" class="api-status"></span><span id="apiTiming" class="api-hint"></span></div><div id="apiResponseEmpty" class="api-empty">发送请求后，在这里查看状态码、耗时和响应内容。</div><div id="apiResponseData" hidden><label><input id="apiPretty" type="checkbox" checked> 格式化 JSON</label><pre id="apiResponseBody"></pre><details><summary>响应 Headers</summary><pre id="apiResponseHeaders"></pre></details></div></section>
       </div>
-      <section class="card api-history"><div class="api-history-top"><h3>最近请求 <span class="api-hint">· 本次会话，最多 20 条</span></h3><button id="apiClearHistory" class="btn btn--ghost btn--sm" type="button">清空</button></div><p id="apiHistoryEmpty" class="api-hint">发送过的请求会出现在这里，点击即可重新编辑。</p><div id="apiHistory"></div></section>
+      <details class="card api-history">
+        <summary class="api-history-top">
+          <span class="api-history-title">最近请求 <span id="apiHistoryCount" class="api-tab-badge">0</span> <span class="api-hint">· 本次会话，最多 20 条</span></span>
+          <button id="apiClearHistory" class="btn btn--ghost btn--xs" type="button">清空</button>
+        </summary>
+        <p id="apiHistoryEmpty" class="api-hint">发送过的请求会出现在这里，点击即可重新编辑。</p>
+        <div id="apiHistory"></div>
+      </details>
     </div>
   </div>
 </section>
@@ -637,7 +691,7 @@
           <div class="about-brand-meta">
             <div class="about-title-row">
               <strong>WenBox</strong>
-              <span id="aboutVersionBadge" class="about-version-pill">v1.4.20</span>
+              <span id="aboutVersionBadge" class="about-version-pill">v1.4.21</span>
             </div>
             <div id="aboutUpdateStatus" class="about-status-line" data-state="latest">已是最新版本</div>
           </div>

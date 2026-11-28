@@ -1,22 +1,50 @@
-import { emptyRequest, row, importText, prepareRequest } from './api-model.mjs';
-import { DEFAULT_BASE_URL, materializeEndpointRequest, normalizeBaseUrl, scanBrowserFiles } from './api-catalog.mjs';
+import { emptyRequest, row, parseCurl, prepareRequest } from './api-request.mjs';
+import { DEFAULT_BASE_URL, joinUrl, materializeEndpointRequest, scanBrowserFiles } from './api-catalog.mjs';
 
 const root = document.getElementById('tab-api');
 if (root) {
     const $ = id => document.getElementById('api' + id);
-    let state = emptyRequest(), parsed = null, parseTimer, response = null, sending = false;
+    let state = emptyRequest(), response = null, sending = false;
     let catalog = null, selectedEndpointId = null, methodFilter = 'ALL', mockSeed = 1, scanning = false;
+    let pathParamValues = Object.create(null);
     const history = [];
     const invoke = window.__TAURI__?.invoke || window.__TAURI__?.tauri?.invoke || window.__TAURI_INVOKE__;
     const tauriDialogOpen = window.__TAURI__?.dialog?.open;
     const native = typeof invoke === 'function' || !!window.wenboxDesktop?.apiRequest;
-    $('Transport').textContent = native ? '本机直连 · HTTP / HTTPS' : '浏览器模式 · 目标接口需允许 CORS';
-    const note = (message, error = false) => { $('Notice').textContent = message; $('Notice').dataset.error = String(error); $('Notice').hidden = !message; };
+    $('Transport').textContent = native ? '本机直连 · 免跨域' : '浏览器模式 · 需目标允许 CORS';
+
+    const note = (message, error = false) => {
+        const el = $('Notice');
+        if (!el) return;
+        el.textContent = message;
+        el.dataset.error = String(error);
+        el.hidden = !message;
+    };
+
+    const setStatus = (message, error = false) => {
+        const el = $('CatalogStatus');
+        if (!el) return;
+        el.textContent = message;
+        el.dataset.error = String(error);
+        el.hidden = !message;
+    };
+
+    function syncBadges() {
+        const qCount = state.query.filter(r => r.name || r.value).length;
+        const hCount = state.headers.filter(r => r.name || r.value).length;
+        const qb = $('QueryBadge'), hb = $('HeaderBadge'), bb = $('BodyBadge'), hc = $('HistoryCount');
+        if (qb) { qb.textContent = String(qCount); qb.hidden = qCount === 0; }
+        if (hb) { hb.textContent = String(hCount); hb.hidden = hCount === 0; }
+        if (bb) { bb.textContent = state.bodyMode === 'none' ? '' : state.bodyMode.toUpperCase(); bb.hidden = state.bodyMode === 'none'; }
+        if (hc) hc.textContent = String(history.length);
+        if ($('Method')) $('Method').dataset.method = $('Method').value;
+    }
 
     function read() {
         for (const [key, id] of Object.entries({ method: 'Method', url: 'Url', body: 'Body', bodyMode: 'BodyMode', bearer: 'Bearer', variables: 'Variables', timeout: 'Timeout' })) state[key] = $(id).value;
         return state;
     }
+
     function selectTab(tab) {
         for (const button of root.querySelectorAll('[data-api-tab]')) {
             const active = button.dataset.apiTab === tab;
@@ -24,31 +52,50 @@ if (root) {
             $(button.dataset.apiTab + 'Panel').hidden = !active;
         }
     }
+
     function renderRows(key, id) {
         const container = $(id); container.replaceChildren();
         state[key].forEach((entry, index) => {
             const line = document.createElement('div'); line.className = 'api-param-row';
             const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = entry.enabled; enabled.setAttribute('aria-label', `启用第 ${index + 1} 项`);
-            enabled.addEventListener('change', () => { entry.enabled = enabled.checked; });
+            enabled.addEventListener('change', () => { entry.enabled = enabled.checked; syncBadges(); });
             const name = document.createElement('input'); name.value = entry.name; name.placeholder = '参数名'; name.setAttribute('aria-label', `${key} 参数名 ${index + 1}`);
             const value = document.createElement('input'); value.value = entry.value; value.placeholder = '值 / {{变量}}'; value.setAttribute('aria-label', `${key} 参数值 ${index + 1}`);
-            for (const input of [name, value]) { input.spellcheck = false; input.autocomplete = 'off'; input.addEventListener('input', () => { entry.name = name.value; entry.value = value.value; }); }
+            for (const input of [name, value]) {
+                input.spellcheck = false; input.autocomplete = 'off';
+                input.addEventListener('input', () => { entry.name = name.value; entry.value = value.value; syncBadges(); });
+            }
             const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn btn--ghost btn--sm'; remove.textContent = '×'; remove.setAttribute('aria-label', `移除 ${entry.name || '第 ' + (index + 1) + ' 项'}`);
-            remove.addEventListener('click', () => { state[key].splice(index, 1); renderRows(key, id); });
+            remove.addEventListener('click', () => { state[key].splice(index, 1); renderRows(key, id); syncBadges(); });
             line.append(enabled, name, value, remove); container.append(line);
         });
-        if (!state[key].length) { const empty = document.createElement('p'); empty.className = 'api-hint'; empty.textContent = '暂无参数，点击下方添加，或粘贴导入。'; container.append(empty); }
+        if (!state[key].length) {
+            const empty = document.createElement('p'); empty.className = 'api-hint';
+            empty.textContent = '暂无参数，点击下方按钮添加，或从左侧接口自动读取。';
+            container.append(empty);
+        }
     }
+
     function render() {
         for (const [key, id] of Object.entries({ method: 'Method', url: 'Url', body: 'Body', bodyMode: 'BodyMode', bearer: 'Bearer', variables: 'Variables', timeout: 'Timeout' })) $(id).value = state[key];
         renderRows('query', 'QueryRows'); renderRows('headers', 'HeaderRows');
         $('Body').disabled = state.bodyMode === 'none';
+        syncBadges();
     }
 
     // ---------- Project / JAR / OpenAPI Catalog & Smart Mocking ----------
 
     function currentEndpoint() {
         return catalog?.endpoints?.find(ep => ep.id === selectedEndpointId) || null;
+    }
+
+    function resolveEndpointUrlWithPathParams(endpoint) {
+        const baseUrl = $('BaseUrl')?.value || catalog?.baseUrl || DEFAULT_BASE_URL;
+        const resolved = (endpoint.path || '/').replace(/\{([A-Za-z0-9_.-]+)(?::[^}]*)?\}/g, (_, k) => {
+            const val = pathParamValues[k];
+            return encodeURIComponent(val !== undefined && val !== '' ? String(val) : k);
+        });
+        return joinUrl(baseUrl, resolved);
     }
 
     function updateSelectedBanner(endpoint, materialized) {
@@ -74,21 +121,33 @@ if (root) {
         const summaryEl = document.createElement('span');
         summaryEl.className = 'api-selected-summary';
         summaryEl.textContent = endpoint.summary && endpoint.summary !== endpoint.methodName
-            ? `${endpoint.summary} (${endpoint.controller}.${endpoint.methodName})`
+            ? `${endpoint.summary} · ${endpoint.controller}.${endpoint.methodName}`
             : `${endpoint.controller}.${endpoint.methodName}`;
         top.append(badge, pathEl, summaryEl);
         banner.append(top);
 
         if (materialized?.pathParams?.length) {
-            const chips = document.createElement('div');
-            chips.className = 'api-selected-meta';
+            const paramsBar = document.createElement('div');
+            paramsBar.className = 'api-path-params';
             for (const p of materialized.pathParams) {
-                const chip = document.createElement('span');
-                chip.className = 'api-param-chip';
-                chip.textContent = `{${p.name}} = ${p.value}`;
-                chips.append(chip);
+                const chip = document.createElement('label');
+                chip.className = 'api-path-param-chip';
+                const tag = document.createElement('span');
+                tag.textContent = `{${p.name}}`;
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.spellcheck = false;
+                input.autocomplete = 'off';
+                input.value = String(pathParamValues[p.name] ?? p.value ?? '');
+                input.setAttribute('aria-label', `路径参数 ${p.name}`);
+                input.addEventListener('input', () => {
+                    pathParamValues[p.name] = input.value;
+                    state.url = $('Url').value = resolveEndpointUrlWithPathParams(endpoint);
+                });
+                chip.append(tag, input);
+                paramsBar.append(chip);
             }
-            banner.append(chips);
+            banner.append(paramsBar);
         }
     }
 
@@ -101,6 +160,9 @@ if (root) {
             mockMode: $('MockMode')?.value || 'smart',
             seed: mockSeed,
         });
+        pathParamValues = Object.create(null);
+        for (const p of mat.pathParams || []) pathParamValues[p.name] = p.value;
+
         state = {
             ...state,
             method: mat.method,
@@ -136,9 +198,10 @@ if (root) {
             if (!q) return true;
             return `${ep.method} ${ep.path} ${ep.summary} ${ep.controller} ${ep.group} ${ep.methodName}`.toLowerCase().includes(q);
         });
+        if ($('CatalogCount')) $('CatalogCount').textContent = `${filtered.length}`;
         empty.hidden = filtered.length > 0;
         if (!filtered.length) {
-            empty.textContent = endpoints.length ? '没有匹配的接口，请调整搜索词或方法筛选。' : '未识别到接口，请确认目录内包含 Controller 注解（@RestController/@RequestMapping 等）或 OpenAPI JSON。';
+            empty.textContent = endpoints.length ? '未找到匹配接口，请调整关键词或方法筛选。' : '未识别到 HTTP 接口，请确认包含 Controller 注解或 OpenAPI JSON。';
             return;
         }
         const groups = new Map();
@@ -196,65 +259,63 @@ if (root) {
         catalog = result;
         selectedEndpointId = null;
         mockSeed = 1;
+        pathParamValues = Object.create(null);
+
         const baseInput = $('BaseUrl');
         if (baseInput) {
             if (result.baseUrl) baseInput.value = result.baseUrl;
             else if (!baseInput.value.trim()) baseInput.value = DEFAULT_BASE_URL;
         }
-        const statusEl = $('CatalogStatus');
-        if (statusEl) {
-            const s = result.stats || {};
-            const kindLabel = {
-                'project-dir': '项目目录',
-                'spring-fat-jar': 'Spring Boot JAR',
-                'jar': 'JAR 包',
-                'openapi-json': 'OpenAPI/Swagger',
-                'java-file': 'Java 源码',
-            }[result.sourceKind] || '项目';
-            const warnSuffix = result.warnings?.length ? ` · 提示 ${result.warnings.length} 条` : '';
-            statusEl.textContent = `已加载 ${kindLabel}「${result.sourceName}」：${s.controllersFound || 0} 个控制器 · ${s.endpointsFound || 0} 个接口 · ${s.typesIndexed || 0} 个类型${warnSuffix}`;
-            statusEl.dataset.error = 'false';
-        }
-        $('Layout')?.classList.add('api-layout--with-catalog');
-        if ($('CatalogPanel')) $('CatalogPanel').hidden = false;
+        const s = result.stats || {};
+        const kindLabel = {
+            'project-dir': '项目目录',
+            'spring-fat-jar': 'Fat JAR',
+            'jar': 'JAR 包',
+            'openapi-json': 'OpenAPI',
+            'java-file': 'Java 源码',
+        }[result.sourceKind] || '项目';
+        if ($('SourceTitle')) $('SourceTitle').textContent = result.sourceName || '项目接口';
+        if ($('SourceMeta')) $('SourceMeta').textContent = `${kindLabel} · ${s.controllersFound || 0} 控制器 · ${s.endpointsFound || 0} 接口`;
+        if ($('CatalogWelcome')) $('CatalogWelcome').hidden = true;
+        if ($('CatalogLoaded')) $('CatalogLoaded').hidden = false;
         if ($('Rescan')) $('Rescan').hidden = !(typeof invoke === 'function' && result.sourcePath && result.sourcePath !== result.sourceName);
         if ($('Remock')) $('Remock').disabled = !(result.endpoints?.length);
-        const pasteDetails = root.querySelector('.api-import');
-        if (pasteDetails && result.endpoints?.length) pasteDetails.open = false;
+
+        const warnSuffix = result.warnings?.length ? `（提示 ${result.warnings.length} 条）` : '';
+        setStatus(`已索引 ${s.filesScanned || 0} 个文件 · ${s.typesIndexed || 0} 个类型${warnSuffix}`, false);
 
         renderCatalogList();
         if (result.endpoints?.length) {
             applySelectedEndpoint(result.endpoints[0]);
         } else {
             updateSelectedBanner(null, null);
-            note(result.warnings?.length ? result.warnings.join(' ') : '未在该位置扫描到 HTTP 接口，可继续使用下方“粘贴即填入”。', !result.warnings?.length);
+            note(result.warnings?.length ? result.warnings.join(' ') : '未扫描到 HTTP 接口，请检查项目是否包含 Spring MVC / JAX-RS / OpenAPI 定义。', !result.warnings?.length);
         }
     }
 
     async function runScan(fn, label) {
         if (scanning) return;
         scanning = true;
-        if ($('PickDir')) $('PickDir').disabled = true;
-        if ($('PickFile')) $('PickFile').disabled = true;
-        if ($('Rescan')) $('Rescan').disabled = true;
-        const statusEl = $('CatalogStatus');
-        if (statusEl) { statusEl.textContent = `正在扫描${label}并解析接口与参数类型…`; statusEl.dataset.error = 'false'; }
+        for (const id of ['PickDir', 'PickFile', 'PickDirMini', 'PickFileMini', 'Rescan']) {
+            if ($(id)) $(id).disabled = true;
+        }
+        setStatus(`正在扫描${label}并解析接口与参数类型…`, false);
         try {
             const result = await fn();
             applyLoadedCatalog(result);
         } catch (err) {
             const msg = typeof err === 'string' ? err : (err?.message || String(err));
-            if (statusEl) { statusEl.textContent = `扫描失败：${msg}`; statusEl.dataset.error = 'true'; }
+            setStatus(`扫描失败：${msg}`, true);
             note(`扫描失败：${msg}`, true);
         } finally {
             scanning = false;
-            if ($('PickDir')) $('PickDir').disabled = false;
-            if ($('PickFile')) $('PickFile').disabled = false;
-            if ($('Rescan')) $('Rescan').disabled = false;
+            for (const id of ['PickDir', 'PickFile', 'PickDirMini', 'PickFileMini', 'Rescan']) {
+                if ($(id)) $(id).disabled = false;
+            }
         }
     }
 
-    $('PickDir')?.addEventListener('click', async () => {
+    async function pickDirectory() {
         if (typeof invoke === 'function' && typeof tauriDialogOpen === 'function') {
             try {
                 const picked = await tauriDialogOpen({ directory: true, multiple: false, title: '选择 Java / Spring Boot 项目目录' });
@@ -266,9 +327,9 @@ if (root) {
             }
         }
         $('DirInput')?.click();
-    });
+    }
 
-    $('PickFile')?.addEventListener('click', async () => {
+    async function pickFile() {
         if (typeof invoke === 'function' && typeof tauriDialogOpen === 'function') {
             try {
                 const picked = await tauriDialogOpen({
@@ -285,12 +346,30 @@ if (root) {
             }
         }
         $('FileInput')?.click();
-    });
+    }
+
+    $('PickDir')?.addEventListener('click', pickDirectory);
+    $('PickDirMini')?.addEventListener('click', pickDirectory);
+    $('PickFile')?.addEventListener('click', pickFile);
+    $('PickFileMini')?.addEventListener('click', pickFile);
 
     $('Rescan')?.addEventListener('click', async () => {
         if (typeof invoke === 'function' && catalog?.sourcePath) {
             await runScan(() => invoke('api_scan_source', { path: catalog.sourcePath }), '当前项目');
         }
+    });
+
+    $('ClearCatalog')?.addEventListener('click', () => {
+        catalog = null;
+        selectedEndpointId = null;
+        pathParamValues = Object.create(null);
+        if ($('CatalogWelcome')) $('CatalogWelcome').hidden = false;
+        if ($('CatalogLoaded')) $('CatalogLoaded').hidden = true;
+        if ($('Rescan')) $('Rescan').hidden = true;
+        if ($('Remock')) $('Remock').disabled = true;
+        updateSelectedBanner(null, null);
+        setStatus('', false);
+        note('');
     });
 
     $('DirInput')?.addEventListener('change', async () => {
@@ -305,6 +384,21 @@ if (root) {
         if (!files?.length) return;
         await runScan(() => scanBrowserFiles(files), '所选文件');
         $('FileInput').value = '';
+    });
+
+    $('CatalogPanel')?.addEventListener('dragover', event => {
+        if (!event.dataTransfer?.types?.includes('Files')) return;
+        event.preventDefault();
+        $('CatalogPanel').classList.add('is-drag-over');
+    });
+    $('CatalogPanel')?.addEventListener('dragleave', () => {
+        $('CatalogPanel').classList.remove('is-drag-over');
+    });
+    $('CatalogPanel')?.addEventListener('drop', async event => {
+        if (!event.dataTransfer?.files?.length) return;
+        event.preventDefault();
+        $('CatalogPanel').classList.remove('is-drag-over');
+        await runScan(() => scanBrowserFiles(event.dataTransfer.files), '拖入文件');
     });
 
     $('CatalogSearch')?.addEventListener('input', renderCatalogList);
@@ -335,68 +429,62 @@ if (root) {
         if (ep) applySelectedEndpoint(ep, { switchTab: false });
     });
 
-    // ---------- Existing Paste Import, Request Editor, Response & History ----------
+    // ---------- Request Editor, cURL Paste/Copy, Response & History ----------
 
-    function preview() {
-        try {
-            parsed = importText($('Import').value);
-            $('Preview').textContent = parsed.kind === 'body' ? JSON.stringify(parsed.value, null, 2) : JSON.stringify(parsed.request || parsed.rows, null, 2);
-            $('ImportStatus').textContent = `已识别：${parsed.label}${parsed.warnings.length ? ' · ' + parsed.warnings.join(' ') : ''}`;
-            $('Apply').disabled = false; $('ImportStatus').dataset.error = 'false';
-        } catch (error) {
-            parsed = null; $('Apply').disabled = true; $('Preview').textContent = '';
-            $('ImportStatus').textContent = $('Import').value.trim() ? error.message : '支持字段片段、完整 Java class、JSON、URL、键值参数和常用 cURL。';
-            $('ImportStatus').dataset.error = String(!!$('Import').value.trim());
-        }
-    }
-    function applyImport(input, target = 'Body') {
-        read();
-        if (input.kind === 'request') { state = { ...state, ...input.request }; selectTab(input.request.bodyMode === 'none' ? 'Query' : 'Body'); }
-        else if (input.kind === 'query') { state.query = input.rows; selectTab('Query'); }
-        else if (target === 'Query') {
-            if (Array.isArray(input.value) || !input.value || typeof input.value !== 'object') throw Error('Query 导入需要 JSON 对象');
-            state.query = Object.entries(input.value).map(([k, v]) => row(k, v !== null && typeof v === 'object' ? JSON.stringify(v) : v === null ? '' : String(v)));
-            selectTab('Query');
-        } else {
-            state.body = JSON.stringify(input.value, null, 2); state.bodyMode = 'json';
-            if (['GET', 'HEAD'].includes(state.method)) state.method = 'POST';
-            selectTab('Body');
-        }
-        render(); note(`已填入 ${input.label}${input.warnings.length ? '。' + input.warnings.join(' ') : '，可以修改后发送。'}`);
-    }
-    $('Import').addEventListener('input', () => { clearTimeout(parseTimer); parseTimer = setTimeout(preview, 250); });
-    $('Apply').addEventListener('click', () => { preview(); if (parsed) { try { applyImport(parsed, $('ImportTarget').value); } catch (e) { note(e.message, true); } } });
-    $('Sample').addEventListener('click', () => { $('Import').value = 'String name;\nString code;\nprivate List<ShelfTierVto> tierList;'; preview(); });
-    $('Body').addEventListener('paste', event => {
-        const text = event.clipboardData?.getData('text') || '';
-        const box = $('Body');
-        if (box.value && !(box.selectionStart === 0 && box.selectionEnd === box.value.length)) return;
-        if (!/;/.test(text) || /^[\[{]/.test(text.trim())) return;
-        try { const input = importText(text); if (input.kind !== 'body') return; event.preventDefault(); applyImport(input); }
-        catch (_) { /* Normal paste preserves unsupported input for editing. */ }
-    });
     $('Url').addEventListener('paste', event => {
         const text = event.clipboardData?.getData('text') || '';
         if (!/^curl(?:\.exe)?\s/i.test(text.trim())) return;
-        event.preventDefault(); try { applyImport(importText(text)); } catch (e) { note(e.message, true); }
+        event.preventDefault();
+        try {
+            const imported = parseCurl(text);
+            read();
+            state = { ...state, ...imported.request };
+            selectedEndpointId = null;
+            updateSelectedBanner(null, null);
+            renderCatalogList();
+            render();
+            selectTab(imported.request.bodyMode === 'none' ? 'Query' : 'Body');
+            note(`已导入 ${imported.label}${imported.warnings.length ? '：' + imported.warnings.join(' ') : '。'}`);
+        } catch (e) {
+            note(e.message, true);
+        }
     });
+
+    $('CopyCurl')?.addEventListener('click', async () => {
+        try {
+            const req = prepareRequest(read());
+            const q = value => `'${String(value).replace(/'/g, `'\\''`)}'`;
+            const parts = ['curl', '-X', req.method, q(req.url)];
+            for (const h of req.headers) parts.push('-H', q(`${h.name}: ${h.value}`));
+            if (req.body !== null) parts.push('--data-raw', q(req.body));
+            const cmd = parts.join(' ');
+            if (window.WenBox?.copyText) await window.WenBox.copyText(cmd);
+            else await navigator.clipboard.writeText(cmd);
+            note('已复制当前请求的 cURL 命令');
+        } catch (e) {
+            note('生成 cURL 失败：' + e.message, true);
+        }
+    });
+
     root.addEventListener('click', event => { const tab = event.target.closest('[data-api-tab]'); if (tab) selectTab(tab.dataset.apiTab); });
-    $('AddQuery').addEventListener('click', () => { state.query.push(row()); renderRows('query', 'QueryRows'); });
-    $('AddHeader').addEventListener('click', () => { state.headers.push(row()); renderRows('headers', 'HeaderRows'); });
-    $('BodyMode').addEventListener('change', () => { state.bodyMode = $('BodyMode').value; $('Body').disabled = state.bodyMode === 'none'; });
+    $('Method').addEventListener('change', syncBadges);
+    $('AddQuery').addEventListener('click', () => { state.query.push(row()); renderRows('query', 'QueryRows'); syncBadges(); });
+    $('AddHeader').addEventListener('click', () => { state.headers.push(row()); renderRows('headers', 'HeaderRows'); syncBadges(); });
+    $('BodyMode').addEventListener('change', () => { state.bodyMode = $('BodyMode').value; $('Body').disabled = state.bodyMode === 'none'; syncBadges(); });
     $('Format').addEventListener('click', () => { try { $('Body').value = JSON.stringify(JSON.parse($('Body').value), null, 2); note('JSON 已格式化'); } catch (e) { note(e.message, true); } });
     $('New').addEventListener('click', () => {
         if (sending) return;
-        state = emptyRequest(); response = null; selectedEndpointId = null;
+        state = emptyRequest(); response = null; selectedEndpointId = null; pathParamValues = Object.create(null);
         updateSelectedBanner(null, null); renderCatalogList();
         render(); renderResponse(); note('');
     });
+
     function renderResponse() {
         $('ResponseMeta').hidden = !response;
         $('ResponseEmpty').hidden = !!response;
         $('ResponseData').hidden = !response;
         $('CopyResponse').disabled = !response;
-        if (!response) { $('ResponseEmpty').textContent = '发送请求后在这里查看响应。'; return; }
+        if (!response) { $('ResponseEmpty').textContent = '发送请求后，在这里查看状态码、耗时与响应正文。'; return; }
         $('Status').textContent = `${response.status} ${response.statusText}`;
         $('Status').dataset.error = String(response.status >= 400);
         $('Timing').textContent = `${response.elapsedMs} ms · ${(response.size / 1024).toFixed(2)} KiB${response.truncated ? ' · 已截断至 4 MiB' : ''}`;
@@ -407,20 +495,28 @@ if (root) {
     }
     $('Pretty').addEventListener('change', renderResponse);
     $('CopyResponse').addEventListener('click', async () => { try { await window.WenBox.copyText(response.body); note('响应已复制'); } catch (e) { note('复制失败：' + e.message, true); } });
-    $('ClearHistory').addEventListener('click', () => { history.length = 0; renderHistory(); });
+    $('ClearHistory').addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); history.length = 0; renderHistory(); });
+
     function renderHistory() {
         $('History').replaceChildren();
         for (const entry of history) {
             const button = document.createElement('button'); button.type = 'button'; button.className = 'api-history-item';
-            const method = document.createElement('strong'); method.textContent = entry.state.method;
+            const method = document.createElement('strong'); method.textContent = entry.state.method; method.dataset.method = entry.state.method;
             const label = document.createElement('span'); label.textContent = entry.state.url || '未命名请求';
             const status = document.createElement('small'); status.textContent = entry.status;
             button.append(method, label, status);
-            button.addEventListener('click', () => { if (sending) return; state = structuredClone(entry.state); render(); note('已恢复请求，可修改后重新发送'); });
+            button.addEventListener('click', () => {
+                if (sending) return;
+                state = structuredClone(entry.state);
+                selectedEndpointId = null; updateSelectedBanner(null, null); renderCatalogList();
+                render(); note('已恢复历史请求，可修改后重新发送。');
+            });
             $('History').append(button);
         }
         $('HistoryEmpty').hidden = history.length > 0;
+        syncBadges();
     }
+
     async function browserRequest(request) {
         const controller = new AbortController(), timer = setTimeout(() => controller.abort(), request.timeoutMs), start = performance.now();
         try {
@@ -436,6 +532,7 @@ if (root) {
         } catch (e) { throw Error(e.name === 'AbortError' ? '请求超时' : '浏览器请求失败：请检查网络、CORS 或重定向；桌面客户端可直接请求。'); }
         finally { clearTimeout(timer); }
     }
+
     async function send() {
         if (sending) return;
         let request; try { request = prepareRequest(read()); } catch (e) { note(e.message, true); return; }
@@ -452,6 +549,7 @@ if (root) {
             sending = false; $('Send').disabled = false; $('Send').textContent = '发送请求'; $('New').disabled = false;
         }
     }
+
     $('Send').addEventListener('click', send);
     root.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); send(); } });
     render(); renderHistory(); selectTab('Body');

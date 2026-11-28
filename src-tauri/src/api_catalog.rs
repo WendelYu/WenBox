@@ -109,8 +109,13 @@ pub async fn api_scan_source(
     window: tauri::Window,
     path: String,
 ) -> Result<ApiCatalogResult, String> {
-    if !crate::api_debug::allowed_window(window.label(), &window.url()) {
-        return Err("仅允许本机桌面工具扫描本地接口目录或文件".into());
+    let win_url = window.url();
+    if !crate::api_debug::allowed_window(window.label(), &win_url) {
+        return Err(format!(
+            "仅允许本机桌面工具扫描本地接口目录或文件（label={}, origin={}）",
+            window.label(),
+            win_url.as_str()
+        ));
     }
     let trimmed = path.trim().to_string();
     if trimmed.is_empty() {

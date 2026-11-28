@@ -2,29 +2,13 @@
 
 入口：桌面 WenBox → 工具 → 接口调试。
 
-## 项目目录 / JAR 包扫描与智能模拟
+## 双栏 API Studio（项目目录 / JAR 自动扫描与智能模拟）
 
-在顶部操作栏点击“选择项目目录”或“选择 JAR / 文件”，可在本地离线扫描并自动识别全部接口：
+采用左目录、右调试的双栏工作台设计（已移除旧版手动粘贴 VTO 面板）：
 
-- **支持来源**：Java / Spring Boot 项目目录、普通 `.jar`、Spring Boot Fat JAR（自动解析 `BOOT-INF/classes` 及 `BOOT-INF/lib/*.jar` 内关联 DTO/VO/Enum 字节码）、单个 `.java` 控制器源码以及 OpenAPI 3.x / Swagger 2.0 `.json` 文件。
-- **自动填参**：识别 `@RestController`、`@Controller`、`@FeignClient`、`@RequestMapping`、`@GetMapping`/`@PostMapping`/`@PutMapping`/`@DeleteMapping`/`@PatchMapping` 与 `@Tag`/`@Operation`；自动读取 `application.yml`/`properties` 的 `server.port` 与 `context-path` 预填 Base URL；点击左侧接口目录即可自动填好 URL、`@PathVariable`、`@RequestParam`（含查询 DTO 展开）、`@RequestHeader` 与 `@RequestBody` JSON。
-- **智能模拟参数**：支持在“智能模拟值”与“空默认值”间切换及一键“重新模拟”。优先读取 `@Schema(example=...)`、`@RequestParam(defaultValue=...)`、字段字面量初值与 `@Min/@Max/@Size/@Email` 约束，并结合字段名与类型语义（如 `id`、`pageNum`/`pageSize`、`phone`、`email`、`price`、`LocalDateTime` 等）自动填充测试参数。
-
-## 快速填参（粘贴导入）
-
-在“粘贴即填入”粘贴 Java 字段、完整 class、JSON、URL、键值参数或常见 cURL，查看预览后点击“填入并替换”。JSON Body 为空或全部选中时，直接粘贴 Java 字段也会自动转换。导入不会自动发送请求。
-
-用户示例：
-```java
-String name;
-String code;
-private List<ShelfTierVto> tierList;
-```
-生成：
-```json
-{"name":"","code":"","tierList":[]}
-```
-没有 ShelfTierVto 定义时会提示并保留空数组。把主类及关联 class 一起粘贴，可展开集合对象；循环引用停止展开。支持常见 Java 标量、集合、数组，以及 JsonProperty / SerializedName 字段名；忽略 static、transient、JsonIgnore 字段。不会执行 Java 初始化表达式。
+- **自动读取接口**：在左侧边栏点击“选择项目目录”或“选择 JAR / 文件”（浏览器端支持直接拖入文件），本地离线扫描 Java / Spring Boot 项目目录、普通 `.jar`、Spring Boot Fat JAR（自动解析 `BOOT-INF/classes` 与 `BOOT-INF/lib/*.jar` 内关联 DTO/VO/Enum 字节码）、单个 `.java` 控制器源码以及 OpenAPI 3.x / Swagger 2.0 JSON。
+- **自动填参与行内路径编辑**：识别 `@RestController`、`@Controller`、`@FeignClient`、`@RequestMapping`、`@GetMapping`/`@PostMapping`/`@PutMapping`/`@DeleteMapping`/`@PatchMapping` 与 `@Tag`/`@Operation`；自动读取 `application.yml`/`properties` 的 `server.port` 与 `context-path` 预填 Base URL；点击左侧接口目录即可一键填入 URL、`@PathVariable`（支持在激活接口栏直接行内编辑并实时同步 URL）、`@RequestParam`（含查询 DTO 展开）、`@RequestHeader` 与 `@RequestBody` JSON。
+- **智能模拟与 cURL**：支持在“智能模拟”与“空默认值”间切换及一键“重新模拟”，优先读取 `@Schema(example=...)`、`defaultValue`、字段初值、枚举常量及 `@Min/@Max/@Size/@Email` 约束，并结合字段名与类型语义填充测试参数；同时支持在 URL 栏直接粘贴 `curl` 命令以及一键“复制 cURL”。
 
 ## 请求与响应
 
@@ -38,12 +22,12 @@ cURL 支持常见 -X/-H/-d/--data-raw/--data-binary/--json/-G/-I/-u/-b；不执�
 
 ## 开源调研与选择（2026-11-16）
 
-- [Hoppscotch](https://github.com/hoppscotch/hoppscotch/releases)：MIT，参考粘贴导入和请求工作台交互。
+- [Hoppscotch](https://github.com/hoppscotch/hoppscotch/releases)：MIT，参考请求工作台交互。
 - [Bruno](https://github.com/usebruno/bruno/releases)：MIT，参考本地请求编辑与 [cURL 导入](https://blog.usebruno.com/curl-to-gui-import-curl-commands)。两者均是完整客户端，不直接嵌入现有无框架页面。
 - [EasyYapi](https://github.com/tangcent/easy-yapi)：已有 Java/Kotlin 字段生成 JSON 的相近能力；依赖 IntelliJ PSI，AGPL-3.0，本实现不复制其源码。
-- 实际复用 [java-parser](https://github.com/jhipster/prettier-java) 3.0.1（Apache-2.0）解析 Java 语法树，以及 [shell-quote](https://github.com/ljharb/shell-quote) 1.12.0（MIT）解析 cURL token。
+- 实际复用 [shell-quote](https://github.com/ljharb/shell-quote) 1.12.0（MIT）解析 cURL token（构建生成 `api-debug.js` 与 `api-debug.js.LICENSES.txt`）。
 
-解析器本地运行，无在线转换服务。构建生成 api-debug.js，并附完整第三方许可证 api-debug.js.LICENSES.txt。新增依赖中的 lodash / lodash-es 固定修补版本 4.18.1。现有 Electron / electron-builder 构建依赖的审计告警未在本功能中跨版本升级。
+解析器本地运行，无在线转换服务。现有 Electron / electron-builder 构建依赖的审计告警未在本功能中跨版本升级。
 
 ## 开发验证
 
@@ -52,4 +36,4 @@ cURL 支持常见 -X/-H/-d/--data-raw/--data-binary/--json/-G/-I/-u/-b；不执�
 - cargo test --manifest-path src-tauri/Cargo.toml
 - PLAYWRIGHT_MODULE 指向 Playwright，BROWSER_EXECUTABLE 可指定 Chrome；运行 node scripts/check-api-tools.cjs。
 
-UI 测试使用隔离本机 fixture，覆盖 Java 字段/嵌套类型/直接粘贴、错误导入保留旧参数、手动发送真实 HTTP 422、重复 Query、历史、工具切换、浅深色及窄屏。原生测试覆盖请求校验、422 正文、重定向、响应限额、超时及拒绝不受信任 HTTPS 证书。
+UI 测试使用隔离本机 fixture，覆盖双栏欢迎页、Spring Boot 项目扫描与过滤、行内路径参数联动、智能模拟与空值切换、重新模拟、手动发送真实 HTTP 422、cURL 导入、历史、工具切换、浅深色及窄屏。原生测试覆盖窗口来源校验（`tauri://localhost` / `tauri.localhost`）、请求校验、422 正文、重定向、响应限额、超时及拒绝不受信任 HTTPS 证书。
