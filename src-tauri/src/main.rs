@@ -3,6 +3,7 @@
 
 mod content_crypto;
 mod api_debug;
+mod api_catalog;
 mod key_exchange;
 #[cfg(not(feature = "portable"))]
 mod kvm;
@@ -4542,6 +4543,7 @@ fn main() {
     ];
     let commands: fn(tauri::Invoke) = tauri::generate_handler![
         api_debug::api_debug_request,
+        api_catalog::api_scan_source,
         copy_image,
         clipboard_image,
         clipboard_files::clipboard_files,

@@ -2,7 +2,15 @@
 
 入口：桌面 WenBox → 工具 → 接口调试。
 
-## 快速填参
+## 项目目录 / JAR 包扫描与智能模拟
+
+在顶部操作栏点击“选择项目目录”或“选择 JAR / 文件”，可在本地离线扫描并自动识别全部接口：
+
+- **支持来源**：Java / Spring Boot 项目目录、普通 `.jar`、Spring Boot Fat JAR（自动解析 `BOOT-INF/classes` 及 `BOOT-INF/lib/*.jar` 内关联 DTO/VO/Enum 字节码）、单个 `.java` 控制器源码以及 OpenAPI 3.x / Swagger 2.0 `.json` 文件。
+- **自动填参**：识别 `@RestController`、`@Controller`、`@FeignClient`、`@RequestMapping`、`@GetMapping`/`@PostMapping`/`@PutMapping`/`@DeleteMapping`/`@PatchMapping` 与 `@Tag`/`@Operation`；自动读取 `application.yml`/`properties` 的 `server.port` 与 `context-path` 预填 Base URL；点击左侧接口目录即可自动填好 URL、`@PathVariable`、`@RequestParam`（含查询 DTO 展开）、`@RequestHeader` 与 `@RequestBody` JSON。
+- **智能模拟参数**：支持在“智能模拟值”与“空默认值”间切换及一键“重新模拟”。优先读取 `@Schema(example=...)`、`@RequestParam(defaultValue=...)`、字段字面量初值与 `@Min/@Max/@Size/@Email` 约束，并结合字段名与类型语义（如 `id`、`pageNum`/`pageSize`、`phone`、`email`、`price`、`LocalDateTime` 等）自动填充测试参数。
+
+## 快速填参（粘贴导入）
 
 在“粘贴即填入”粘贴 Java 字段、完整 class、JSON、URL、键值参数或常见 cURL，查看预览后点击“填入并替换”。JSON Body 为空或全部选中时，直接粘贴 Java 字段也会自动转换。导入不会自动发送请求。
 
@@ -16,7 +24,7 @@ private List<ShelfTierVto> tierList;
 ```json
 {"name":"","code":"","tierList":[]}
 ```
-没有 ShelfTierVto 定义时会提示并保留空数组。把主类及关联 class 一起粘贴，可展开集合对象；循环引用停止展开。支持常见 Java 标量、集合、数组，以及 JsonProperty / SerializedName 字段名；忽略 static、transient、JsonIgnore 字段。不会执行 Java 初始化表达式。暂不解析继承、record、项目 classpath 或完整 Jackson 配置。
+没有 ShelfTierVto 定义时会提示并保留空数组。把主类及关联 class 一起粘贴，可展开集合对象；循环引用停止展开。支持常见 Java 标量、集合、数组，以及 JsonProperty / SerializedName 字段名；忽略 static、transient、JsonIgnore 字段。不会执行 Java 初始化表达式。
 
 ## 请求与响应
 

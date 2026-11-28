@@ -1,3 +1,11 @@
+## WenBox v1.4.20 · 接口调试支持项目目录/JAR 自动扫描与参数智能模拟
+
+- 接口调试升级支持选择本地 Java / Spring Boot 项目目录、普通 `.jar`、Spring Boot Fat JAR（自动解析 `BOOT-INF/classes` 与 `BOOT-INF/lib/*.jar` 字节码）以及 OpenAPI 3.x / Swagger 2.0 JSON，离线自动提取全部接口并按 Controller 分组展示。
+- 新增左侧可搜索与按 HTTP 方法筛选的项目接口目录，并自动读取 `application.yml`/`application.properties` 的 `server.port` 与 `context-path` 预填 Base URL；点击任意接口即可一键填入 URL、`@PathVariable`、`@RequestParam`（含查询 DTO 展开）、`@RequestHeader` 与 `@RequestBody` JSON。
+- 新增参数智能模拟引擎：支持在“智能模拟值”与“空默认值”间切换及一键“重新模拟”，优先读取 `@Schema(example=...)`、`defaultValue`、字段初值、枚举常量及 `@Min/@Max/@Size/@Email` 校验约束，并结合字段名与类型语义自动生成测试数据（支持父类继承、Java `record` 与嵌套泛型展开）。
+
+---
+
 ## WenBox v1.4.19 · 软件内自动更新、统一新图标与浅色文档预览
 
 - 新增桌面端“关于”页面与软件内自动更新：支持手动检查与启动自动检查 GitHub Releases 新版本、实时显示下载进度与速度、展示运行环境与数据目录（支持在访达/资源管理器中打开）。

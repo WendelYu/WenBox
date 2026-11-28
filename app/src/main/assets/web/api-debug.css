@@ -119,3 +119,6 @@
   .api-import summary span { display: block; margin: 6px 0 0; }
   .api-editor, .api-response, .api-import { padding: 14px; }
 }
+.api-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.api-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.api-catalog[hidden], .api-selected-endpoint[hidden], .api-notice[hidden] { display: none; }

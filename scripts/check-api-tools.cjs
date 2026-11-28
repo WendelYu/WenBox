@@ -47,6 +47,32 @@ async function main() {
    assert.deepEqual(JSON.parse(await page.locator('#apiBody').inputValue()),{tierList:[{level:0,code:''}]});
    assert.equal(requests.length,countBefore,'imports never send requests');
    await page.locator('#apiSample').click();
+   // Test Spring Boot project scanning, auto-selection, smart mocking, remock, and sending.
+   await page.locator('#apiFileInput').setInputFiles([
+    { name: 'application.yml', mimeType: 'text/yaml', buffer: Buffer.from('server:\n  port: ' + server.address().port + '\n  servlet:\n    context-path: /debug\n') },
+    { name: 'EchoReq.java', mimeType: 'text/plain', buffer: Buffer.from('package com.demo;\npublic class EchoReq {\n  @Schema(example = "C900")\n  private String code;\n  private String contactEmail;\n  private int qty;\n}\n') },
+    { name: 'EchoController.java', mimeType: 'text/plain', buffer: Buffer.from('package com.demo;\n@RestController\n@Tag(name = "调试分组")\npublic class EchoController {\n  @PostMapping("/echo")\n  public String sendEcho(@RequestParam(defaultValue = "auto") String mode, @RequestHeader("X-Suite") String suite, @RequestBody EchoReq req) { return "ok"; }\n  @GetMapping("/echo")\n  public String ping(@RequestParam String pingKey) { return "ok"; }\n}\n') },
+   ]);
+   await page.locator('#apiCatalogPanel:not([hidden])').waitFor();
+   await page.waitForFunction(() => document.querySelectorAll('.api-endpoint-item').length === 2);
+   await page.locator('#apiCatalogSearch').fill('sendEcho');
+   await page.waitForFunction(() => document.querySelectorAll('.api-endpoint-item').length === 1);
+   await page.locator('.api-endpoint-item').first().click();
+   assert.equal(await page.locator('#apiMethod').inputValue(), 'POST');
+   assert.equal(await page.locator('#apiUrl').inputValue(), base + '/debug/echo');
+   const smartBody = JSON.parse(await page.locator('#apiBody').inputValue());
+   assert.equal(smartBody.code, 'C900');
+   assert.equal(smartBody.contactEmail, 'demo@example.com');
+   assert.equal(smartBody.qty, 10);
+   await page.locator('#apiMockMode').selectOption('empty');
+   assert.equal(JSON.parse(await page.locator('#apiBody').inputValue()).code, '');
+   await page.locator('#apiMockMode').selectOption('smart');
+   await page.locator('#apiRemock').click();
+   assert.equal(JSON.parse(await page.locator('#apiBody').inputValue()).qty, 11);
+   await page.locator('#apiSend').click();
+   await page.waitForFunction(() => document.querySelector('#apiStatus').textContent.startsWith('422'));
+   assert.equal(JSON.parse(requests.at(-1).body).code, 'C900');
+   assert.deepEqual(requests.at(-1).query, [['mode', 'auto']]);
    await page.screenshot({path:path.join(shots,`${native?'native':'browser'}-light.png`),fullPage:true});
    await page.evaluate(()=>document.documentElement.dataset.theme='dark'); await page.screenshot({path:path.join(shots,`${native?'native':'browser'}-dark.png`),fullPage:true});
    await page.setViewportSize({width:390,height:844});await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));await page.screenshot({path:path.join(shots,`${native?'native':'browser'}-mobile.png`),fullPage:false});

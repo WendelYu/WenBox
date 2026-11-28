@@ -39,7 +39,7 @@ pub struct ApiResponse {
     truncated: bool,
 }
 
-fn allowed_window(label: &str, url: &url::Url) -> bool {
+pub(crate) fn allowed_window(label: &str, url: &url::Url) -> bool {
     label == "main"
         && url.path() == "/"
         && url.username().is_empty()
